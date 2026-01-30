@@ -1,0 +1,64 @@
+[package]
+name = "etal"
+version = "0.1.0"
+description = "A reference manager for PDFs and markdown notes"
+authors = ["Sadanand Singh"]
+license = "MIT"
+repository = ""
+edition = "2021"
+
+[lib]
+name = "etal_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri
+tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+# PDF processing
+lopdf = "0.34"
+pdf-extract = "0.7"
+
+# Markdown (for later phases)
+# comrak = { version = "0.28", features = ["syntect"] }
+
+# Search (for later phases)
+# tantivy = "0.22"
+
+# Embeddings (for later phases)
+# fastembed = "4"
+# lancedb = "0.15"
+# arrow = "53"
+
+# File watching (for later phases)
+# notify = "7"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sha2 = "0.10"
+hex = "0.4"
+directories = "6"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-shell = "2"
