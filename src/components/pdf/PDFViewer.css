@@ -1,0 +1,70 @@
+/* PDFViewer custom styles */
+
+/* Style drawing controls to be minimal - just show Done button */
+.DrawingCanvas__controls {
+  padding: 6px 12px !important;
+  gap: 8px !important;
+  border-radius: 6px !important;
+  background-color: rgba(0, 0, 0, 0.8) !important;
+}
+
+.DrawingCanvas__controls .DrawingCanvas__clearButton,
+.DrawingCanvas__controls .DrawingCanvas__cancelButton {
+  display: none !important;
+}
+
+.DrawingCanvas__controls .DrawingCanvas__doneButton {
+  padding: 6px 14px !important;
+  font-size: 13px !important;
+  border-radius: 4px !important;
+}
+
+/* Style shape controls to be minimal - just hint */
+.ShapeCanvas__controls .ShapeCanvas__cancelButton {
+  display: none !important;
+}
+
+.ShapeCanvas__controls .ShapeCanvas__hint {
+  padding: 6px 12px !important;
+  font-size: 12px !important;
+  border-radius: 4px !important;
+  background: rgba(0, 0, 0, 0.7) !important;
+}
+
+/* Remove the dark overlay from shape canvas */
+.ShapeCanvas {
+  background: transparent !important;
+}
+
+/* Style the freetext/note box */
+.FreetextHighlight__container {
+  background-color: #FFFFA5 !important;
+  border: 1px solid #D4C84A !important;
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.2) !important;
+  border-radius: 3px !important;
+  min-width: 120px !important;
+  min-height: 50px !important;
+}
+
+.FreetextHighlight__container textarea {
+  background: transparent !important;
+  font-size: 14px !important;
+  padding: 8px !important;
+  color: #000000 !important;
+  resize: both !important;
+}
+
+/* Make sure area highlight respects the highlight color */
+.AreaHighlight {
+  mix-blend-mode: multiply !important;
+}
+
+/* Improve shape highlight visibility */
+.ShapeHighlight {
+  pointer-events: auto !important;
+}
+
+/* Drawing highlight */
+.DrawingHighlight {
+  pointer-events: auto !important;
+}

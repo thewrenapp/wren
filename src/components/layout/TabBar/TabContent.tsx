@@ -1,12 +1,10 @@
 import { useTabStore } from "@/stores/tabStore";
-import { useLibraryStore } from "@/stores/libraryStore";
 import { WelcomeTab } from "./WelcomeTab";
-import { ItemTab } from "./ItemTab";
+import { EntryTab } from "./EntryTab";
 import { LibraryTab } from "./LibraryTab";
 
 export function TabContent() {
   const { tabs, activeTabId } = useTabStore();
-  const { items } = useLibraryStore();
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
@@ -21,16 +19,15 @@ export function TabContent() {
     case "welcome":
       return <WelcomeTab />;
 
-    case "item":
-      const item = items.find((i) => i.id === activeTab.itemId);
-      if (!item) {
+    case "entry":
+      if (!activeTab.entryId) {
         return (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
-            Item not found
+            Entry not found
           </div>
         );
       }
-      return <ItemTab item={item} />;
+      return <EntryTab entryId={activeTab.entryId} attachmentId={activeTab.attachmentId} />;
 
     case "search":
       return (

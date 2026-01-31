@@ -15,6 +15,10 @@ pub struct ImportResult {
     pub title: String,
     #[serde(rename = "filePath")]
     pub file_path: String,
+    #[serde(rename = "entryId")]
+    pub entry_id: i64,
+    #[serde(rename = "attachmentId")]
+    pub attachment_id: i64,
     pub success: bool,
     pub error: Option<String>,
 }
@@ -59,6 +63,8 @@ pub async fn import_pdfs(
                 key: String::new(),
                 title: path_str.clone(),
                 file_path: path_str,
+                entry_id: 0,
+                attachment_id: 0,
                 success: false,
                 error: Some("File not found".to_string()),
             });
@@ -74,6 +80,8 @@ pub async fn import_pdfs(
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default(),
                 file_path: path_str,
+                entry_id: 0,
+                attachment_id: 0,
                 success: false,
                 error: Some(e),
             }),
@@ -109,6 +117,8 @@ pub async fn import_folder(
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default(),
                 file_path: path.to_string_lossy().to_string(),
+                entry_id: 0,
+                attachment_id: 0,
                 success: false,
                 error: Some(e),
             }),
@@ -132,7 +142,7 @@ fn collect_pdfs(folder: &Path, paths: &mut Vec<PathBuf>) {
     }
 }
 
-/// Import a single PDF file
+/// Import a single PDF file into the new entry/attachment model
 async fn import_single_pdf(
     state: &State<'_, AppState>,
     source_path: &Path,
@@ -145,24 +155,24 @@ async fn import_single_pdf(
     hasher.update(&file_content);
     let file_hash = hex::encode(hasher.finalize());
 
-    // Check for duplicate by hash
-    let existing: Option<(i64,)> = sqlx::query_as(
-        "SELECT item_id FROM pdf_items WHERE file_hash = ?"
+    // Check for duplicate by hash in new attachments table
+    let existing: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT id, entry_id FROM attachments WHERE file_hash = ?"
     )
     .bind(&file_hash)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| e.to_string())?;
 
-    if let Some((existing_id,)) = existing {
-        // Return existing item info
+    if let Some((attachment_id, entry_id)) = existing {
+        // Return existing entry/attachment info
         let row = sqlx::query(
-            "SELECT i.id, i.key, i.title, p.file_path
-             FROM items i
-             JOIN pdf_items p ON i.id = p.item_id
-             WHERE i.id = ?"
+            "SELECT e.id, e.key, e.title, a.file_path
+             FROM entries e
+             JOIN attachments a ON a.entry_id = e.id
+             WHERE a.id = ?"
         )
-        .bind(existing_id)
+        .bind(attachment_id)
         .fetch_one(&state.db)
         .await
         .map_err(|e| e.to_string())?;
@@ -172,6 +182,8 @@ async fn import_single_pdf(
             key: row.get("key"),
             title: row.get("title"),
             file_path: row.get("file_path"),
+            entry_id,
+            attachment_id,
             success: true,
             error: Some("File already exists in library".to_string()),
         });
@@ -190,19 +202,20 @@ async fn import_single_pdf(
         })
         .unwrap_or_else(|| "Untitled".to_string());
 
-    // Generate unique key
-    let key = Uuid::new_v4().to_string();
+    // Generate unique keys for entry and attachment
+    let entry_key = Uuid::new_v4().to_string();
+    let attachment_key = Uuid::new_v4().to_string();
 
     // Create destination path
     let library_path = state.library_path.read().await;
-    let dest_dir = library_path.join("files").join("pdfs").join(&key);
+    let dest_dir = library_path.join("files").join("pdfs").join(&entry_key);
 
     fs::create_dir_all(&dest_dir)
         .map_err(|e| format!("Failed to create directory: {}", e))?;
 
     let file_name = source_path.file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| format!("{}.pdf", key));
+        .unwrap_or_else(|| format!("{}.pdf", entry_key));
 
     let dest_path = dest_dir.join(&file_name);
 
@@ -213,51 +226,91 @@ async fn import_single_pdf(
     let dest_path_str = dest_path.to_string_lossy().to_string();
     let file_size = file_content.len() as i64;
 
-    // Insert into database - items table first
-    let result = sqlx::query(
+    // Convert author to JSON creators array
+    let creators_json = metadata.author.as_ref().map(|author| {
+        let creators: Vec<serde_json::Value> = author
+            .split(';')
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                serde_json::json!({
+                    "creatorType": "author",
+                    "name": name
+                })
+            })
+            .collect();
+        serde_json::to_string(&creators).unwrap_or_default()
+    });
+
+    // Get entry type ID for journal_article (default for PDFs)
+    let entry_type_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM entry_types WHERE name = 'journal_article'"
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Get attachment type ID for pdf
+    let attachment_type_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM attachment_types WHERE name = 'pdf'"
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Insert entry
+    let entry_result = sqlx::query(
         r#"
-        INSERT INTO items (key, item_type_id, title)
-        VALUES (?, 1, ?)
+        INSERT INTO entries (key, entry_type_id, title, creators, abstract_text)
+        VALUES (?, ?, ?, ?, ?)
         RETURNING id, date_added, date_modified
         "#
     )
-    .bind(&key)
+    .bind(&entry_key)
+    .bind(entry_type_id)
     .bind(&title)
+    .bind(&creators_json)
+    .bind(&metadata.subject)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| format!("Failed to insert item: {}", e))?;
+    .map_err(|e| format!("Failed to insert entry: {}", e))?;
 
-    let item_id: i64 = result.get("id");
+    let entry_id: i64 = entry_result.get("id");
 
-    // Insert PDF-specific data
-    sqlx::query(
+    // Insert PDF attachment
+    let attachment_result = sqlx::query(
         r#"
-        INSERT INTO pdf_items (
-            item_id, file_path, file_hash, file_size, page_count,
-            author, abstract_text, keywords
+        INSERT INTO attachments (
+            key, entry_id, attachment_type_id, title,
+            file_path, file_hash, file_size, page_count
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
         "#
     )
-    .bind(item_id)
+    .bind(&attachment_key)
+    .bind(entry_id)
+    .bind(attachment_type_id)
+    .bind(&title)
     .bind(&dest_path_str)
     .bind(&file_hash)
     .bind(file_size)
     .bind(metadata.page_count)
-    .bind(&metadata.author)
-    .bind(&metadata.subject)
-    .bind(&metadata.keywords)
-    .execute(&state.db)
+    .fetch_one(&state.db)
     .await
-    .map_err(|e| format!("Failed to insert PDF data: {}", e))?;
+    .map_err(|e| format!("Failed to insert attachment: {}", e))?;
 
-    tracing::info!("Imported PDF: {} ({})", title, key);
+    let attachment_id: i64 = attachment_result.get("id");
+
+    tracing::info!("Imported PDF: {} (entry: {}, attachment: {})", title, entry_key, attachment_key);
 
     Ok(ImportResult {
-        id: item_id,
-        key,
+        id: entry_id,
+        key: entry_key,
         title,
         file_path: dest_path_str,
+        entry_id,
+        attachment_id,
         success: true,
         error: None,
     })

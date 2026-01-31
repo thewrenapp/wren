@@ -1,33 +1,92 @@
 import { create } from "zustand";
 
-// Types
-export interface Item {
+// =====================================================
+// Types: Entry-Attachment Model
+// =====================================================
+
+export interface Creator {
+  creatorType: string; // "author", "editor", "translator", etc.
+  firstName?: string;
+  lastName?: string;
+  name?: string; // For single-field names (institutions)
+}
+
+export interface Entry {
   id: string;
   key: string;
-  type: "pdf" | "markdown";
+  entryType: string;
+  entryTypeDisplay: string;
   title: string;
+  creators: Creator[];
+  publicationDate?: string;
+  doi?: string;
+  isbn?: string;
+  issn?: string;
+  url?: string;
+  publisher?: string;
+  journal?: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  abstract?: string;
+  repository?: string;
+  archiveId?: string;
+  language?: string;
+  rights?: string;
+  extra?: string;
   dateAdded: string;
   dateModified: string;
   tags: Tag[];
   collections: string[];
+  attachments: Attachment[];
+  attachmentCount: number;
 }
 
-export interface PdfItem extends Item {
-  type: "pdf";
-  filePath: string;
+export interface EntrySummary {
+  id: string;
+  key: string;
+  entryType: string;
+  title: string;
+  creatorsDisplay: string;
+  year?: string;
+  dateAdded: string;
+  tags: Tag[];
+  attachmentCount: number;
+  hasPdf: boolean;
+  hasNote: boolean;
+  thumbnailPath?: string;
+}
+
+export interface Attachment {
+  id: string;
+  key: string;
+  entryId: string;
+  attachmentType: string;
+  attachmentTypeDisplay: string;
+  title?: string;
+  filePath?: string;
+  fileHash?: string;
+  fileSize?: number;
+  url?: string;
   pageCount?: number;
-  author?: string;
-  abstract?: string;
-  doi?: string;
-  publicationDate?: string;
-  publisher?: string;
-  journal?: string;
+  frontmatter?: string;
+  thumbnailPath?: string;
+  dateAdded: string;
+  dateModified: string;
 }
 
-export interface MarkdownItem extends Item {
-  type: "markdown";
-  filePath: string;
-  frontmatter?: Record<string, unknown>;
+export interface EntryType {
+  id: string;
+  name: string;
+  displayName: string;
+  icon?: string;
+}
+
+export interface AttachmentTypeInfo {
+  id: string;
+  name: string;
+  displayName: string;
+  icon?: string;
 }
 
 export interface Collection {
@@ -46,89 +105,130 @@ export interface Tag {
   itemCount: number;
 }
 
-export interface ItemLink {
-  id: string;
-  sourceItemId: string;
-  targetItemId: string;
-  linkType: string;
-  linkTypeDisplay: string;
-  context?: string;
-}
+// Filter types for the sidebar
+export type LibraryFilter =
+  | { type: "all" }
+  | { type: "pdf" }
+  | { type: "note" }
+  | { type: "collection"; id: string }
+  | { type: "tag"; id: string };
 
 interface LibraryState {
   // Data
-  items: Item[];
+  entries: EntrySummary[];
+  currentEntry: Entry | null;
+  entryTypes: EntryType[];
+  attachmentTypes: AttachmentTypeInfo[];
   collections: Collection[];
   tags: Tag[];
 
   // Selection
-  selectedItemIds: string[];
+  selectedEntryIds: string[];
+
+  // Filters
+  activeFilter: LibraryFilter;
   activeCollectionId: string | null;
   activeTagId: string | null;
+  searchQuery: string;
+
+  // Expanded entries (for tree view)
+  expandedEntryIds: string[];
 
   // Loading states
   isLoading: boolean;
   error: string | null;
 
-  // Actions
-  setItems: (items: Item[]) => void;
-  addItem: (item: Item) => void;
-  updateItem: (id: string, updates: Partial<Item>) => void;
-  removeItem: (id: string) => void;
+  // Attachment cache invalidation
+  attachmentVersion: number;
 
+  // Entry Actions
+  setEntries: (entries: EntrySummary[]) => void;
+  addEntry: (entry: EntrySummary) => void;
+  updateEntry: (id: string, updates: Partial<EntrySummary>) => void;
+  removeEntry: (id: string) => void;
+  setCurrentEntry: (entry: Entry | null) => void;
+
+  // Entry Types
+  setEntryTypes: (types: EntryType[]) => void;
+  setAttachmentTypes: (types: AttachmentTypeInfo[]) => void;
+
+  // Collection Actions
   setCollections: (collections: Collection[]) => void;
   addCollection: (collection: Collection) => void;
   updateCollection: (id: string, updates: Partial<Collection>) => void;
   removeCollection: (id: string) => void;
 
+  // Tag Actions
   setTags: (tags: Tag[]) => void;
   addTag: (tag: Tag) => void;
   updateTag: (id: string, updates: Partial<Tag>) => void;
   removeTag: (id: string) => void;
 
-  // Selection actions
-  selectItem: (id: string, multi?: boolean) => void;
-  selectItems: (ids: string[]) => void;
+  // Selection Actions
+  selectEntry: (id: string, multi?: boolean) => void;
+  selectEntries: (ids: string[]) => void;
   clearSelection: () => void;
+  toggleEntryExpanded: (id: string) => void;
+
+  // Filter Actions
+  setFilter: (filter: LibraryFilter) => void;
   setActiveCollection: (id: string | null) => void;
   setActiveTag: (id: string | null) => void;
+  setSearchQuery: (query: string) => void;
 
-  // Loading actions
+  // Loading Actions
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+
+  // Attachment Actions
+  invalidateAttachments: () => void;
 }
 
-export const useLibraryStore = create<LibraryState>()((set, _get) => ({
+export const useLibraryStore = create<LibraryState>()((set) => ({
   // Initial state
-  items: [],
+  entries: [],
+  currentEntry: null,
+  entryTypes: [],
+  attachmentTypes: [],
   collections: [],
   tags: [],
-  selectedItemIds: [],
+  selectedEntryIds: [],
+  activeFilter: { type: "all" },
   activeCollectionId: null,
   activeTagId: null,
+  searchQuery: "",
+  expandedEntryIds: [],
   isLoading: false,
   error: null,
+  attachmentVersion: 0,
 
-  // Item actions
-  setItems: (items) => set({ items }),
+  // Entry actions
+  setEntries: (entries) => set({ entries }),
 
-  addItem: (item) =>
+  addEntry: (entry) =>
     set((state) => ({
-      items: [item, ...state.items],
+      entries: [entry, ...state.entries],
     })),
 
-  updateItem: (id, updates) =>
+  updateEntry: (id, updates) =>
     set((state) => ({
-      items: state.items.map((item) =>
-        item.id === id ? { ...item, ...updates } : item
+      entries: state.entries.map((entry) =>
+        entry.id === id ? { ...entry, ...updates } : entry
       ),
     })),
 
-  removeItem: (id) =>
+  removeEntry: (id) =>
     set((state) => ({
-      items: state.items.filter((item) => item.id !== id),
-      selectedItemIds: state.selectedItemIds.filter((i) => i !== id),
+      entries: state.entries.filter((entry) => entry.id !== id),
+      selectedEntryIds: state.selectedEntryIds.filter((i) => i !== id),
+      expandedEntryIds: state.expandedEntryIds.filter((i) => i !== id),
     })),
+
+  setCurrentEntry: (entry) => set({ currentEntry: entry }),
+
+  // Entry/Attachment Types
+  setEntryTypes: (types) => set({ entryTypes: types }),
+  setAttachmentTypes: (types) => set({ attachmentTypes: types }),
 
   // Collection actions
   setCollections: (collections) => set({ collections }),
@@ -150,6 +250,11 @@ export const useLibraryStore = create<LibraryState>()((set, _get) => ({
       collections: state.collections.filter((col) => col.id !== id),
       activeCollectionId:
         state.activeCollectionId === id ? null : state.activeCollectionId,
+      activeFilter:
+        state.activeFilter.type === "collection" &&
+        state.activeFilter.id === id
+          ? { type: "all" }
+          : state.activeFilter,
     })),
 
   // Tag actions
@@ -171,40 +276,67 @@ export const useLibraryStore = create<LibraryState>()((set, _get) => ({
     set((state) => ({
       tags: state.tags.filter((tag) => tag.id !== id),
       activeTagId: state.activeTagId === id ? null : state.activeTagId,
+      activeFilter:
+        state.activeFilter.type === "tag" && state.activeFilter.id === id
+          ? { type: "all" }
+          : state.activeFilter,
     })),
 
   // Selection actions
-  selectItem: (id, multi = false) => {
+  selectEntry: (id, multi = false) => {
     set((state) => {
       if (multi) {
-        const isSelected = state.selectedItemIds.includes(id);
+        const isSelected = state.selectedEntryIds.includes(id);
         return {
-          selectedItemIds: isSelected
-            ? state.selectedItemIds.filter((i) => i !== id)
-            : [...state.selectedItemIds, id],
+          selectedEntryIds: isSelected
+            ? state.selectedEntryIds.filter((i) => i !== id)
+            : [...state.selectedEntryIds, id],
         };
       }
-      return { selectedItemIds: [id] };
+      return { selectedEntryIds: [id] };
     });
   },
 
-  selectItems: (ids) => set({ selectedItemIds: ids }),
+  selectEntries: (ids) => set({ selectedEntryIds: ids }),
 
-  clearSelection: () => set({ selectedItemIds: [] }),
+  clearSelection: () => set({ selectedEntryIds: [] }),
+
+  toggleEntryExpanded: (id) =>
+    set((state) => ({
+      expandedEntryIds: state.expandedEntryIds.includes(id)
+        ? state.expandedEntryIds.filter((i) => i !== id)
+        : [...state.expandedEntryIds, id],
+    })),
+
+  // Filter actions
+  setFilter: (filter) =>
+    set({
+      activeFilter: filter,
+      activeCollectionId: filter.type === "collection" ? filter.id : null,
+      activeTagId: filter.type === "tag" ? filter.id : null,
+    }),
 
   setActiveCollection: (id) =>
     set({
       activeCollectionId: id,
-      activeTagId: null, // Clear tag filter when selecting collection
+      activeTagId: null,
+      activeFilter: id ? { type: "collection", id } : { type: "all" },
     }),
 
   setActiveTag: (id) =>
     set({
       activeTagId: id,
-      activeCollectionId: null, // Clear collection filter when selecting tag
+      activeCollectionId: null,
+      activeFilter: id ? { type: "tag", id } : { type: "all" },
     }),
+
+  setSearchQuery: (query) => set({ searchQuery: query }),
 
   // Loading actions
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
+
+  // Attachment cache invalidation
+  invalidateAttachments: () =>
+    set((state) => ({ attachmentVersion: state.attachmentVersion + 1 })),
 }));

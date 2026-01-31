@@ -1,77 +1,308 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { GlobalWorkerOptions } from "pdfjs-dist";
+
+// CSS imports in correct order
+import "pdfjs-dist/web/pdf_viewer.css";
+import "react-pdf-highlighter-plus/style/style.css";
+import "./PDFViewer.css";
+
 import {
   PdfLoader,
   PdfHighlighter,
   TextHighlight,
   AreaHighlight,
+  FreetextHighlight,
+  DrawingHighlight,
+  ShapeHighlight,
+  MonitoredHighlightContainer,
   useHighlightContainerContext,
-} from "react-pdf-highlighter-extended";
-import type {
-  Highlight,
-  GhostHighlight,
-  Content,
-  PdfSelection,
-  ViewportHighlight,
-  PdfHighlighterUtils,
-} from "react-pdf-highlighter-extended";
-import { convertFileSrc } from "@tauri-apps/api/core";
+  usePdfHighlighterContext,
+  LeftPanel,
+  type Highlight,
+  type PdfHighlighterUtils,
+  type GhostHighlight,
+  type ScaledPosition,
+  type PdfScaleValue,
+  type Tip,
+  type DrawingStroke,
+  type ShapeData,
+  type ShapeType,
+} from "react-pdf-highlighter-plus";
 
-// PDF.js worker source - must match the version used by react-pdf-highlighter-extended
-const PDFJS_WORKER_SRC = "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
-import { Trash2, Highlighter, Square, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
+import { PDFToolbar } from "./PDFToolbar";
+import { HighlightPopup } from "./HighlightPopup";
+import {
+  getAnnotations,
+  createAnnotation,
+  updateAnnotation,
+  deleteAnnotation,
+  type Annotation,
+} from "@/services/tauri/commands";
+import { useUIStore } from "@/stores/uiStore";
 
-// Extend Highlight with our custom fields
-export interface Annotation extends Highlight {
-  itemId: string;
-  color: string;
-  comment?: {
-    text: string;
-    emoji: string;
-  };
-  content?: Content;
+// Set up PDF.js worker
+GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url
+).toString();
+
+interface AppHighlight extends Highlight {
+  highlightColor?: string;
+  selectedText?: string;
+  // Freetext properties
+  color?: string;
+  backgroundColor?: string;
+  fontSize?: string;
+  // Shape properties
+  shapeType?: ShapeType;
+  strokeColor?: string;
+  strokeWidth?: number;
 }
 
 interface PDFViewerProps {
   filePath: string;
   itemId: string;
-  annotations: Annotation[];
-  onAddAnnotation: (annotation: GhostHighlight & { color: string }) => void;
-  onUpdateAnnotation: (id: string, updates: Partial<Annotation>) => void;
-  onDeleteAnnotation: (id: string) => void;
 }
 
-// Highlight colors
-const HIGHLIGHT_COLORS = [
-  { name: "Yellow", value: "#FFEB3B" },
-  { name: "Green", value: "#81C784" },
-  { name: "Blue", value: "#64B5F6" },
-  { name: "Pink", value: "#F48FB1" },
-  { name: "Orange", value: "#FFB74D" },
-];
+// Tool modes
+type ToolMode = "highlight" | "area" | "freetext" | "drawing" | "rectangle" | null;
 
-export function PDFViewer({
-  filePath,
-  itemId,
-  annotations,
-  onAddAnnotation,
-  onUpdateAnnotation: _onUpdateAnnotation,
-  onDeleteAnnotation,
-}: PDFViewerProps) {
-  // TODO: Use onUpdateAnnotation for comment editing
-  void _onUpdateAnnotation;
-  const [pdfUrl, setPdfUrl] = useState<string>("");
-  const [selectedColor, setSelectedColor] = useState(HIGHLIGHT_COLORS[0].value);
-  const [currentSelection, setCurrentSelection] = useState<PdfSelection | null>(
-    null
+// Highlight container with click-to-show-popup
+interface HighlightRendererProps {
+  onColorChange: (highlightId: string, color: string) => void;
+  onDelete: (highlightId: string) => void;
+  onEdit: (highlightId: string, edit: Partial<AppHighlight>) => void;
+}
+
+function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendererProps) {
+  const { highlight, viewportToScaled, screenshot, isScrolledTo, highlightBindings } =
+    useHighlightContainerContext<AppHighlight>();
+  const { toggleEditInProgress } = usePdfHighlighterContext();
+
+  let component;
+
+  if (highlight.type === "text") {
+    component = (
+      <TextHighlight
+        highlight={highlight}
+        isScrolledTo={isScrolledTo}
+        highlightColor={highlight.highlightColor}
+      />
+    );
+  } else if (highlight.type === "freetext") {
+    component = (
+      <FreetextHighlight
+        highlight={highlight}
+        isScrolledTo={isScrolledTo}
+        bounds={highlightBindings.textLayer}
+        color={highlight.color}
+        backgroundColor={highlight.backgroundColor}
+        fontSize={highlight.fontSize}
+        onChange={(boundingRect) => {
+          onEdit(highlight.id, {
+            position: {
+              boundingRect: viewportToScaled(boundingRect),
+              rects: [],
+            },
+          });
+          toggleEditInProgress(false);
+        }}
+        onTextChange={(newText) => {
+          onEdit(highlight.id, { content: { text: newText } });
+        }}
+        onEditStart={() => toggleEditInProgress(true)}
+        onEditEnd={() => toggleEditInProgress(false)}
+        onDelete={() => onDelete(highlight.id)}
+      />
+    );
+  } else if (highlight.type === "drawing") {
+    component = (
+      <DrawingHighlight
+        highlight={highlight}
+        isScrolledTo={isScrolledTo}
+        bounds={highlightBindings.textLayer}
+        onChange={(boundingRect) => {
+          onEdit(highlight.id, {
+            position: {
+              boundingRect: viewportToScaled(boundingRect),
+              rects: [],
+            },
+          });
+        }}
+        onStyleChange={(newImage, newStrokes) => {
+          onEdit(highlight.id, {
+            content: { image: newImage, strokes: newStrokes },
+          });
+        }}
+        onEditStart={() => toggleEditInProgress(true)}
+        onEditEnd={() => toggleEditInProgress(false)}
+        onDelete={() => onDelete(highlight.id)}
+      />
+    );
+  } else if (highlight.type === "shape") {
+    component = (
+      <ShapeHighlight
+        highlight={highlight}
+        isScrolledTo={isScrolledTo}
+        bounds={highlightBindings.textLayer}
+        shapeType={highlight.shapeType || "rectangle"}
+        strokeColor={highlight.strokeColor || "#000000"}
+        strokeWidth={highlight.strokeWidth || 2}
+        startPoint={highlight.content?.shape?.startPoint}
+        endPoint={highlight.content?.shape?.endPoint}
+        onChange={(boundingRect) => {
+          onEdit(highlight.id, {
+            position: {
+              boundingRect: viewportToScaled(boundingRect),
+              rects: [],
+            },
+          });
+        }}
+        onEditStart={() => toggleEditInProgress(true)}
+        onEditEnd={() => toggleEditInProgress(false)}
+        onDelete={() => onDelete(highlight.id)}
+      />
+    );
+  } else {
+    // Area highlight (default)
+    component = (
+      <AreaHighlight
+        highlight={highlight}
+        isScrolledTo={isScrolledTo}
+        highlightColor={highlight.highlightColor}
+        bounds={highlightBindings.textLayer}
+        onChange={(boundingRect) => {
+          onEdit(highlight.id, {
+            position: {
+              boundingRect: viewportToScaled(boundingRect),
+              rects: [],
+            },
+            content: { image: screenshot(boundingRect) },
+          });
+          toggleEditInProgress(false);
+        }}
+        onEditStart={() => toggleEditInProgress(true)}
+        onDelete={() => onDelete(highlight.id)}
+      />
+    );
+  }
+
+  // Only show popup tip for text and area highlights
+  const showTip = highlight.type === "text" || highlight.type === "area";
+
+  const highlightTip: Tip = {
+    position: highlight.position,
+    content: (
+      <HighlightPopup
+        currentColor={highlight.highlightColor}
+        onColorChange={(newColor) => onColorChange(highlight.id, newColor)}
+        onDelete={() => onDelete(highlight.id)}
+      />
+    ),
+  };
+
+  return (
+    <MonitoredHighlightContainer
+      highlightTip={showTip ? highlightTip : undefined}
+      key={highlight.id}
+    >
+      {component}
+    </MonitoredHighlightContainer>
   );
-  const highlighterUtilsRef = useRef<PdfHighlighterUtils | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+}
 
-  // Suppress unused itemId warning - kept for future use
-  void itemId;
+export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
+  const [highlights, setHighlights] = useState<AppHighlight[]>([]);
+  const [pdfUrl, setPdfUrl] = useState<string>("");
+  const [scale, setScale] = useState<PdfScaleValue | undefined>(undefined);
+  const [displayScale, setDisplayScale] = useState<number>(1);
+  const [highlightColor, setHighlightColor] = useState("#FFE28F");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [toolMode, setToolMode] = useState<ToolMode>("highlight");
+  const [drawingColor, setDrawingColor] = useState("#000000");
+  const [shapeColor, setShapeColor] = useState("#000000");
+  const [darkMode, setDarkMode] = useState(false);
+
+  // Get panel states from global store
+  const {
+    infoPaneOpen,
+    toggleInfoPane,
+    pdfLeftPanelOpen,
+    togglePdfLeftPanel,
+    libraryLayout,
+  } = useUIStore();
+
+  const pdfHighlighterUtilsRef = useRef<PdfHighlighterUtils | null>(null);
+  const [, forceUpdate] = useState({});
+  const hasInitializedUtilsRef = useRef(false);
+
+  // Track dark mode from document
+  useEffect(() => {
+    const checkDarkMode = () => {
+      setDarkMode(document.documentElement.classList.contains("dark"));
+    };
+
+    checkDarkMode();
+
+    // Observe class changes on document element
+    const observer = new MutationObserver(checkDarkMode);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+
+    return () => observer.disconnect();
+  }, []);
+
+  // Reset utils initialization flag when URL changes
+  useEffect(() => {
+    hasInitializedUtilsRef.current = false;
+  }, [pdfUrl]);
+
+  // Helper to apply scale to viewer
+  const applyScale = useCallback((newScale: PdfScaleValue) => {
+    const viewer = pdfHighlighterUtilsRef.current?.getViewer();
+    if (!viewer) return;
+
+    if (typeof newScale === "number") {
+      viewer.currentScale = newScale;
+    } else {
+      viewer.currentScaleValue = newScale;
+    }
+  }, []);
+
+  // Track current page and scale when user scrolls/zooms
+  useEffect(() => {
+    if (!pdfHighlighterUtilsRef.current) return;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = pdfHighlighterUtilsRef.current.getEventBus() as any;
+    if (!eventBus) return;
+
+    const handlePageChange = (evt: { pageNumber: number }) => {
+      setCurrentPage(evt.pageNumber);
+    };
+
+    const handleScaleChange = (evt: { scale: number }) => {
+      setDisplayScale(evt.scale);
+    };
+
+    eventBus.on("pagechanging", handlePageChange);
+    eventBus.on("scalechanging", handleScaleChange);
+
+    // Get initial scale
+    const viewer = pdfHighlighterUtilsRef.current.getViewer();
+    if (viewer?.currentScale) {
+      setDisplayScale(viewer.currentScale);
+    }
+
+    return () => {
+      eventBus.off("pagechanging", handlePageChange);
+      eventBus.off("scalechanging", handleScaleChange);
+    };
+  }, [pdfHighlighterUtilsRef.current]);
 
   // Convert file path to Tauri asset URL
   useEffect(() => {
@@ -81,271 +312,445 @@ export function PDFViewer({
     }
   }, [filePath]);
 
-  const scrollToHighlight = useCallback((highlight: Highlight) => {
-    if (highlighterUtilsRef.current) {
-      highlighterUtilsRef.current.scrollToHighlight(highlight);
+  // Load annotations from database
+  useEffect(() => {
+    async function loadAnnotations() {
+      try {
+        const annotations = await getAnnotations(parseInt(itemId, 10));
+        const appHighlights = annotations.map(convertAnnotationToHighlight);
+        setHighlights(appHighlights);
+      } catch {
+        // Failed to load annotations
+      }
+    }
+    loadAnnotations();
+  }, [itemId]);
+
+  function convertAnnotationToHighlight(annotation: Annotation): AppHighlight {
+    const position = JSON.parse(annotation.positionJson) as ScaledPosition;
+
+    // Ensure position has width/height (imported annotations may lack these)
+    if (position.boundingRect && !position.boundingRect.width) {
+      position.boundingRect.width = position.boundingRect.x2 - position.boundingRect.x1;
+      position.boundingRect.height = position.boundingRect.y2 - position.boundingRect.y1;
+    }
+    if (position.rects) {
+      position.rects = position.rects.map(rect => ({
+        ...rect,
+        width: rect.width || (rect.x2 - rect.x1),
+        height: rect.height || (rect.y2 - rect.y1),
+      }));
+    }
+
+    // Map annotation types - "highlight" from import should be "text"
+    let highlightType = annotation.annotationType;
+    if (highlightType === "highlight") {
+      highlightType = "text";
+    }
+
+    // Use selectedText or comment for content
+    const textContent = annotation.selectedText || annotation.comment || "";
+
+    return {
+      id: String(annotation.id),
+      type: highlightType as AppHighlight["type"],
+      position,
+      content: { text: textContent },
+      highlightColor: annotation.color,
+      selectedText: textContent,
+    };
+  }
+
+  const getNextId = () => `temp-${Date.now()}`;
+
+  // Create text or area highlight based on selection type
+  const handleSelection = useCallback(
+    (selection: GhostHighlight & { makeGhostHighlight: () => GhostHighlight }) => {
+      const ghost = selection.makeGhostHighlight();
+      const { position, content, type } = ghost;
+      const tempId = getNextId();
+
+      // Determine if this is an area or text highlight
+      const isArea = type === "area" || toolMode === "area";
+      const highlightType = isArea ? "area" : "text";
+
+      const optimisticHighlight: AppHighlight = {
+        id: tempId,
+        type: highlightType,
+        position,
+        content,
+        highlightColor: highlightColor,
+        selectedText: content?.text,
+      };
+
+      setHighlights((prev) => [...prev, optimisticHighlight]);
+
+      (async () => {
+        try {
+          const annotation = await createAnnotation({
+            itemId: parseInt(itemId, 10),
+            annotationType: highlightType,
+            pageNumber: position.boundingRect.pageNumber,
+            positionJson: JSON.stringify(position),
+            selectedText: content?.text,
+            color: highlightColor,
+          });
+
+          setHighlights((prev) =>
+            prev.map((h) =>
+              h.id === tempId ? { ...h, id: String(annotation.id) } : h
+            )
+          );
+        } catch {
+          setHighlights((prev) => prev.filter((h) => h.id !== tempId));
+        }
+      })();
+    },
+    [itemId, highlightColor, toolMode]
+  );
+
+  // Create freetext note
+  const handleFreetextClick = useCallback(
+    (position: ScaledPosition) => {
+      const tempId = getNextId();
+      const newHighlight: AppHighlight = {
+        id: tempId,
+        type: "freetext",
+        position,
+        content: { text: "" },
+        color: "#000000",
+        backgroundColor: "#FFFFA5",
+        fontSize: "14px",
+      };
+      setHighlights((prev) => [...prev, newHighlight]);
+
+      (async () => {
+        try {
+          const annotation = await createAnnotation({
+            itemId: parseInt(itemId, 10),
+            annotationType: "freetext",
+            pageNumber: position.boundingRect.pageNumber,
+            positionJson: JSON.stringify(position),
+            selectedText: "",
+            color: "#FFFFA5",
+          });
+          setHighlights((prev) =>
+            prev.map((h) =>
+              h.id === tempId ? { ...h, id: String(annotation.id) } : h
+            )
+          );
+        } catch {
+          setHighlights((prev) => prev.filter((h) => h.id !== tempId));
+        }
+      })();
+    },
+    [itemId]
+  );
+
+  // Create drawing highlight
+  const handleDrawingComplete = useCallback(
+    (dataUrl: string, position: ScaledPosition, strokes: DrawingStroke[]) => {
+      const tempId = getNextId();
+      const newHighlight: AppHighlight = {
+        id: tempId,
+        type: "drawing",
+        position,
+        content: { image: dataUrl, strokes },
+      };
+      setHighlights((prev) => [...prev, newHighlight]);
+      setToolMode(null);
+
+      (async () => {
+        try {
+          const annotation = await createAnnotation({
+            itemId: parseInt(itemId, 10),
+            annotationType: "drawing",
+            pageNumber: position.boundingRect.pageNumber,
+            positionJson: JSON.stringify(position),
+            selectedText: undefined,
+            color: drawingColor,
+          });
+          setHighlights((prev) =>
+            prev.map((h) =>
+              h.id === tempId ? { ...h, id: String(annotation.id) } : h
+            )
+          );
+        } catch {
+          setHighlights((prev) => prev.filter((h) => h.id !== tempId));
+        }
+      })();
+    },
+    [itemId, drawingColor]
+  );
+
+  // Create shape highlight
+  const handleShapeComplete = useCallback(
+    (position: ScaledPosition, shape: ShapeData) => {
+      const tempId = getNextId();
+      const newHighlight: AppHighlight = {
+        id: tempId,
+        type: "shape",
+        position,
+        content: { shape },
+        shapeType: shape.shapeType,
+        strokeColor: shape.strokeColor,
+        strokeWidth: shape.strokeWidth,
+      };
+      setHighlights((prev) => [...prev, newHighlight]);
+      setToolMode(null);
+
+      (async () => {
+        try {
+          const annotation = await createAnnotation({
+            itemId: parseInt(itemId, 10),
+            annotationType: "shape",
+            pageNumber: position.boundingRect.pageNumber,
+            positionJson: JSON.stringify(position),
+            selectedText: undefined,
+            color: shape.strokeColor,
+          });
+          setHighlights((prev) =>
+            prev.map((h) =>
+              h.id === tempId ? { ...h, id: String(annotation.id) } : h
+            )
+          );
+        } catch {
+          setHighlights((prev) => prev.filter((h) => h.id !== tempId));
+        }
+      })();
+    },
+    [itemId]
+  );
+
+  // Change highlight color
+  const handleColorChange = useCallback(
+    async (highlightId: string, newColor: string) => {
+      // Update local state first for immediate feedback
+      setHighlights((prev) =>
+        prev.map((h) =>
+          h.id === highlightId ? { ...h, highlightColor: newColor } : h
+        )
+      );
+
+      // Skip DB update for temp IDs (not yet saved)
+      if (highlightId.startsWith("temp-")) {
+        return;
+      }
+
+      try {
+        await updateAnnotation(parseInt(highlightId, 10), { color: newColor });
+      } catch {
+        // Failed to update in DB
+      }
+    },
+    []
+  );
+
+  // Edit highlight
+  const handleEdit = useCallback(
+    async (highlightId: string, edit: Partial<AppHighlight>) => {
+      // Update local state first
+      setHighlights((prev) =>
+        prev.map((h) => (h.id === highlightId ? { ...h, ...edit } : h))
+      );
+
+      // Skip DB update for temp IDs (not yet saved)
+      if (highlightId.startsWith("temp-")) {
+        return;
+      }
+
+      try {
+        const updates: { positionJson?: string; comment?: string } = {};
+        if (edit.position) {
+          updates.positionJson = JSON.stringify(edit.position);
+        }
+        if (edit.content?.text) {
+          updates.comment = edit.content.text;
+        }
+        if (Object.keys(updates).length > 0) {
+          await updateAnnotation(parseInt(highlightId, 10), updates);
+        }
+      } catch {
+        // Failed to update
+      }
+    },
+    []
+  );
+
+  // Delete highlight
+  const handleDelete = useCallback(async (highlightId: string) => {
+    // Check if this is a temp ID (not yet saved to DB)
+    if (highlightId.startsWith("temp-")) {
+      // Just remove from local state
+      setHighlights((prev) => prev.filter((h) => h.id !== highlightId));
+      return;
+    }
+
+    try {
+      await deleteAnnotation(parseInt(highlightId, 10));
+      setHighlights((prev) => prev.filter((h) => h.id !== highlightId));
+    } catch {
+      // Failed to delete from DB, but still remove from UI
+      setHighlights((prev) => prev.filter((h) => h.id !== highlightId));
     }
   }, []);
 
-  const handleSelectionFinished = useCallback((selection: PdfSelection) => {
-    setCurrentSelection(selection);
+  // Zoom controls - apply scale directly to viewer
+  const zoomIn = useCallback(() => {
+    const viewer = pdfHighlighterUtilsRef.current?.getViewer();
+    const currentScale = viewer?.currentScale || 1;
+    const newScale = Math.min(currentScale + 0.25, 10);
+    applyScale(newScale);
+    setScale(newScale);
+  }, [applyScale]);
+
+  const zoomOut = useCallback(() => {
+    const viewer = pdfHighlighterUtilsRef.current?.getViewer();
+    const currentScale = viewer?.currentScale || 1;
+    const newScale = Math.max(currentScale - 0.25, 0.25);
+    applyScale(newScale);
+    setScale(newScale);
+  }, [applyScale]);
+
+  const fitWidth = useCallback(() => {
+    applyScale("page-width");
+    setScale("page-width");
+  }, [applyScale]);
+
+  const fitPage = useCallback(() => {
+    applyScale("page-fit");
+    setScale("page-fit");
+  }, [applyScale]);
+
+  // Handle manual scale input from toolbar
+  const handleScaleChange = useCallback((newScale: number) => {
+    applyScale(newScale);
+    setScale(newScale);
+  }, [applyScale]);
+
+  // Page navigation
+  const goToPage = useCallback((page: number) => {
+    pdfHighlighterUtilsRef.current?.goToPage(page);
+    setCurrentPage(page);
   }, []);
 
-  const handleConfirmSelection = useCallback(() => {
-    if (currentSelection) {
-      const ghost = currentSelection.makeGhostHighlight();
-      onAddAnnotation({
-        ...ghost,
-        color: selectedColor,
-      });
-      setCurrentSelection(null);
-    }
-  }, [currentSelection, onAddAnnotation, selectedColor]);
+  const nextPage = useCallback(() => {
+    if (currentPage < totalPages) goToPage(currentPage + 1);
+  }, [currentPage, totalPages, goToPage]);
 
-  const handleCancelSelection = useCallback(() => {
-    setCurrentSelection(null);
-  }, []);
+  const prevPage = useCallback(() => {
+    if (currentPage > 1) goToPage(currentPage - 1);
+  }, [currentPage, goToPage]);
 
   if (!pdfUrl) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        Loading PDF...
+      <div className="flex items-center justify-center h-full w-full">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
     );
   }
 
   return (
-    <div className="flex h-full" ref={containerRef}>
-      {/* Main PDF area */}
-      <div className="flex-1 relative overflow-hidden">
-        <PdfLoader
-          document={pdfUrl}
-          workerSrc={PDFJS_WORKER_SRC}
-          beforeLoad={() => <LoadingSpinner />}
-        >
-          {(pdfDocument) => (
-            <PdfHighlighter
-              pdfDocument={pdfDocument}
-              highlights={annotations}
-              enableAreaSelection={(event: MouseEvent) => event.altKey}
-              onSelection={handleSelectionFinished}
-              selectionTip={
-                currentSelection && (
-                  <SelectionTip
-                    onConfirm={handleConfirmSelection}
-                    onCancel={handleCancelSelection}
-                    color={selectedColor}
-                  />
-                )
-              }
-              utilsRef={(utils) => {
-                highlighterUtilsRef.current = utils;
-              }}
-              style={{
-                height: "100%",
-              }}
-            >
-              <HighlightContainer
-                annotations={annotations}
-                onDeleteAnnotation={onDeleteAnnotation}
-              />
-            </PdfHighlighter>
-          )}
-        </PdfLoader>
-
-        {/* Color picker toolbar */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-background/95 backdrop-blur border rounded-lg shadow-lg z-10">
-          <Highlighter className="h-4 w-4 text-muted-foreground" />
-          {HIGHLIGHT_COLORS.map((color) => (
-            <button
-              key={color.value}
-              onClick={() => setSelectedColor(color.value)}
-              className={cn(
-                "w-6 h-6 rounded-full border-2 transition-transform",
-                selectedColor === color.value
-                  ? "border-foreground scale-110"
-                  : "border-transparent hover:scale-105"
-              )}
-              style={{ backgroundColor: color.value }}
-              title={color.name}
-            />
-          ))}
-          <div className="w-px h-4 bg-border mx-1" />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            title="Area selection (Alt+drag)"
-          >
-            <Square className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Annotations sidebar */}
-      <div className="w-64 border-l bg-background flex flex-col">
-        <div className="p-3 border-b">
-          <h3 className="font-semibold text-sm">Annotations</h3>
-          <p className="text-xs text-muted-foreground">
-            {annotations.length} highlight{annotations.length !== 1 ? "s" : ""}
-          </p>
-        </div>
-        <ScrollArea className="flex-1">
-          <div className="p-2 space-y-2">
-            {annotations.length === 0 ? (
-              <p className="text-xs text-muted-foreground p-2 text-center">
-                Select text to highlight or Alt+drag for area selection
-              </p>
-            ) : (
-              annotations.map((annotation) => (
-                <AnnotationCard
-                  key={annotation.id}
-                  annotation={annotation}
-                  onClick={() => scrollToHighlight(annotation)}
-                  onDelete={() => onDeleteAnnotation(annotation.id)}
-                />
-              ))
-            )}
-          </div>
-        </ScrollArea>
-      </div>
-    </div>
-  );
-}
-
-function LoadingSpinner() {
-  return (
-    <div className="flex items-center justify-center h-full">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-    </div>
-  );
-}
-
-interface SelectionTipProps {
-  onConfirm: () => void;
-  onCancel: () => void;
-  color: string;
-}
-
-function SelectionTip({ onConfirm, onCancel, color }: SelectionTipProps) {
-  return (
-    <div className="bg-popover border rounded-lg shadow-lg p-2 flex items-center gap-2">
-      <div
-        className="w-4 h-4 rounded-full"
-        style={{ backgroundColor: color }}
+    <div className="flex h-full flex-col bg-muted/30">
+      <PDFToolbar
+        scale={displayScale}
+        onZoomIn={zoomIn}
+        onZoomOut={zoomOut}
+        onFitWidth={fitWidth}
+        onFitPage={fitPage}
+        onScaleChange={handleScaleChange}
+        highlightColor={highlightColor}
+        onColorChange={setHighlightColor}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        onPageChange={goToPage}
+        onPrevPage={prevPage}
+        onNextPage={nextPage}
+        toolMode={toolMode}
+        onToolModeChange={setToolMode}
+        drawingColor={drawingColor}
+        onDrawingColorChange={setDrawingColor}
+        shapeColor={shapeColor}
+        onShapeColorChange={setShapeColor}
+        leftPanelOpen={pdfLeftPanelOpen}
+        onToggleLeftPanel={togglePdfLeftPanel}
+        infoPaneOpen={infoPaneOpen}
+        onToggleInfoPane={toggleInfoPane}
+        isStackedLayout={libraryLayout === "stacked"}
       />
-      <Button size="sm" onClick={onConfirm}>
-        Highlight
-      </Button>
-      <Button size="sm" variant="ghost" onClick={onCancel}>
-        <X className="h-4 w-4" />
-      </Button>
-    </div>
-  );
-}
 
-interface HighlightContainerProps {
-  annotations: Annotation[];
-  onDeleteAnnotation: (id: string) => void;
-}
+      <div className="relative flex-1 overflow-hidden flex h-full">
+        <PdfLoader document={pdfUrl}>
+          {(pdfDocument) => {
+            if (pdfDocument.numPages !== totalPages) {
+              queueMicrotask(() => setTotalPages(pdfDocument.numPages));
+            }
 
-function HighlightContainer({
-  annotations,
-  onDeleteAnnotation,
-}: HighlightContainerProps) {
-  const { highlight, isScrolledTo } =
-    useHighlightContainerContext<Annotation>();
+            return (
+              <div className="flex h-full w-full">
+                {/* Left Panel - Outline & Thumbnails */}
+                <LeftPanel
+                  pdfDocument={pdfDocument}
+                  viewer={pdfHighlighterUtilsRef.current?.getViewer()}
+                  linkService={pdfHighlighterUtilsRef.current?.getLinkService()}
+                  eventBus={pdfHighlighterUtilsRef.current?.getEventBus()}
+                  goToPage={pdfHighlighterUtilsRef.current?.goToPage}
+                  isOpen={pdfLeftPanelOpen}
+                  onOpenChange={(open) => useUIStore.getState().setPdfLeftPanelOpen(open)}
+                  width={220}
+                  defaultTab="thumbnails"
+                />
 
-  if (!highlight) return null;
-
-  const annotation = annotations.find((a) => a.id === highlight.id);
-  const color = annotation?.color || HIGHLIGHT_COLORS[0].value;
-  const isArea = highlight.type === "area";
-
-  // The highlight from context already has viewport position
-  const viewportHighlight: ViewportHighlight<Annotation> = {
-    ...highlight,
-    itemId: annotation?.itemId || "",
-    color,
-    comment: annotation?.comment,
-    content: annotation?.content,
-  };
-
-  return isArea ? (
-    <AreaHighlight
-      highlight={viewportHighlight}
-      onChange={() => {}}
-      isScrolledTo={isScrolledTo}
-      style={{
-        border: `2px solid ${color}`,
-        background: `${color}33`,
-      }}
-    />
-  ) : (
-    <TextHighlight
-      highlight={viewportHighlight}
-      isScrolledTo={isScrolledTo}
-      style={{
-        backgroundColor: `${color}66`,
-      }}
-      onClick={() => {
-        // Show delete option on click - simple implementation
-        if (window.confirm("Delete this highlight?")) {
-          onDeleteAnnotation(highlight.id);
-        }
-      }}
-    />
-  );
-}
-
-interface AnnotationCardProps {
-  annotation: Annotation;
-  onClick: () => void;
-  onDelete: () => void;
-}
-
-function AnnotationCard({
-  annotation,
-  onClick,
-  onDelete,
-}: AnnotationCardProps) {
-  return (
-    <div
-      onClick={onClick}
-      className="p-2 rounded border cursor-pointer hover:bg-accent transition-colors group"
-    >
-      <div className="flex items-start gap-2">
-        <div
-          className="w-3 h-3 rounded-full flex-shrink-0 mt-1"
-          style={{ backgroundColor: annotation.color }}
-        />
-        <div className="flex-1 min-w-0">
-          {annotation.content?.text && (
-            <p className="text-xs line-clamp-2 text-muted-foreground">
-              &quot;{annotation.content.text}&quot;
-            </p>
-          )}
-          {annotation.comment?.text && (
-            <p className="text-sm mt-1 line-clamp-2">
-              {annotation.comment.text}
-            </p>
-          )}
-          <p className="text-xs text-muted-foreground mt-1">
-            Page {annotation.position.boundingRect.pageNumber}
-          </p>
-        </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
+                <div className="flex-1 relative overflow-hidden">
+                  <PdfHighlighter
+                    pdfDocument={pdfDocument}
+                    pdfScaleValue={scale}
+                    highlights={highlights}
+                    theme={{ mode: darkMode ? "dark" : "light" }}
+                    utilsRef={(utils) => {
+                      pdfHighlighterUtilsRef.current = utils;
+                      if (!hasInitializedUtilsRef.current) {
+                        hasInitializedUtilsRef.current = true;
+                        forceUpdate({});
+                      }
+                    }}
+                    // Text and Area highlight modes
+                    textSelectionColor={(toolMode === "highlight" || toolMode === "area") ? highlightColor : undefined}
+                    onSelection={(toolMode === "highlight" || toolMode === "area") ? handleSelection : undefined}
+                    // Area highlight mode
+                    enableAreaSelection={() => toolMode === "area"}
+                    areaSelectionMode={toolMode === "area"}
+                    // Freetext mode
+                    enableFreetextCreation={() => toolMode === "freetext"}
+                    onFreetextClick={handleFreetextClick}
+                    // Drawing mode
+                    enableDrawingMode={toolMode === "drawing"}
+                    onDrawingComplete={handleDrawingComplete}
+                    onDrawingCancel={() => setToolMode(null)}
+                    drawingStrokeColor={drawingColor}
+                    drawingStrokeWidth={3}
+                    // Shape mode (rectangle)
+                    enableShapeMode={toolMode === "rectangle" ? "rectangle" : null}
+                    onShapeComplete={handleShapeComplete}
+                    onShapeCancel={() => setToolMode(null)}
+                    shapeStrokeColor={shapeColor}
+                    shapeStrokeWidth={2}
+                    style={{ height: "100%" }}
+                  >
+                    <HighlightRenderer
+                      onColorChange={handleColorChange}
+                      onDelete={handleDelete}
+                      onEdit={handleEdit}
+                    />
+                  </PdfHighlighter>
+                </div>
+              </div>
+            );
           }}
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
+        </PdfLoader>
       </div>
     </div>
   );
 }
+
+export default PDFViewer;

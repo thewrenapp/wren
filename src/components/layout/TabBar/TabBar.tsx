@@ -1,10 +1,11 @@
-import { X, FileText, File, Search, Home, Library } from "lucide-react";
+import { X, FileText, File, Search, Home, Library, BookOpen } from "lucide-react";
 import { useTabStore, type Tab } from "@/stores/tabStore";
 import { cn } from "@/lib/utils";
 
 const tabIcons: Record<Tab["type"], React.ReactNode> = {
   library: <Library className="h-4 w-4" />,
   item: <FileText className="h-4 w-4" />,
+  entry: <BookOpen className="h-4 w-4" />,
   search: <Search className="h-4 w-4" />,
   collection: <File className="h-4 w-4" />,
   welcome: <Home className="h-4 w-4" />,

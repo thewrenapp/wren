@@ -145,13 +145,31 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Items
+            // Items (legacy, for backwards compatibility)
             commands::items::get_items,
             commands::items::get_item,
             commands::items::get_pdf_details,
             commands::items::create_item,
             commands::items::update_item,
             commands::items::delete_item,
+            // Entries (new entry/attachment model)
+            commands::entries::get_entries,
+            commands::entries::get_entry,
+            commands::entries::create_entry,
+            commands::entries::update_entry,
+            commands::entries::delete_entry,
+            commands::entries::get_entry_attachments,
+            commands::entries::get_attachment,
+            commands::entries::create_attachment,
+            commands::entries::delete_attachment,
+            commands::entries::add_entry_tag,
+            commands::entries::remove_entry_tag,
+            commands::entries::add_entry_to_collection,
+            commands::entries::remove_entry_from_collection,
+            commands::entries::get_entry_types,
+            commands::entries::get_attachment_types,
+            commands::entries::show_entry_in_finder,
+            commands::entries::add_pdf_attachment,
             // Collections
             commands::collections::get_collections,
             commands::collections::create_collection,
@@ -178,6 +196,10 @@ pub fn run() {
             commands::annotations::create_annotation,
             commands::annotations::update_annotation,
             commands::annotations::delete_annotation,
+            // PDF annotation sync
+            commands::annotations::save_annotation_to_pdf,
+            commands::annotations::remove_annotation_from_pdf,
+            commands::annotations::import_annotations_from_pdf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -11,7 +11,7 @@ let refreshFn: (() => Promise<void>) | null = null;
  */
 export function useLibrarySync() {
   const {
-    setItems,
+    setEntries,
     setCollections,
     setTags,
     setLoading,
@@ -25,11 +25,12 @@ export function useLibrarySync() {
   const loadLibrary = useCallback(async () => {
     setLoading(true);
     setError(null);
+    console.log("Loading library...");
 
     try {
-      // Load items, collections, and tags in parallel
-      const [items, collections, tags] = await Promise.all([
-        tauri.getItems({
+      // Load entries, collections, and tags in parallel
+      const [entries, collections, tags] = await Promise.all([
+        tauri.getEntries({
           collectionId: activeCollectionId ? Number(activeCollectionId) : undefined,
           tagId: activeTagId ? Number(activeTagId) : undefined,
         }),
@@ -37,11 +38,14 @@ export function useLibrarySync() {
         tauri.getTags(),
       ]);
 
-      // Map backend types to frontend types (handle id conversion)
-      const mappedItems = items.map((item) => ({
-        ...item,
-        id: String(item.id),
-        tags: item.tags.map((t) => ({ ...t, id: String(t.id) })),
+      console.log("Loaded entries:", entries);
+      console.log("Entries with PDF:", entries.filter(e => e.hasPdf));
+
+      // Map entries - id conversion
+      const mappedEntries = entries.map((entry) => ({
+        ...entry,
+        id: String(entry.id),
+        tags: entry.tags.map((t) => ({ ...t, id: String(t.id) })),
       }));
 
       const mappedCollections = collections.map((c) => ({
@@ -54,7 +58,7 @@ export function useLibrarySync() {
         id: String(t.id),
       }));
 
-      setItems(mappedItems);
+      setEntries(mappedEntries);
       setCollections(mappedCollections);
       setTags(mappedTags);
     } catch (err) {
@@ -64,7 +68,7 @@ export function useLibrarySync() {
       setLoading(false);
     }
   }, [
-    setItems,
+    setEntries,
     setCollections,
     setTags,
     setLoading,
@@ -121,7 +125,7 @@ export function useImport() {
           console.warn("Some imports failed:", errors);
         }
 
-        // Refresh library to show new items
+        // Refresh library to show new entries
         await refresh();
 
         return results;
@@ -152,7 +156,7 @@ export function useImport() {
           console.warn("Some imports failed:", errors);
         }
 
-        // Refresh library to show new items
+        // Refresh library to show new entries
         await refresh();
 
         return results;

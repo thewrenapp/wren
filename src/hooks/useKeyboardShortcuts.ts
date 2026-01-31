@@ -5,8 +5,8 @@ import { useLibraryStore } from "@/stores/libraryStore";
 
 export function useKeyboardShortcuts() {
   const { toggleCommandPalette, setViewMode, viewMode } = useUIStore();
-  const { closeTab, activeTabId, tabs, setActiveTab } = useTabStore();
-  const { selectedItemIds, items, selectItem, clearSelection } =
+  const { closeTab, activeTabId, tabs, setActiveTab, openTab } = useTabStore();
+  const { selectedEntryIds, entries, selectEntry, clearSelection } =
     useLibraryStore();
 
   useEffect(() => {
@@ -77,9 +77,9 @@ export function useKeyboardShortcuts() {
       // Select all: Cmd+A
       if (isMeta && e.key === "a") {
         e.preventDefault();
-        // Select all items in current view
-        const allIds = items.map((i) => i.id);
-        allIds.forEach((id) => selectItem(id, true));
+        // Select all entries in current view
+        const allIds = entries.map((e) => e.id);
+        allIds.forEach((id) => selectEntry(id, true));
         return;
       }
 
@@ -89,41 +89,45 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Arrow navigation for items
+      // Arrow navigation for entries
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        if (items.length === 0) return;
+        if (entries.length === 0) return;
 
         e.preventDefault();
 
-        if (selectedItemIds.length === 0) {
-          // Select first item
-          selectItem(items[0].id);
+        if (selectedEntryIds.length === 0) {
+          // Select first entry
+          selectEntry(entries[0].id);
         } else {
           // Navigate from current selection
-          const lastSelected = selectedItemIds[selectedItemIds.length - 1];
-          const currentIndex = items.findIndex((i) => i.id === lastSelected);
+          const lastSelected = selectedEntryIds[selectedEntryIds.length - 1];
+          const currentIndex = entries.findIndex((e) => e.id === lastSelected);
 
           const newIndex =
             e.key === "ArrowDown"
-              ? Math.min(items.length - 1, currentIndex + 1)
+              ? Math.min(entries.length - 1, currentIndex + 1)
               : Math.max(0, currentIndex - 1);
 
           if (isShift) {
             // Extend selection
-            selectItem(items[newIndex].id, true);
+            selectEntry(entries[newIndex].id, true);
           } else {
             // Single selection
-            selectItem(items[newIndex].id);
+            selectEntry(entries[newIndex].id);
           }
         }
         return;
       }
 
-      // Enter: Open selected item
-      if (e.key === "Enter" && selectedItemIds.length === 1) {
-        const item = items.find((i) => i.id === selectedItemIds[0]);
-        if (item) {
-          // TODO: Open in tab
+      // Enter: Open selected entry
+      if (e.key === "Enter" && selectedEntryIds.length === 1) {
+        const entry = entries.find((e) => e.id === selectedEntryIds[0]);
+        if (entry) {
+          openTab({
+            type: "entry",
+            title: entry.title,
+            entryId: entry.id,
+          });
         }
         return;
       }
@@ -139,9 +143,10 @@ export function useKeyboardShortcuts() {
     activeTabId,
     tabs,
     setActiveTab,
-    items,
-    selectedItemIds,
-    selectItem,
+    entries,
+    selectedEntryIds,
+    selectEntry,
     clearSelection,
+    openTab,
   ]);
 }

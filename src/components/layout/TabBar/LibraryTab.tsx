@@ -16,10 +16,10 @@ export function LibraryTab() {
     setInfoPanelHeight,
     libraryLayout,
   } = useUIStore();
-  const { selectedItemIds } = useLibraryStore();
+  const { selectedEntryIds } = useLibraryStore();
 
-  // Show info pane only when an item is selected
-  const showInfoPane = selectedItemIds.length > 0;
+  // Show info pane only when an entry is selected
+  const showInfoPane = selectedEntryIds.length > 0;
 
   const totalWidth = typeof window !== "undefined" ? window.innerWidth : 1000;
   const totalHeight = typeof window !== "undefined" ? window.innerHeight : 800;
@@ -31,7 +31,7 @@ export function LibraryTab() {
     return (
       <div className="h-full w-full">
         <ResizablePanelGroup direction="vertical">
-          {/* Item list */}
+          {/* Entry list */}
           <ResizablePanel
             defaultSize={showInfoPane ? 100 - bottomPanePercent : 100}
             minSize={30}
@@ -39,7 +39,7 @@ export function LibraryTab() {
             <MiddlePane />
           </ResizablePanel>
 
-          {/* Bottom pane (details) - shown when item is selected */}
+          {/* Bottom pane (details) - shown when entry is selected */}
           {showInfoPane && (
             <>
               <ResizableHandle className="h-[1px] bg-border hover:bg-primary/50 transition-colors" />
@@ -66,7 +66,7 @@ export function LibraryTab() {
   return (
     <div className="h-full w-full">
       <ResizablePanelGroup direction="horizontal">
-        {/* Item list */}
+        {/* Entry list */}
         <ResizablePanel
           defaultSize={showInfoPane ? 100 - rightPanePercent : 100}
           minSize={40}
@@ -74,7 +74,7 @@ export function LibraryTab() {
           <MiddlePane />
         </ResizablePanel>
 
-        {/* Right pane (details) - shown when item is selected */}
+        {/* Right pane (details) - shown when entry is selected */}
         {showInfoPane && (
           <>
             <ResizableHandle className="w-[1px] bg-border hover:bg-primary/50 transition-colors" />

@@ -1,9 +1,42 @@
 import { FileText, File, FolderOpen, Command, ArrowRight, BookOpen } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/uiStore";
+import { useImport } from "@/hooks/useLibrarySync";
 
 export function WelcomeTab() {
   const { toggleCommandPalette } = useUIStore();
+  const { importFiles, importFolder } = useImport();
+
+  const handleImportFiles = async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+
+      if (selected && Array.isArray(selected) && selected.length > 0) {
+        await importFiles(selected);
+      }
+    } catch (err) {
+      console.error("Import error:", err);
+    }
+  };
+
+  const handleImportFolder = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+
+      if (selected && typeof selected === "string") {
+        await importFolder(selected);
+      }
+    } catch (err) {
+      console.error("Import folder error:", err);
+    }
+  };
 
   return (
     <div className="flex-1 flex items-center justify-center p-8">
@@ -32,9 +65,7 @@ export function WelcomeTab() {
             icon={<File className="h-5 w-5" />}
             title="Import PDFs"
             description="Add PDF documents to your library"
-            onClick={() => {
-              // TODO: Open import dialog
-            }}
+            onClick={handleImportFiles}
           />
 
           <QuickAction
@@ -50,9 +81,7 @@ export function WelcomeTab() {
             icon={<FolderOpen className="h-5 w-5" />}
             title="Import Folder"
             description="Import all PDFs from a folder"
-            onClick={() => {
-              // TODO: Open folder import
-            }}
+            onClick={handleImportFolder}
           />
         </div>
 

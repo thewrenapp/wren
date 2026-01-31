@@ -111,7 +111,7 @@ function CollapsibleSection({
 
 export function LibrarySidebar() {
   const { activeFilter, setActiveFilter } = useUIStore();
-  const { collections, tags, items } = useLibraryStore();
+  const { collections, tags, entries } = useLibraryStore();
   const { tabs, updateTab } = useTabStore();
 
   // Update library tab title when filter changes
@@ -124,11 +124,11 @@ export function LibrarySidebar() {
     }
   };
 
-  // Calculate counts
-  const pdfCount = items.filter((i) => i.type === "pdf").length;
-  const noteCount = items.filter((i) => i.type === "markdown").length;
-  const recentCount = items.filter((i) => {
-    const added = new Date(i.dateAdded);
+  // Calculate counts from entries (new model)
+  const pdfCount = entries.filter((e) => e.hasPdf).length;
+  const noteCount = entries.filter((e) => e.hasNote).length;
+  const recentCount = entries.filter((e) => {
+    const added = new Date(e.dateAdded);
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
     return added > weekAgo;
@@ -142,7 +142,7 @@ export function LibrarySidebar() {
             <SidebarItem
               icon={<Files className="h-4 w-4" />}
               label="All Items"
-              count={items.length}
+              count={entries.length}
               active={activeFilter === "all"}
               onClick={() => handleFilterChange("all")}
             />

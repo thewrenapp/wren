@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Command } from "cmdk";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Search,
   File,
@@ -19,6 +20,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useImport } from "@/hooks/useLibrarySync";
 import { cn } from "@/lib/utils";
 
 type SearchMode = "quick" | "full" | "semantic";
@@ -32,16 +34,18 @@ const searchModeConfig = {
 export function CommandPalette() {
   const { commandPaletteOpen, setCommandPaletteOpen, setSettingsOpen } = useUIStore();
   const { openTab } = useTabStore();
-  const { items } = useLibraryStore();
+  const { entries } = useLibraryStore();
   const { theme, setTheme } = useSettingsStore();
+  const { importFiles, importFolder } = useImport();
 
   const [search, setSearch] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("quick");
 
-  // Filter items based on search
-  const filteredItems = search.trim()
-    ? items.filter((item) =>
-        item.title.toLowerCase().includes(search.toLowerCase())
+  // Filter entries based on search
+  const filteredEntries = search.trim()
+    ? entries.filter((entry) =>
+        entry.title.toLowerCase().includes(search.toLowerCase()) ||
+        (entry.creatorsDisplay?.toLowerCase().includes(search.toLowerCase()) ?? false)
       )
     : [];
 
@@ -53,6 +57,42 @@ export function CommandPalette() {
     },
     [setCommandPaletteOpen]
   );
+
+  const handleImportPdf = async () => {
+    setCommandPaletteOpen(false);
+    setSearch("");
+
+    try {
+      const selected = await open({
+        multiple: true,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+
+      if (selected && Array.isArray(selected) && selected.length > 0) {
+        await importFiles(selected);
+      }
+    } catch (err) {
+      console.error("Import error:", err);
+    }
+  };
+
+  const handleImportFolder = async () => {
+    setCommandPaletteOpen(false);
+    setSearch("");
+
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+
+      if (selected && typeof selected === "string") {
+        await importFolder(selected);
+      }
+    } catch (err) {
+      console.error("Import folder error:", err);
+    }
+  };
 
   // Close on escape
   useEffect(() => {
@@ -88,7 +128,7 @@ export function CommandPalette() {
             <Command.Input
               value={search}
               onValueChange={setSearch}
-              placeholder="Search items, run commands..."
+              placeholder="Search entries, run commands..."
               className="flex-1 text-base bg-transparent outline-none placeholder:text-muted-foreground/60"
               autoFocus
             />
@@ -124,26 +164,26 @@ export function CommandPalette() {
               <Search className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground">No results found</p>
               <p className="text-xs text-muted-foreground/60 mt-1">
-                Try adjusting your search or create a new item
+                Try adjusting your search or import new PDFs
               </p>
             </Command.Empty>
 
             {/* Search results */}
-            {filteredItems.length > 0 && (
+            {filteredEntries.length > 0 && (
               <Command.Group>
                 <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
-                  Items
+                  Entries
                 </div>
-                {filteredItems.slice(0, 10).map((item) => (
+                {filteredEntries.slice(0, 10).map((entry) => (
                   <Command.Item
-                    key={item.id}
-                    value={item.title}
+                    key={entry.id}
+                    value={entry.title}
                     onSelect={() =>
                       handleSelect(() =>
                         openTab({
-                          type: "item",
-                          title: item.title,
-                          itemId: item.id,
+                          type: "entry",
+                          title: entry.title,
+                          entryId: entry.id,
                         })
                       )
                     }
@@ -151,18 +191,18 @@ export function CommandPalette() {
                   >
                     <div className={cn(
                       "flex items-center justify-center h-8 w-8 rounded-lg",
-                      item.type === "pdf" ? "bg-red-500/10" : "bg-primary/10"
+                      entry.hasPdf ? "bg-red-500/10" : "bg-primary/10"
                     )}>
-                      {item.type === "pdf" ? (
+                      {entry.hasPdf ? (
                         <File className="h-4 w-4 text-red-500" />
                       ) : (
                         <FileText className="h-4 w-4 text-primary" />
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium truncate">{item.title}</span>
+                      <span className="block text-sm font-medium truncate">{entry.title}</span>
                       <span className="text-xs text-muted-foreground">
-                        {item.type === "pdf" ? "PDF Document" : "Markdown Note"}
+                        {entry.creatorsDisplay || entry.entryType}
                       </span>
                     </div>
                   </Command.Item>
@@ -178,11 +218,7 @@ export function CommandPalette() {
                     Create
                   </div>
                   <Command.Item
-                    onSelect={() =>
-                      handleSelect(() => {
-                        // TODO: Import PDF
-                      })
-                    }
+                    onSelect={handleImportPdf}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
                     <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
@@ -212,11 +248,7 @@ export function CommandPalette() {
                   </Command.Item>
 
                   <Command.Item
-                    onSelect={() =>
-                      handleSelect(() => {
-                        // TODO: Import folder
-                      })
-                    }
+                    onSelect={handleImportFolder}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
                     <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10">
@@ -241,7 +273,7 @@ export function CommandPalette() {
                     </div>
                     <div className="flex-1">
                       <span className="block text-sm font-medium">New Collection</span>
-                      <span className="text-xs text-muted-foreground">Organize items into a collection</span>
+                      <span className="text-xs text-muted-foreground">Organize entries into a collection</span>
                     </div>
                   </Command.Item>
                 </Command.Group>

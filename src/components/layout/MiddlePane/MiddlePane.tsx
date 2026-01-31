@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from "react";
 import { LayoutGrid, List, Plus, SortAsc, SortDesc, File, FolderOpen } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
@@ -9,11 +10,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useUIStore } from "@/stores/uiStore";
-import { useLibraryStore } from "@/stores/libraryStore";
+import { useLibraryStore, type Attachment } from "@/stores/libraryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useImport } from "@/hooks/useLibrarySync";
-import { ItemListView } from "./ItemListView";
-import { ItemCardView } from "./ItemCardView";
+import { getEntryAttachments } from "@/services/tauri";
+import { EntryTable } from "./EntryTable";
+import { EntryCardView } from "./EntryCardView";
+import { ColumnConfigDropdown } from "./ColumnConfigDropdown";
+import { QuickSearchBar } from "./QuickSearchBar";
 import { cn } from "@/lib/utils";
 
 export function MiddlePane() {
@@ -25,18 +29,71 @@ export function MiddlePane() {
     setSort,
     activeFilter,
   } = useUIStore();
-  const { items, selectedItemIds, selectItem, isLoading } = useLibraryStore();
+  const {
+    entries,
+    selectedEntryIds,
+    selectEntry,
+    expandedEntryIds,
+    toggleEntryExpanded,
+    isLoading,
+    searchQuery,
+    attachmentVersion,
+  } = useLibraryStore();
   const { openTab } = useTabStore();
   const { importFiles, importFolder } = useImport();
 
-  const handleImportFiles = async () => {
-    const selected = await open({
-      multiple: true,
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-    });
+  // State for fetched attachments (keyed by entry ID)
+  const [attachmentsMap, setAttachmentsMap] = useState<Record<string, Attachment[]>>({});
+  const fetchedEntryIdsRef = useRef<Set<string>>(new Set());
 
-    if (selected && Array.isArray(selected) && selected.length > 0) {
-      await importFiles(selected);
+  // Clear attachment cache when version changes (e.g., after adding an attachment)
+  useEffect(() => {
+    if (attachmentVersion > 0) {
+      fetchedEntryIdsRef.current.clear();
+      setAttachmentsMap({});
+    }
+  }, [attachmentVersion]);
+
+  // Fetch attachments when entries are expanded or cache is invalidated
+  useEffect(() => {
+    const fetchAttachments = async () => {
+      for (const entryId of expandedEntryIds) {
+        // Skip if already fetched
+        if (fetchedEntryIdsRef.current.has(entryId)) continue;
+        fetchedEntryIdsRef.current.add(entryId);
+
+        try {
+          const attachments = await getEntryAttachments(Number(entryId));
+          setAttachmentsMap((prev) => ({
+            ...prev,
+            [entryId]: attachments.map((a) => ({
+              ...a,
+              id: String(a.id),
+              entryId: String(a.entryId),
+            })),
+          }));
+        } catch (err) {
+          console.error(`Failed to fetch attachments for entry ${entryId}:`, err);
+          fetchedEntryIdsRef.current.delete(entryId);
+        }
+      }
+    };
+
+    fetchAttachments();
+  }, [expandedEntryIds, attachmentVersion]);
+
+  const handleImportFiles = async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+
+      if (selected && Array.isArray(selected) && selected.length > 0) {
+        await importFiles(selected);
+      }
+    } catch (err) {
+      console.error("Import error:", err);
     }
   };
 
@@ -51,56 +108,99 @@ export function MiddlePane() {
     }
   };
 
-  // Filter items based on active filter
-  const filteredItems = items.filter((item) => {
+  // Filter entries based on active filter and search query
+  const filteredEntries = entries.filter((entry) => {
+    // Apply sidebar filter
+    let matchesFilter = true;
     switch (activeFilter) {
       case "pdfs":
-        return item.type === "pdf";
+        matchesFilter = entry.hasPdf;
+        break;
       case "notes":
-        return item.type === "markdown";
+        matchesFilter = entry.hasNote;
+        break;
       case "recent":
         const weekAgo = new Date();
         weekAgo.setDate(weekAgo.getDate() - 7);
-        return new Date(item.dateAdded) > weekAgo;
+        matchesFilter = new Date(entry.dateAdded) > weekAgo;
+        break;
       case "untagged":
-        return item.tags.length === 0;
-      default:
-        return true;
+        matchesFilter = entry.tags.length === 0;
+        break;
     }
+
+    if (!matchesFilter) return false;
+
+    // Apply search query
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      const matchesSearch =
+        entry.title.toLowerCase().includes(query) ||
+        (entry.creatorsDisplay?.toLowerCase().includes(query) ?? false) ||
+        entry.tags.some((tag) => tag.name.toLowerCase().includes(query)) ||
+        (entry.year?.includes(query) ?? false);
+      return matchesSearch;
+    }
+
+    return true;
   });
 
-  // Sort items
-  const sortedItems = [...filteredItems].sort((a, b) => {
+  // Sort entries
+  const sortedEntries = [...filteredEntries].sort((a, b) => {
     let comparison = 0;
     switch (sortField) {
       case "title":
         comparison = a.title.localeCompare(b.title);
         break;
+      case "creator":
+        comparison = (a.creatorsDisplay || "").localeCompare(b.creatorsDisplay || "");
+        break;
+      case "year":
+        comparison = (a.year || "").localeCompare(b.year || "");
+        break;
       case "dateAdded":
         comparison = new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
         break;
-      case "dateModified":
-        comparison = new Date(a.dateModified).getTime() - new Date(b.dateModified).getTime();
-        break;
+      default:
+        comparison = new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
     }
     return sortDirection === "asc" ? comparison : -comparison;
   });
 
-  const handleItemClick = (itemId: string, event: React.MouseEvent) => {
+  // Entry handlers
+  const handleEntryClick = (entryId: string, event: React.MouseEvent) => {
     if (event.metaKey || event.ctrlKey) {
-      selectItem(itemId, true);
+      selectEntry(entryId, true);
     } else {
-      selectItem(itemId);
+      selectEntry(entryId);
     }
   };
 
-  const handleItemDoubleClick = (itemId: string) => {
-    const item = items.find((i) => i.id === itemId);
-    if (item) {
+  const handleEntryDoubleClick = (entryId: string) => {
+    const entry = entries.find((e) => e.id === entryId);
+    if (entry) {
       openTab({
-        type: "item",
-        title: item.title,
-        itemId: item.id,
+        type: "entry",
+        title: entry.title,
+        entryId: entry.id,
+      });
+    }
+  };
+
+  // Attachment handlers
+  const handleAttachmentClick = (entryId: string, _attachmentId: string) => {
+    selectEntry(entryId);
+  };
+
+  const handleAttachmentDoubleClick = (entryId: string, attachmentId: string) => {
+    const entry = entries.find((e) => e.id === entryId);
+    const attachment = attachmentsMap[entryId]?.find((a) => a.id === attachmentId);
+    if (entry) {
+      openTab({
+        type: "entry",
+        title: attachment?.title || entry.title,
+        entryId: entry.id,
+        attachmentId: attachmentId,
       });
     }
   };
@@ -127,12 +227,15 @@ export function MiddlePane() {
         <div className="flex items-center gap-2">
           <h2 className="font-semibold text-sm">{getFilterTitle()}</h2>
           <span className="text-xs text-muted-foreground">
-            {sortedItems.length} item{sortedItems.length !== 1 ? "s" : ""}
+            {sortedEntries.length} {sortedEntries.length !== 1 ? "entries" : "entry"}
           </span>
         </div>
 
-        <div className="flex items-center gap-1">
-          {/* Sort button */}
+        <div className="flex items-center gap-2">
+          <QuickSearchBar />
+
+          {viewMode === "list" && <ColumnConfigDropdown />}
+
           <Button
             variant="ghost"
             size="icon-sm"
@@ -147,7 +250,6 @@ export function MiddlePane() {
             )}
           </Button>
 
-          {/* View toggle */}
           <div className="flex items-center border rounded-md">
             <Button
               variant="ghost"
@@ -173,7 +275,6 @@ export function MiddlePane() {
             </Button>
           </div>
 
-          {/* Import dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon-sm" className="h-7 w-7" disabled={isLoading}>
@@ -194,17 +295,17 @@ export function MiddlePane() {
         </div>
       </div>
 
-      {/* Items */}
+      {/* Content */}
       <ScrollArea className="flex-1">
         {isLoading ? (
           <div className="flex items-center justify-center h-48 text-muted-foreground">
             <p className="text-sm">Loading...</p>
           </div>
-        ) : sortedItems.length === 0 ? (
+        ) : sortedEntries.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground gap-4">
             <div className="text-center">
-              <p className="text-sm">No items</p>
-              <p className="text-xs">Import PDFs or create notes to get started</p>
+              <p className="text-sm">No entries</p>
+              <p className="text-xs">Import PDFs to get started</p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={handleImportFiles}>
@@ -218,18 +319,23 @@ export function MiddlePane() {
             </div>
           </div>
         ) : viewMode === "list" ? (
-          <ItemListView
-            items={sortedItems}
-            selectedIds={selectedItemIds}
-            onItemClick={handleItemClick}
-            onItemDoubleClick={handleItemDoubleClick}
+          <EntryTable
+            entries={sortedEntries}
+            selectedIds={selectedEntryIds}
+            expandedIds={expandedEntryIds}
+            onEntryClick={handleEntryClick}
+            onEntryDoubleClick={handleEntryDoubleClick}
+            onToggleExpand={toggleEntryExpanded}
+            attachmentsMap={attachmentsMap}
+            onAttachmentClick={handleAttachmentClick}
+            onAttachmentDoubleClick={handleAttachmentDoubleClick}
           />
         ) : (
-          <ItemCardView
-            items={sortedItems}
-            selectedIds={selectedItemIds}
-            onItemClick={handleItemClick}
-            onItemDoubleClick={handleItemDoubleClick}
+          <EntryCardView
+            entries={sortedEntries}
+            selectedIds={selectedEntryIds}
+            onEntryClick={handleEntryClick}
+            onEntryDoubleClick={handleEntryDoubleClick}
           />
         )}
       </ScrollArea>
