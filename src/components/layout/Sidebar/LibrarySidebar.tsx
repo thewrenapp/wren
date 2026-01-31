@@ -7,13 +7,32 @@ import {
   ChevronDown,
   ChevronRight,
   Plus,
+  Trash2,
+  FilePlus,
+  Download,
+  FolderPlus,
 } from "lucide-react";
 import { useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useUIStore } from "@/stores/uiStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useTabStore } from "@/stores/tabStore";
+import { emptyTrash } from "@/services/tauri";
 import { cn } from "@/lib/utils";
 
 // Map filter to display title
@@ -27,6 +46,8 @@ function getFilterTitle(filter: string): string {
       return "Recently Added";
     case "untagged":
       return "Untagged";
+    case "trash":
+      return "Trash";
     default:
       return "Library";
   }
@@ -38,12 +59,14 @@ interface SidebarItemProps {
   count?: number;
   active?: boolean;
   onClick?: () => void;
+  allowContextMenu?: boolean;
 }
 
-function SidebarItem({ icon, label, count, active, onClick }: SidebarItemProps) {
+function SidebarItem({ icon, label, count, active, onClick, allowContextMenu = false }: SidebarItemProps) {
   return (
     <button
       onClick={onClick}
+      onContextMenu={allowContextMenu ? undefined : (e) => e.preventDefault()}
       className={cn(
         "flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-sm transition-colors",
         "hover:bg-sidebar-accent",
@@ -66,6 +89,7 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
   defaultOpen?: boolean;
   onAdd?: () => void;
+  contextMenuContent?: React.ReactNode;
 }
 
 function CollapsibleSection({
@@ -73,37 +97,53 @@ function CollapsibleSection({
   children,
   defaultOpen = true,
   onAdd,
+  contextMenuContent,
 }: CollapsibleSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
+  const headerContent = (
+    <div className="flex items-center gap-1 px-2 py-1 group" onContextMenu={contextMenuContent ? undefined : (e) => e.preventDefault()}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-1 flex-1 text-xs font-semibold uppercase text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {isOpen ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+        {title}
+      </button>
+      {onAdd && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={(e) => {
+            e.stopPropagation();
+            onAdd();
+          }}
+          className="h-5 w-5 opacity-0 group-hover:opacity-100 hover:opacity-100"
+        >
+          <Plus className="h-3 w-3" />
+        </Button>
+      )}
+    </div>
+  );
+
   return (
     <div className="mb-2">
-      <div className="flex items-center gap-1 px-2 py-1 group">
-        <button
-          onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-1 flex-1 text-xs font-semibold uppercase text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {isOpen ? (
-            <ChevronDown className="h-3 w-3" />
-          ) : (
-            <ChevronRight className="h-3 w-3" />
-          )}
-          {title}
-        </button>
-        {onAdd && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={(e) => {
-              e.stopPropagation();
-              onAdd();
-            }}
-            className="h-5 w-5 opacity-0 group-hover:opacity-100 hover:opacity-100"
-          >
-            <Plus className="h-3 w-3" />
-          </Button>
-        )}
-      </div>
+      {contextMenuContent ? (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            {headerContent}
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-48">
+            {contextMenuContent}
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : (
+        headerContent
+      )}
       {isOpen && <div className="space-y-0.5 px-1">{children}</div>}
     </div>
   );
@@ -111,8 +151,9 @@ function CollapsibleSection({
 
 export function LibrarySidebar() {
   const { activeFilter, setActiveFilter } = useUIStore();
-  const { collections, tags, entries } = useLibraryStore();
+  const { collections, tags, entries, trashCount, setTrashCount, setTrashedEntries } = useLibraryStore();
   const { tabs, updateTab } = useTabStore();
+  const [showEmptyTrashDialog, setShowEmptyTrashDialog] = useState(false);
 
   // Update library tab title when filter changes
   const handleFilterChange = (filter: typeof activeFilter) => {
@@ -121,6 +162,17 @@ export function LibrarySidebar() {
     const libraryTab = tabs.find((t) => t.type === "library");
     if (libraryTab) {
       updateTab(libraryTab.id, { title: getFilterTitle(filter) });
+    }
+  };
+
+  const handleEmptyTrash = async () => {
+    setShowEmptyTrashDialog(false);
+    try {
+      await emptyTrash();
+      setTrashedEntries([]);
+      setTrashCount(0);
+    } catch (err) {
+      console.error("Failed to empty trash:", err);
     }
   };
 
@@ -138,7 +190,21 @@ export function LibrarySidebar() {
     <div className="flex flex-col h-full">
       <ScrollArea className="flex-1 px-2 pt-2">
           {/* Library section */}
-          <CollapsibleSection title="Library">
+          <CollapsibleSection
+            title="Library"
+            contextMenuContent={
+              <>
+                <ContextMenuItem disabled>
+                  <FilePlus className="h-4 w-4 mr-2" />
+                  Create New Reference
+                </ContextMenuItem>
+                <ContextMenuItem disabled>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export...
+                </ContextMenuItem>
+              </>
+            }
+          >
             <SidebarItem
               icon={<Files className="h-4 w-4" />}
               label="All Items"
@@ -160,6 +226,30 @@ export function LibrarySidebar() {
               active={activeFilter === "notes"}
               onClick={() => handleFilterChange("notes")}
             />
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <div>
+                  <SidebarItem
+                    icon={<Trash2 className="h-4 w-4 text-pink-600" />}
+                    label="Trash"
+                    count={trashCount}
+                    active={activeFilter === "trash"}
+                    onClick={() => handleFilterChange("trash")}
+                    allowContextMenu
+                  />
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="w-48">
+                <ContextMenuItem
+                  onClick={() => setShowEmptyTrashDialog(true)}
+                  disabled={trashCount === 0}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Empty Trash
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           </CollapsibleSection>
 
           {/* Smart Filters */}
@@ -185,6 +275,12 @@ export function LibrarySidebar() {
             onAdd={() => {
               // TODO: Create collection dialog
             }}
+            contextMenuContent={
+              <ContextMenuItem disabled>
+                <FolderPlus className="h-4 w-4 mr-2" />
+                New Collection
+              </ContextMenuItem>
+            }
           >
             {collections.length === 0 ? (
               <p className="text-xs text-muted-foreground px-2 py-2">
@@ -192,20 +288,32 @@ export function LibrarySidebar() {
               </p>
             ) : (
               collections.map((collection) => (
-                <SidebarItem
-                  key={collection.id}
-                  icon={
-                    <FolderOpen
-                      className="h-4 w-4"
-                      style={{ color: collection.color }}
-                    />
-                  }
-                  label={collection.name}
-                  count={collection.itemCount}
-                  onClick={() => {
-                    // TODO: Filter by collection
-                  }}
-                />
+                <ContextMenu key={collection.id}>
+                  <ContextMenuTrigger asChild>
+                    <div>
+                      <SidebarItem
+                        icon={
+                          <FolderOpen
+                            className="h-4 w-4"
+                            style={{ color: collection.color }}
+                          />
+                        }
+                        label={collection.name}
+                        count={collection.itemCount}
+                        onClick={() => {
+                          // TODO: Filter by collection
+                        }}
+                        allowContextMenu
+                      />
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-48">
+                    <ContextMenuItem disabled>
+                      <Download className="h-4 w-4 mr-2" />
+                      Export...
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               ))
             )}
           </CollapsibleSection>
@@ -236,6 +344,27 @@ export function LibrarySidebar() {
             )}
           </CollapsibleSection>
         </ScrollArea>
+
+        {/* Empty Trash Confirmation Dialog */}
+        <Dialog open={showEmptyTrashDialog} onOpenChange={setShowEmptyTrashDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Empty Trash?</DialogTitle>
+              <DialogDescription>
+                This will permanently delete {trashCount} {trashCount === 1 ? "item" : "items"} and their files.
+                This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowEmptyTrashDialog(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={handleEmptyTrash}>
+                Empty Trash
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
   );
 }

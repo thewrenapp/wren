@@ -50,6 +50,7 @@ export interface EntrySummary {
   creatorsDisplay: string;
   year?: string;
   dateAdded: string;
+  dateModified?: string;
   tags: Tag[];
   attachmentCount: number;
   hasPdf: boolean;
@@ -141,6 +142,10 @@ interface LibraryState {
   // Attachment cache invalidation
   attachmentVersion: number;
 
+  // Trash
+  trashCount: number;
+  trashedEntries: EntrySummary[];
+
   // Entry Actions
   setEntries: (entries: EntrySummary[]) => void;
   addEntry: (entry: EntrySummary) => void;
@@ -182,6 +187,10 @@ interface LibraryState {
 
   // Attachment Actions
   invalidateAttachments: () => void;
+
+  // Trash Actions
+  setTrashCount: (count: number) => void;
+  setTrashedEntries: (entries: EntrySummary[]) => void;
 }
 
 export const useLibraryStore = create<LibraryState>()((set) => ({
@@ -201,6 +210,8 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   isLoading: false,
   error: null,
   attachmentVersion: 0,
+  trashCount: 0,
+  trashedEntries: [],
 
   // Entry actions
   setEntries: (entries) => set({ entries }),
@@ -339,4 +350,8 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   // Attachment cache invalidation
   invalidateAttachments: () =>
     set((state) => ({ attachmentVersion: state.attachmentVersion + 1 })),
+
+  // Trash actions
+  setTrashCount: (count) => set({ trashCount: count }),
+  setTrashedEntries: (entries) => set({ trashedEntries: entries }),
 }));

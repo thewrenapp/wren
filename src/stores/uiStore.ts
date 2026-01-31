@@ -31,17 +31,17 @@ export interface ColumnConfig {
 
 // Default column configuration
 export const DEFAULT_COLUMNS: ColumnConfig[] = [
-  { id: "title", label: "Title", visible: true, width: 300, minWidth: 150 },
-  { id: "creator", label: "Creator", visible: true, width: 150, minWidth: 80 },
-  { id: "year", label: "Year", visible: true, width: 60, minWidth: 50 },
-  { id: "entryType", label: "Type", visible: false, width: 100, minWidth: 60 },
-  { id: "dateAdded", label: "Date Added", visible: false, width: 100, minWidth: 80 },
-  { id: "dateModified", label: "Modified", visible: false, width: 100, minWidth: 80 },
-  { id: "publication", label: "Publication", visible: false, width: 150, minWidth: 80 },
-  { id: "publisher", label: "Publisher", visible: false, width: 120, minWidth: 80 },
-  { id: "attachments", label: "Attachments", visible: true, width: 80, minWidth: 60 },
-  { id: "tags", label: "Tags", visible: false, width: 150, minWidth: 80 },
-  { id: "doi", label: "DOI", visible: false, width: 150, minWidth: 80 },
+  { id: "title", label: "Title", visible: true, width: 280, minWidth: 120 },
+  { id: "creator", label: "Creator", visible: true, width: 140, minWidth: 80 },
+  { id: "year", label: "Year", visible: true, width: 50, minWidth: 40 },
+  { id: "entryType", label: "Type", visible: false, width: 90, minWidth: 60 },
+  { id: "dateAdded", label: "Added", visible: true, width: 80, minWidth: 60 },
+  { id: "dateModified", label: "Modified", visible: false, width: 80, minWidth: 60 },
+  { id: "publication", label: "Publication", visible: false, width: 100, minWidth: 80 },
+  { id: "publisher", label: "Publisher", visible: false, width: 100, minWidth: 80 },
+  { id: "attachments", label: "Files", visible: true, width: 55, minWidth: 40 },
+  { id: "tags", label: "Tags", visible: false, width: 100, minWidth: 80 },
+  { id: "doi", label: "DOI", visible: false, width: 100, minWidth: 80 },
 ];
 
 interface UIState {
@@ -73,7 +73,7 @@ interface UIState {
   settingsOpen: boolean;
 
   // Active filters
-  activeFilter: "all" | "pdfs" | "notes" | "recent" | "untagged";
+  activeFilter: "all" | "pdfs" | "notes" | "recent" | "untagged" | "trash";
 
   // Actions
   setSidebarWidth: (width: number) => void;

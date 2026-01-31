@@ -14,6 +14,7 @@ export function useLibrarySync() {
     setEntries,
     setCollections,
     setTags,
+    setTrashCount,
     setLoading,
     setError,
     activeCollectionId,
@@ -28,14 +29,15 @@ export function useLibrarySync() {
     console.log("Loading library...");
 
     try {
-      // Load entries, collections, and tags in parallel
-      const [entries, collections, tags] = await Promise.all([
+      // Load entries, collections, tags, and trash count in parallel
+      const [entries, collections, tags, trashCount] = await Promise.all([
         tauri.getEntries({
           collectionId: activeCollectionId ? Number(activeCollectionId) : undefined,
           tagId: activeTagId ? Number(activeTagId) : undefined,
         }),
         tauri.getCollections(),
         tauri.getTags(),
+        tauri.getTrashCount(),
       ]);
 
       console.log("Loaded entries:", entries);
@@ -61,6 +63,7 @@ export function useLibrarySync() {
       setEntries(mappedEntries);
       setCollections(mappedCollections);
       setTags(mappedTags);
+      setTrashCount(trashCount);
     } catch (err) {
       console.error("Failed to load library:", err);
       setError(err instanceof Error ? err.message : "Failed to load library");
@@ -71,6 +74,7 @@ export function useLibrarySync() {
     setEntries,
     setCollections,
     setTags,
+    setTrashCount,
     setLoading,
     setError,
     activeCollectionId,

@@ -353,6 +353,8 @@ pub struct EntrySummary {
     pub year: Option<String>,
     #[serde(rename = "dateAdded")]
     pub date_added: String,
+    #[serde(rename = "dateModified")]
+    pub date_modified: Option<String>,
     pub tags: Vec<Tag>,
     #[serde(rename = "attachmentCount")]
     pub attachment_count: i64,

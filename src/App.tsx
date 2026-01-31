@@ -36,6 +36,15 @@ function App() {
     }
   }, [theme]);
 
+  // Disable native context menu globally
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+    document.addEventListener("contextmenu", handleContextMenu);
+    return () => document.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
+
   return <AppLayout />;
 }
 

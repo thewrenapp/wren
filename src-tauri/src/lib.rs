@@ -170,6 +170,12 @@ pub fn run() {
             commands::entries::get_attachment_types,
             commands::entries::show_entry_in_finder,
             commands::entries::add_pdf_attachment,
+            // Trash
+            commands::entries::get_trashed_entries,
+            commands::entries::get_trash_count,
+            commands::entries::restore_entry,
+            commands::entries::permanent_delete_entry,
+            commands::entries::empty_trash,
             // Collections
             commands::collections::get_collections,
             commands::collections::create_collection,

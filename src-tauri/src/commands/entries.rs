@@ -44,6 +44,7 @@ struct EntrySummaryRow {
     creators: Option<String>,
     publication_date: Option<String>,
     date_added: String,
+    date_modified: Option<String>,
     attachment_count: i64,
     has_pdf: bool,
     has_note: bool,
@@ -89,7 +90,7 @@ pub async fn get_entries(
     let base_query = r#"
         SELECT
             e.id, e.key, et.name as entry_type, e.title, e.creators,
-            e.publication_date, e.date_added,
+            e.publication_date, e.date_added, e.date_modified,
             (SELECT COUNT(*) FROM attachments WHERE entry_id = e.id) as attachment_count,
             EXISTS(SELECT 1 FROM attachments a
                    JOIN attachment_types at ON a.attachment_type_id = at.id
@@ -178,6 +179,7 @@ pub async fn get_entries(
             creators_display,
             year,
             date_added: entry.date_added,
+            date_modified: entry.date_modified,
             tags,
             attachment_count: entry.attachment_count,
             has_pdf: entry.has_pdf,
@@ -518,6 +520,187 @@ pub async fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), Str
     Ok(())
 }
 
+/// Get trashed entries
+#[tauri::command]
+pub async fn get_trashed_entries(state: State<'_, AppState>) -> Result<Vec<EntrySummary>, String> {
+    let entries: Vec<EntrySummaryRow> = sqlx::query_as::<_, EntrySummaryRow>(
+        r#"
+        SELECT
+            e.id, e.key, et.name as entry_type, e.title, e.creators,
+            e.publication_date, e.date_added, e.date_modified,
+            (SELECT COUNT(*) FROM attachments WHERE entry_id = e.id) as attachment_count,
+            EXISTS(SELECT 1 FROM attachments a
+                   JOIN attachment_types at ON a.attachment_type_id = at.id
+                   WHERE a.entry_id = e.id AND at.name = 'pdf') as has_pdf,
+            EXISTS(SELECT 1 FROM attachments a
+                   JOIN attachment_types at ON a.attachment_type_id = at.id
+                   WHERE a.entry_id = e.id AND at.name = 'note') as has_note,
+            (SELECT a.thumbnail_path FROM attachments a
+             JOIN attachment_types at ON a.attachment_type_id = at.id
+             WHERE a.entry_id = e.id AND at.name = 'pdf'
+             LIMIT 1) as thumbnail_path
+        FROM entries e
+        JOIN entry_types et ON e.entry_type_id = et.id
+        WHERE e.is_deleted = 1
+        ORDER BY e.date_modified DESC
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for entry in entries {
+        let tags = get_entry_tags(&state, entry.id).await?;
+        let creators = parse_creators(&entry.creators);
+        let creators_display = format_creators_display(&creators);
+        let year = entry
+            .publication_date
+            .as_ref()
+            .map(|d| d.split('-').next().unwrap_or(d).to_string());
+
+        result.push(EntrySummary {
+            id: entry.id,
+            key: entry.key,
+            entry_type: entry.entry_type,
+            title: entry.title,
+            creators_display,
+            year,
+            date_added: entry.date_added,
+            date_modified: entry.date_modified,
+            tags,
+            attachment_count: entry.attachment_count,
+            has_pdf: entry.has_pdf,
+            has_note: entry.has_note,
+            thumbnail_path: entry.thumbnail_path,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Get trash count
+#[tauri::command]
+pub async fn get_trash_count(state: State<'_, AppState>) -> Result<i64, String> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entries WHERE is_deleted = 1")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(count)
+}
+
+/// Restore an entry from trash
+#[tauri::command]
+pub async fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    sqlx::query("UPDATE entries SET is_deleted = 0, date_modified = datetime('now') WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Permanently delete entry (removes from DB AND files from disk)
+#[tauri::command]
+pub async fn permanent_delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    use std::fs;
+
+    // Get entry key for folder path
+    let entry_key: Option<String> = sqlx::query_scalar("SELECT key FROM entries WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let entry_key = entry_key.ok_or("Entry not found")?;
+
+    // Get all attachment file paths before deletion
+    let file_paths: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT file_path FROM attachments WHERE entry_id = ?")
+            .bind(id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    // Delete entry from DB (CASCADE will delete attachments, annotations, tags, etc.)
+    sqlx::query("DELETE FROM entries WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Delete individual files from disk
+    for path in file_paths.into_iter().flatten() {
+        if let Err(e) = fs::remove_file(&path) {
+            tracing::warn!("Failed to delete file {}: {}", path, e);
+        }
+    }
+
+    // Delete entry folder (for PDFs: ~/Etal/files/pdfs/{entry_key}/)
+    let library_path = state.library_path.read().await;
+    let pdf_folder = library_path.join("files").join("pdfs").join(&entry_key);
+    if pdf_folder.exists() {
+        if let Err(e) = fs::remove_dir_all(&pdf_folder) {
+            tracing::warn!("Failed to delete folder {:?}: {}", pdf_folder, e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Empty trash - permanently delete all trashed entries
+#[tauri::command]
+pub async fn empty_trash(state: State<'_, AppState>) -> Result<i64, String> {
+    use std::fs;
+
+    // Get all trashed entry IDs and keys
+    let trashed: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, key FROM entries WHERE is_deleted = 1",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let count = trashed.len() as i64;
+
+    for (id, entry_key) in trashed {
+        // Get file paths for this entry
+        let file_paths: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT file_path FROM attachments WHERE entry_id = ?")
+                .bind(id)
+                .fetch_all(&state.db)
+                .await
+                .map_err(|e| e.to_string())?;
+
+        // Delete entry from DB
+        sqlx::query("DELETE FROM entries WHERE id = ?")
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Delete files
+        for path in file_paths.into_iter().flatten() {
+            if let Err(e) = fs::remove_file(&path) {
+                tracing::warn!("Failed to delete file {}: {}", path, e);
+            }
+        }
+
+        // Delete entry folder
+        let library_path = state.library_path.read().await;
+        let pdf_folder = library_path.join("files").join("pdfs").join(&entry_key);
+        if pdf_folder.exists() {
+            if let Err(e) = fs::remove_dir_all(&pdf_folder) {
+                tracing::warn!("Failed to delete folder {:?}: {}", pdf_folder, e);
+            }
+        }
+    }
+
+    Ok(count)
+}
+
 /// Get attachments for an entry
 #[tauri::command]
 pub async fn get_entry_attachments(
@@ -652,14 +835,32 @@ pub async fn create_attachment(
     get_attachment(state, attachment_id).await
 }
 
-/// Delete an attachment
+/// Delete an attachment (DB record + file from disk)
 #[tauri::command]
 pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    use std::fs;
+
+    // Get file path before deletion
+    let file_path: Option<String> =
+        sqlx::query_scalar("SELECT file_path FROM attachments WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    // Delete from DB
     sqlx::query("DELETE FROM attachments WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Delete file from disk if it exists
+    if let Some(path) = file_path {
+        if let Err(e) = fs::remove_file(&path) {
+            tracing::warn!("Failed to delete attachment file {}: {}", path, e);
+        }
+    }
 
     Ok(())
 }

@@ -102,6 +102,7 @@ export interface EntrySummary {
   creatorsDisplay: string;
   year?: string;
   dateAdded: string;
+  dateModified?: string;
   tags: Tag[];
   attachmentCount: number;
   hasPdf: boolean;
@@ -214,6 +215,30 @@ export async function updateEntry(
 
 export async function deleteEntry(id: number): Promise<void> {
   return invoke("delete_entry", { id });
+}
+
+// =====================================================
+// Trash Commands
+// =====================================================
+
+export async function getTrashedEntries(): Promise<EntrySummary[]> {
+  return invoke("get_trashed_entries");
+}
+
+export async function getTrashCount(): Promise<number> {
+  return invoke("get_trash_count");
+}
+
+export async function restoreEntry(id: number): Promise<void> {
+  return invoke("restore_entry", { id });
+}
+
+export async function permanentDeleteEntry(id: number): Promise<void> {
+  return invoke("permanent_delete_entry", { id });
+}
+
+export async function emptyTrash(): Promise<number> {
+  return invoke("empty_trash");
 }
 
 // =====================================================
