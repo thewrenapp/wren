@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { LayoutGrid, List, Plus, SortAsc, SortDesc, File, FolderOpen, RotateCcw, Trash2 } from "lucide-react";
+import { LayoutGrid, List, Plus, SortAsc, SortDesc, File, FolderOpen, RotateCcw, Trash2, Check } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openInBrowser } from "@tauri-apps/plugin-shell";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,11 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import {
   Dialog,
@@ -18,7 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIStore, type SortField } from "@/stores/uiStore";
 import { useLibraryStore, type Attachment } from "@/stores/libraryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useImport, useLibrarySync } from "@/hooks/useLibrarySync";
@@ -36,6 +41,9 @@ export function MiddlePane() {
     sortField,
     sortDirection,
     setSort,
+    secondarySortField,
+    secondarySortDirection,
+    setSecondarySort,
     activeFilter,
   } = useUIStore();
   const {
@@ -221,26 +229,44 @@ export function MiddlePane() {
     return true;
   });
 
-  // Sort entries
-  const sortedEntries = [...filteredEntries].sort((a, b) => {
-    let comparison = 0;
-    switch (sortField) {
+  // Helper function to compare by a specific field
+  const compareByField = (a: typeof filteredEntries[0], b: typeof filteredEntries[0], field: string): number => {
+    switch (field) {
       case "title":
-        comparison = a.title.localeCompare(b.title);
-        break;
+        return a.title.localeCompare(b.title);
       case "creator":
-        comparison = (a.creatorsDisplay || "").localeCompare(b.creatorsDisplay || "");
-        break;
+        return (a.creatorsDisplay || "").localeCompare(b.creatorsDisplay || "");
       case "year":
-        comparison = (a.year || "").localeCompare(b.year || "");
-        break;
+        // Numeric sort - treat empty/null as 0 so they sort to beginning
+        const yearA = a.year ? parseInt(a.year, 10) : 0;
+        const yearB = b.year ? parseInt(b.year, 10) : 0;
+        return yearA - yearB;
       case "dateAdded":
-        comparison = new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
-        break;
+        return new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
+      case "dateModified":
+        const modA = a.dateModified ? new Date(a.dateModified).getTime() : 0;
+        const modB = b.dateModified ? new Date(b.dateModified).getTime() : 0;
+        return modA - modB;
+      case "entryType":
+        return a.entryType.localeCompare(b.entryType);
       default:
-        comparison = new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
+        return new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
     }
-    return sortDirection === "asc" ? comparison : -comparison;
+  };
+
+  // Sort entries with primary and optional secondary sort
+  const sortedEntries = [...filteredEntries].sort((a, b) => {
+    // Primary sort
+    let comparison = compareByField(a, b, sortField);
+    comparison = sortDirection === "asc" ? comparison : -comparison;
+
+    // Secondary sort (if primary values are equal and secondary sort is configured)
+    if (comparison === 0 && secondarySortField) {
+      let secondaryComparison = compareByField(a, b, secondarySortField);
+      comparison = secondarySortDirection === "asc" ? secondaryComparison : -secondaryComparison;
+    }
+
+    return comparison;
   });
 
   // Entry handlers
@@ -424,19 +450,97 @@ export function MiddlePane() {
 
           {viewMode === "list" && <ColumnConfigDropdown />}
 
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setSort(sortField)}
-            className="h-7 w-7"
-            title={`Sort ${sortDirection === "asc" ? "descending" : "ascending"}`}
-          >
-            {sortDirection === "asc" ? (
-              <SortAsc className="h-4 w-4" />
-            ) : (
-              <SortDesc className="h-4 w-4" />
-            )}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-7 w-7"
+                title="Sort options"
+              >
+                {sortDirection === "asc" ? (
+                  <SortAsc className="h-4 w-4" />
+                ) : (
+                  <SortDesc className="h-4 w-4" />
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
+                Sort by
+              </DropdownMenuLabel>
+              {(["title", "creator", "year", "dateAdded", "dateModified", "entryType"] as SortField[]).map((field) => (
+                <DropdownMenuItem
+                  key={field}
+                  onClick={() => setSort(field)}
+                  className="flex items-center justify-between"
+                >
+                  <span>
+                    {field === "title" && "Title"}
+                    {field === "creator" && "Creator"}
+                    {field === "year" && "Year"}
+                    {field === "dateAdded" && "Date Added"}
+                    {field === "dateModified" && "Date Modified"}
+                    {field === "entryType" && "Type"}
+                  </span>
+                  {sortField === field && <Check className="h-4 w-4" />}
+                </DropdownMenuItem>
+              ))}
+
+              <DropdownMenuSeparator />
+
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <span className="text-muted-foreground">Then by</span>
+                  {secondarySortField && (
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      ({secondarySortField === "title" && "Title"}
+                      {secondarySortField === "creator" && "Creator"}
+                      {secondarySortField === "year" && "Year"}
+                      {secondarySortField === "dateAdded" && "Added"}
+                      {secondarySortField === "dateModified" && "Modified"}
+                      {secondarySortField === "entryType" && "Type"})
+                    </span>
+                  )}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-40">
+                  <DropdownMenuItem
+                    onClick={() => setSecondarySort(null)}
+                    className="flex items-center justify-between"
+                  >
+                    <span className="text-muted-foreground">None</span>
+                    {secondarySortField === null && <Check className="h-4 w-4" />}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  {(["title", "creator", "year", "dateAdded", "dateModified", "entryType"] as SortField[])
+                    .filter((field) => field !== sortField)
+                    .map((field) => (
+                      <DropdownMenuItem
+                        key={field}
+                        onClick={() => setSecondarySort(field)}
+                        className="flex items-center justify-between"
+                      >
+                        <span>
+                          {field === "title" && "Title"}
+                          {field === "creator" && "Creator"}
+                          {field === "year" && "Year"}
+                          {field === "dateAdded" && "Date Added"}
+                          {field === "dateModified" && "Date Modified"}
+                          {field === "entryType" && "Type"}
+                        </span>
+                        {secondarySortField === field && <Check className="h-4 w-4" />}
+                      </DropdownMenuItem>
+                    ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+
+              <DropdownMenuSeparator />
+
+              <DropdownMenuItem onClick={() => setSort(sortField)}>
+                {sortDirection === "asc" ? "Sort Descending" : "Sort Ascending"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <div className="flex items-center border rounded-md">
             <Button
@@ -526,6 +630,9 @@ export function MiddlePane() {
             entries={sortedEntries}
             selectedIds={selectedEntryIds}
             expandedIds={expandedEntryIds}
+            sortField={sortField}
+            sortDirection={sortDirection}
+            onSort={setSort}
             onEntryClick={handleEntryClick}
             onEntryDoubleClick={handleEntryDoubleClick}
             onToggleExpand={toggleEntryExpanded}

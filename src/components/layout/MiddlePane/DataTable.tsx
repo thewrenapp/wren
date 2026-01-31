@@ -1,12 +1,14 @@
 import { Fragment } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { SortField, SortDirection } from "@/stores/uiStore";
 
 export interface Column<TData> {
   id: string;
   header: string;
   width: number;
   cell: (row: TData) => React.ReactNode;
+  sortable?: boolean;
 }
 
 interface DataTableProps<TData> {
@@ -14,6 +16,9 @@ interface DataTableProps<TData> {
   data: TData[];
   selectedIds?: string[];
   expandedIds?: string[];
+  sortField?: SortField;
+  sortDirection?: SortDirection;
+  onSort?: (field: SortField) => void;
   onRowClick?: (row: TData, event: React.MouseEvent) => void;
   onRowDoubleClick?: (row: TData) => void;
   onRowContextMenu?: (row: TData, event: React.MouseEvent) => void;
@@ -28,6 +33,9 @@ export function DataTable<TData>({
   data,
   selectedIds = [],
   expandedIds = [],
+  sortField,
+  sortDirection,
+  onSort,
   onRowClick,
   onRowDoubleClick,
   onRowContextMenu,
@@ -51,14 +59,32 @@ export function DataTable<TData>({
         <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm border-b">
           <tr>
             {onToggleExpand && <th className="w-8 px-2 h-8" />}
-            {columns.map((column) => (
-              <th
-                key={column.id}
-                className="h-8 px-2 text-left text-xs font-medium text-muted-foreground truncate"
-              >
-                {column.header}
-              </th>
-            ))}
+            {columns.map((column) => {
+              const isSorted = sortField === column.id;
+              const canSort = column.sortable !== false && onSort;
+
+              return (
+                <th
+                  key={column.id}
+                  className={cn(
+                    "h-8 px-2 text-left text-xs font-medium text-muted-foreground truncate",
+                    canSort && "cursor-pointer hover:text-foreground select-none"
+                  )}
+                  onClick={() => canSort && onSort(column.id as SortField)}
+                >
+                  <div className="flex items-center gap-1">
+                    <span className="truncate">{column.header}</span>
+                    {isSorted && (
+                      sortDirection === "asc" ? (
+                        <ArrowUp className="h-3 w-3 flex-shrink-0" />
+                      ) : (
+                        <ArrowDown className="h-3 w-3 flex-shrink-0" />
+                      )
+                    )}
+                  </div>
+                </th>
+              );
+            })}
           </tr>
         </thead>
 

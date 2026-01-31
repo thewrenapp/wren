@@ -30,7 +30,7 @@ import {
   type ShapeType,
 } from "react-pdf-highlighter-plus";
 
-import { PDFToolbar } from "./PDFToolbar";
+import { PDFToolbar, type SearchOptions } from "./PDFToolbar";
 import { HighlightPopup } from "./HighlightPopup";
 import {
   getAnnotations,
@@ -225,6 +225,11 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
   const [shapeColor, setShapeColor] = useState("#000000");
   const [darkMode, setDarkMode] = useState(false);
 
+  // Search state
+  const [searchMatchCount, setSearchMatchCount] = useState(0);
+  const [searchCurrentMatch, setSearchCurrentMatch] = useState(0);
+  const [viewerReady, setViewerReady] = useState(false);
+
   // Get panel states from global store
   const {
     infoPaneOpen,
@@ -235,7 +240,6 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
   } = useUIStore();
 
   const pdfHighlighterUtilsRef = useRef<PdfHighlighterUtils | null>(null);
-  const [, forceUpdate] = useState({});
   const hasInitializedUtilsRef = useRef(false);
 
   // Track dark mode from document
@@ -259,6 +263,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
   // Reset utils initialization flag when URL changes
   useEffect(() => {
     hasInitializedUtilsRef.current = false;
+    setViewerReady(false);
   }, [pdfUrl]);
 
   // Helper to apply scale to viewer
@@ -303,6 +308,36 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
       eventBus.off("scalechanging", handleScaleChange);
     };
   }, [pdfHighlighterUtilsRef.current]);
+
+  // Set up search result event listeners when viewer is ready
+  useEffect(() => {
+    if (!viewerReady || !pdfHighlighterUtilsRef.current) return;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = pdfHighlighterUtilsRef.current.getEventBus() as any;
+    if (!eventBus) return;
+
+    // Listen for find results
+    const handleUpdateFindMatchesCount = (evt: { matchesCount: { current: number; total: number } }) => {
+      setSearchMatchCount(evt.matchesCount.total);
+      setSearchCurrentMatch(evt.matchesCount.current);
+    };
+
+    const handleUpdateFindControlState = (evt: { matchesCount?: { current: number; total: number } }) => {
+      if (evt.matchesCount) {
+        setSearchMatchCount(evt.matchesCount.total);
+        setSearchCurrentMatch(evt.matchesCount.current);
+      }
+    };
+
+    eventBus.on("updatefindmatchescount", handleUpdateFindMatchesCount);
+    eventBus.on("updatefindcontrolstate", handleUpdateFindControlState);
+
+    return () => {
+      eventBus.off("updatefindmatchescount", handleUpdateFindMatchesCount);
+      eventBus.off("updatefindcontrolstate", handleUpdateFindControlState);
+    };
+  }, [viewerReady]);
 
   // Convert file path to Tauri asset URL
   useEffect(() => {
@@ -642,6 +677,116 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
     if (currentPage > 1) goToPage(currentPage - 1);
   }, [currentPage, goToPage]);
 
+  // Store current search state for next/prev navigation
+  const searchStateRef = useRef<{ query: string; options: SearchOptions }>({
+    query: "",
+    options: { highlightAll: true, matchCase: false, wholeWords: false },
+  });
+
+  // Search functions using PDF.js findController (provided by react-pdf-highlighter-plus)
+  const handleSearch = useCallback((query: string, options: SearchOptions) => {
+    const findController = pdfHighlighterUtilsRef.current?.getFindController();
+    if (!findController) {
+      console.warn("FindController not initialized yet");
+      return;
+    }
+
+    // Store search state for next/prev navigation
+    searchStateRef.current = { query, options };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = pdfHighlighterUtilsRef.current?.getEventBus() as any;
+    if (!eventBus) return;
+
+    // Dispatch find event with options
+    eventBus.dispatch("find", {
+      source: window,
+      type: "find",
+      query,
+      phraseSearch: true,
+      caseSensitive: options.matchCase,
+      entireWord: options.wholeWords,
+      highlightAll: options.highlightAll,
+      findPrevious: false,
+    });
+  }, []);
+
+  const handleSearchNext = useCallback(() => {
+    const findController = pdfHighlighterUtilsRef.current?.getFindController();
+    if (!findController) return;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = pdfHighlighterUtilsRef.current?.getEventBus() as any;
+    if (!eventBus) return;
+
+    const { query, options } = searchStateRef.current;
+    eventBus.dispatch("find", {
+      source: window,
+      type: "again",
+      query,
+      phraseSearch: true,
+      caseSensitive: options.matchCase,
+      entireWord: options.wholeWords,
+      highlightAll: options.highlightAll,
+      findPrevious: false,
+    });
+  }, []);
+
+  const handleSearchPrev = useCallback(() => {
+    const findController = pdfHighlighterUtilsRef.current?.getFindController();
+    if (!findController) return;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = pdfHighlighterUtilsRef.current?.getEventBus() as any;
+    if (!eventBus) return;
+
+    const { query, options } = searchStateRef.current;
+    eventBus.dispatch("find", {
+      source: window,
+      type: "again",
+      query,
+      phraseSearch: true,
+      caseSensitive: options.matchCase,
+      entireWord: options.wholeWords,
+      highlightAll: options.highlightAll,
+      findPrevious: true,
+    });
+  }, []);
+
+  const handleSearchClear = useCallback(() => {
+    const findController = pdfHighlighterUtilsRef.current?.getFindController();
+    if (!findController) {
+      setSearchMatchCount(0);
+      setSearchCurrentMatch(0);
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = pdfHighlighterUtilsRef.current?.getEventBus() as any;
+    if (!eventBus) return;
+
+    // Reset search state
+    searchStateRef.current = {
+      query: "",
+      options: { highlightAll: true, matchCase: false, wholeWords: false },
+    };
+
+    // Clear search by dispatching empty query
+    eventBus.dispatch("find", {
+      source: window,
+      type: "find",
+      query: "",
+      phraseSearch: true,
+      caseSensitive: false,
+      entireWord: false,
+      highlightAll: false,
+      findPrevious: false,
+    });
+
+    setSearchMatchCount(0);
+    setSearchCurrentMatch(0);
+  }, []);
+
   if (!pdfUrl) {
     return (
       <div className="flex items-center justify-center h-full w-full">
@@ -677,6 +822,12 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
         infoPaneOpen={infoPaneOpen}
         onToggleInfoPane={toggleInfoPane}
         isStackedLayout={libraryLayout === "stacked"}
+        onSearch={handleSearch}
+        onSearchNext={handleSearchNext}
+        onSearchPrev={handleSearchPrev}
+        onSearchClear={handleSearchClear}
+        searchMatchCount={searchMatchCount}
+        searchCurrentMatch={searchCurrentMatch}
       />
 
       <div className="relative flex-1 overflow-hidden flex h-full">
@@ -711,7 +862,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
                       pdfHighlighterUtilsRef.current = utils;
                       if (!hasInitializedUtilsRef.current) {
                         hasInitializedUtilsRef.current = true;
-                        forceUpdate({});
+                        queueMicrotask(() => setViewerReady(true));
                       }
                     }}
                     // Text and Area highlight modes

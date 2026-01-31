@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback } from "react";
 import { FileType, StickyNote, Globe, Paperclip, Trash2, ExternalLink } from "lucide-react";
 import { type EntrySummary, type Attachment, useLibraryStore } from "@/stores/libraryStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIStore, type SortField, type SortDirection } from "@/stores/uiStore";
 import { formatRelativeDate } from "@/lib/utils";
 import { EntryContextMenuContent } from "./EntryContextMenu";
 import { DataTable, type Column } from "./DataTable";
@@ -18,6 +18,9 @@ interface EntryTableProps {
   entries: EntrySummary[];
   selectedIds: string[];
   expandedIds: string[];
+  sortField?: SortField;
+  sortDirection?: SortDirection;
+  onSort?: (field: SortField) => void;
   onEntryClick: (id: string, event: React.MouseEvent) => void;
   onEntryDoubleClick: (id: string) => void;
   onToggleExpand: (id: string) => void;
@@ -30,6 +33,9 @@ export function EntryTable({
   entries,
   selectedIds,
   expandedIds,
+  sortField,
+  sortDirection,
+  onSort,
   onEntryClick,
   onEntryDoubleClick,
   onToggleExpand,
@@ -161,6 +167,7 @@ export function EntryTable({
         case "attachments":
           return {
             ...baseColumn,
+            sortable: false,
             cell: (entry: EntrySummary) => (
               <div className="flex items-center gap-1">
                 {entry.hasPdf && <FileType className="h-3.5 w-3.5 text-red-500" />}
@@ -177,6 +184,7 @@ export function EntryTable({
         case "tags":
           return {
             ...baseColumn,
+            sortable: false,
             cell: (entry: EntrySummary) => (
               <div className="flex items-center gap-1 overflow-hidden">
                 {entry.tags.slice(0, 2).map((tag) => (
@@ -248,6 +256,9 @@ export function EntryTable({
         data={entries}
         selectedIds={selectedIds}
         expandedIds={expandedIds}
+        sortField={sortField}
+        sortDirection={sortDirection}
+        onSort={onSort}
         onRowClick={(entry, event) => onEntryClick(entry.id, event)}
         onRowDoubleClick={(entry) => onEntryDoubleClick(entry.id)}
         onRowContextMenu={handleContextMenu}
