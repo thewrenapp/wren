@@ -1,5 +1,5 @@
 [package]
-name = "etal"
+name = "wren"
 version = "0.1.0"
 description = "A reference manager for PDFs and markdown notes"
 authors = ["Sadanand Singh"]
@@ -8,7 +8,7 @@ repository = ""
 edition = "2021"
 
 [lib]
-name = "etal_lib"
+name = "wren_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
@@ -20,6 +20,7 @@ tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+tauri-plugin-clipboard-manager = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

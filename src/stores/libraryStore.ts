@@ -1,139 +1,53 @@
 import { create } from "zustand";
+import type {
+  Entry,
+  EntrySummary,
+  Attachment,
+  Tag,
+  Collection,
+  ItemType,
+  AttachmentType,
+} from "@/types/schema";
 
-// =====================================================
-// Types: Entry-Attachment Model
-// =====================================================
-
-export interface Creator {
-  creatorType: string; // "author", "editor", "translator", etc.
-  firstName?: string;
-  lastName?: string;
-  name?: string; // For single-field names (institutions)
-}
-
-export interface Entry {
-  id: string;
-  key: string;
-  entryType: string;
-  entryTypeDisplay: string;
-  title: string;
-  creators: Creator[];
-  publicationDate?: string;
-  doi?: string;
-  isbn?: string;
-  issn?: string;
-  url?: string;
-  publisher?: string;
-  journal?: string;
-  volume?: string;
-  issue?: string;
-  pages?: string;
-  abstract?: string;
-  repository?: string;
-  archiveId?: string;
-  language?: string;
-  rights?: string;
-  extra?: string;
-  dateAdded: string;
-  dateModified: string;
-  tags: Tag[];
-  collections: string[];
-  attachments: Attachment[];
-  attachmentCount: number;
-}
-
-export interface EntrySummary {
-  id: string;
-  key: string;
-  entryType: string;
-  title: string;
-  creatorsDisplay: string;
-  year?: string;
-  dateAdded: string;
-  dateModified?: string;
-  tags: Tag[];
-  attachmentCount: number;
-  hasPdf: boolean;
-  hasNote: boolean;
-  thumbnailPath?: string;
-}
-
-export interface Attachment {
-  id: string;
-  key: string;
-  entryId: string;
-  attachmentType: string;
-  attachmentTypeDisplay: string;
-  title?: string;
-  filePath?: string;
-  fileHash?: string;
-  fileSize?: number;
-  url?: string;
-  pageCount?: number;
-  frontmatter?: string;
-  thumbnailPath?: string;
-  dateAdded: string;
-  dateModified: string;
-}
-
-export interface EntryType {
-  id: string;
-  name: string;
-  displayName: string;
-  icon?: string;
-}
-
-export interface AttachmentTypeInfo {
-  id: string;
-  name: string;
-  displayName: string;
-  icon?: string;
-}
-
-export interface Collection {
-  id: string;
-  key: string;
-  name: string;
-  color?: string;
-  icon?: string;
-  itemCount: number;
-}
-
-export interface Tag {
-  id: string;
-  name: string;
-  color?: string;
-  itemCount: number;
-}
+// Re-export types for convenience
+export type {
+  Entry,
+  EntrySummary,
+  Attachment,
+  Tag,
+  Collection,
+  ItemType,
+  AttachmentType,
+};
 
 // Filter types for the sidebar
 export type LibraryFilter =
   | { type: "all" }
   | { type: "pdf" }
   | { type: "note" }
-  | { type: "collection"; id: string }
-  | { type: "tag"; id: string };
+  | { type: "collection"; id: number }
+  | { type: "tag"; id: number };
 
 interface LibraryState {
   // Data
   entries: EntrySummary[];
   currentEntry: Entry | null;
-  entryTypes: EntryType[];
-  attachmentTypes: AttachmentTypeInfo[];
+  itemTypes: ItemType[];
+  attachmentTypes: AttachmentType[];
   collections: Collection[];
   tags: Tag[];
 
   // Selection
-  selectedEntryIds: string[];
+  selectedEntryIds: number[];
 
   // Filters
   activeFilter: LibraryFilter;
-  activeCollectionId: string | null;
-  activeTagId: string | null;
+  activeCollectionId: number | null;
+  activeTagId: number | null;
   searchQuery: string;
 
   // Expanded entries (for tree view)
-  expandedEntryIds: string[];
+  expandedEntryIds: number[];
 
   // Loading states
   isLoading: boolean;
@@ -142,6 +56,9 @@ interface LibraryState {
   // Attachment cache invalidation
   attachmentVersion: number;
 
+  // Entry cache invalidation (for info panel refetch)
+  entryVersion: number;
+
   // Trash
   trashCount: number;
   trashedEntries: EntrySummary[];
@@ -149,36 +66,36 @@ interface LibraryState {
   // Entry Actions
   setEntries: (entries: EntrySummary[]) => void;
   addEntry: (entry: EntrySummary) => void;
-  updateEntry: (id: string, updates: Partial<EntrySummary>) => void;
-  removeEntry: (id: string) => void;
+  updateEntry: (id: number, updates: Partial<EntrySummary>) => void;
+  removeEntry: (id: number) => void;
   setCurrentEntry: (entry: Entry | null) => void;
 
-  // Entry Types
-  setEntryTypes: (types: EntryType[]) => void;
-  setAttachmentTypes: (types: AttachmentTypeInfo[]) => void;
+  // Type Actions
+  setItemTypes: (types: ItemType[]) => void;
+  setAttachmentTypes: (types: AttachmentType[]) => void;
 
   // Collection Actions
   setCollections: (collections: Collection[]) => void;
   addCollection: (collection: Collection) => void;
-  updateCollection: (id: string, updates: Partial<Collection>) => void;
-  removeCollection: (id: string) => void;
+  updateCollection: (id: number, updates: Partial<Collection>) => void;
+  removeCollection: (id: number) => void;
 
   // Tag Actions
   setTags: (tags: Tag[]) => void;
   addTag: (tag: Tag) => void;
-  updateTag: (id: string, updates: Partial<Tag>) => void;
-  removeTag: (id: string) => void;
+  updateTag: (id: number, updates: Partial<Tag>) => void;
+  removeTag: (id: number) => void;
 
   // Selection Actions
-  selectEntry: (id: string, multi?: boolean) => void;
-  selectEntries: (ids: string[]) => void;
+  selectEntry: (id: number, multi?: boolean) => void;
+  selectEntries: (ids: number[]) => void;
   clearSelection: () => void;
-  toggleEntryExpanded: (id: string) => void;
+  toggleEntryExpanded: (id: number) => void;
 
   // Filter Actions
   setFilter: (filter: LibraryFilter) => void;
-  setActiveCollection: (id: string | null) => void;
-  setActiveTag: (id: string | null) => void;
+  setActiveCollection: (id: number | null) => void;
+  setActiveTag: (id: number | null) => void;
   setSearchQuery: (query: string) => void;
 
   // Loading Actions
@@ -188,16 +105,24 @@ interface LibraryState {
   // Attachment Actions
   invalidateAttachments: () => void;
 
+  // Entry Actions (cache invalidation)
+  invalidateEntry: () => void;
+
   // Trash Actions
   setTrashCount: (count: number) => void;
   setTrashedEntries: (entries: EntrySummary[]) => void;
+
+  // Refresh function (stored in store to avoid global mutable state)
+  _refreshFn: (() => Promise<void>) | null;
+  _setRefreshFn: (fn: (() => Promise<void>) | null) => void;
+  refreshLibrary: () => Promise<void>;
 }
 
 export const useLibraryStore = create<LibraryState>()((set) => ({
   // Initial state
   entries: [],
   currentEntry: null,
-  entryTypes: [],
+  itemTypes: [],
   attachmentTypes: [],
   collections: [],
   tags: [],
@@ -210,6 +135,7 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   isLoading: false,
   error: null,
   attachmentVersion: 0,
+  entryVersion: 0,
   trashCount: 0,
   trashedEntries: [],
 
@@ -237,8 +163,8 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
 
   setCurrentEntry: (entry) => set({ currentEntry: entry }),
 
-  // Entry/Attachment Types
-  setEntryTypes: (types) => set({ entryTypes: types }),
+  // Type actions
+  setItemTypes: (types) => set({ itemTypes: types }),
   setAttachmentTypes: (types) => set({ attachmentTypes: types }),
 
   // Collection actions
@@ -351,7 +277,21 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   invalidateAttachments: () =>
     set((state) => ({ attachmentVersion: state.attachmentVersion + 1 })),
 
+  // Entry cache invalidation (for info panel refetch)
+  invalidateEntry: () =>
+    set((state) => ({ entryVersion: state.entryVersion + 1 })),
+
   // Trash actions
   setTrashCount: (count) => set({ trashCount: count }),
   setTrashedEntries: (entries) => set({ trashedEntries: entries }),
+
+  // Refresh function management (replaces global mutable state)
+  _refreshFn: null,
+  _setRefreshFn: (fn) => set({ _refreshFn: fn }),
+  refreshLibrary: async () => {
+    const state = useLibraryStore.getState();
+    if (state._refreshFn) {
+      await state._refreshFn();
+    }
+  },
 }));

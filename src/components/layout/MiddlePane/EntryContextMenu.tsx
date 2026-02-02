@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { toast } from "@/stores/toastStore";
 import {
   ExternalLink,
   FolderOpen,
@@ -9,7 +10,11 @@ import {
   Copy,
   Trash2,
   FolderPlus,
+  FolderMinus,
   Tags,
+  Download,
+  FileJson,
+  FileCode,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -35,11 +40,21 @@ import { useTabStore } from "@/stores/tabStore";
 import {
   showEntryInFinder,
   addEntryToCollection,
+  removeEntryFromCollection,
   deleteEntry,
   addPdfAttachment,
+  createAttachment,
   getTrashCount,
+  exportToCslJson,
+  exportToBibtex,
+  getCollections,
+  getTags,
+  getEntries,
+  addTagToEntries,
 } from "@/services/tauri";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 interface EntryContextMenuProps {
   entry: EntrySummary;
@@ -53,21 +68,27 @@ interface EntryContextMenuContentProps {
 
 // Standalone content component for controlled dropdown menus (used in EntryTable)
 export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuContentProps) {
-  const { openTab } = useTabStore();
-  const { collections, removeEntry, invalidateAttachments, setTrashCount } = useLibraryStore();
+  const { openTab, tabs, closeTab } = useTabStore();
+  const { collections, tags, removeEntry, invalidateAttachments, setTrashCount, setCollections, setTags, setEntries, invalidateEntry, selectedEntryIds, activeCollectionId } = useLibraryStore();
+
+  // Use all selected entries for export when multiple are selected
+  const exportIds = selectedEntryIds.length > 1 && selectedEntryIds.includes(entry.id)
+    ? selectedEntryIds
+    : [entry.id];
+  const isMultiSelect = exportIds.length > 1;
 
   const handleOpen = () => {
     openTab({
       type: "entry",
       title: entry.title,
-      entryId: entry.id,
+      entryId: String(entry.id),
     });
     onClose?.();
   };
 
   const handleShowInFinder = async () => {
     try {
-      await showEntryInFinder(Number(entry.id));
+      await showEntryInFinder(entry.id);
     } catch (err) {
       console.error("Failed to show in Finder:", err);
     }
@@ -76,18 +97,63 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
 
   const handleCopyTitle = async () => {
     try {
-      await navigator.clipboard.writeText(entry.title);
+      await writeText(entry.title);
+      toast.success("Title copied to clipboard");
     } catch (err) {
       console.error("Failed to copy title:", err);
+      toast.error("Failed to copy title");
     }
     onClose?.();
   };
 
-  const handleAddToCollection = async (collectionId: string) => {
+  const handleAddToCollection = async (collectionId: number) => {
     try {
-      await addEntryToCollection(Number(entry.id), Number(collectionId));
+      await addEntryToCollection(entry.id, collectionId);
+      // Refresh collections to update item count
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      // Invalidate entry to refresh info panel
+      invalidateEntry();
     } catch (err) {
       console.error("Failed to add to collection:", err);
+    }
+    onClose?.();
+  };
+
+  const handleRemoveFromCollection = async (collectionId: number) => {
+    try {
+      // Remove all selected entries from the collection
+      const entriesToRemove = isMultiSelect ? exportIds : [entry.id];
+      for (const entryId of entriesToRemove) {
+        await removeEntryFromCollection(entryId, collectionId);
+      }
+      // Refresh collections to update item count
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      // Refresh ALL entries (not filtered) to update the store
+      const allEntries = await getEntries({});
+      setEntries(allEntries);
+      // Invalidate entry to refresh info panel
+      invalidateEntry();
+    } catch (err) {
+      console.error("Failed to remove from collection:", err);
+    }
+    onClose?.();
+  };
+
+  const handleAddTag = async (tagName: string) => {
+    try {
+      const entriesToTag = isMultiSelect ? exportIds : [entry.id];
+      await addTagToEntries(tagName, entriesToTag);
+      // Refresh tags to update item count
+      const allTags = await getTags();
+      setTags(allTags);
+      // Invalidate entry to refresh info panel
+      invalidateEntry();
+      toast.success(isMultiSelect ? `Tag added to ${entriesToTag.length} entries` : "Tag added");
+    } catch (err) {
+      console.error("Failed to add tag:", err);
+      toast.error("Failed to add tag");
     }
     onClose?.();
   };
@@ -99,26 +165,112 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
       if (selected) {
-        await addPdfAttachment(Number(entry.id), selected);
+        await addPdfAttachment(entry.id, selected);
         invalidateAttachments();
+        toast.success("PDF attached");
       }
     } catch (err) {
       console.error("Failed to add PDF attachment:", err);
+      toast.error("Failed to attach PDF");
+    }
+    onClose?.();
+  };
+
+  const handleCreateNote = async () => {
+    try {
+      const note = await createAttachment({
+        entryId: entry.id,
+        attachmentType: "note",
+        title: `Notes - ${entry.title}`,
+      });
+      invalidateAttachments();
+      // Open the note in a new tab
+      openTab({
+        type: "entry",
+        title: note.title || `Notes - ${entry.title}`,
+        entryId: String(entry.id),
+        attachmentId: String(note.id),
+      });
+      toast.success("Note created");
+    } catch (err) {
+      console.error("Failed to create note:", err);
+      toast.error("Failed to create note");
     }
     onClose?.();
   };
 
   const handleDelete = async () => {
-    if (!confirm(`Move "${entry.title}" to Trash?`)) {
-      return;
-    }
     try {
-      await deleteEntry(Number(entry.id));
+      await deleteEntry(entry.id);
       removeEntry(entry.id);
+      // Close any open tabs for this entry
+      const entryTabs = tabs.filter(t => t.type === "entry" && t.entryId === String(entry.id));
+      entryTabs.forEach(t => closeTab(t.id));
       const count = await getTrashCount();
       setTrashCount(count);
+      // Refresh collections and tags to update item counts
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      const allTags = await getTags();
+      setTags(allTags);
+      toast.success("Moved to Trash");
     } catch (err) {
       console.error("Failed to delete entry:", err);
+      toast.error("Failed to move to Trash");
+    }
+    onClose?.();
+  };
+
+  const handleExportCslJson = async () => {
+    try {
+      const content = await exportToCslJson(exportIds);
+      const defaultName = isMultiSelect ? "export" : (entry.key || "export");
+      const filePath = await save({
+        defaultPath: `${defaultName}.json`,
+        filters: [{ name: "CSL JSON", extensions: ["json"] }],
+      });
+      if (filePath) {
+        await writeTextFile(filePath, content);
+      }
+    } catch (err) {
+      console.error("Failed to export to CSL JSON:", err);
+    }
+    onClose?.();
+  };
+
+  const handleExportBibtex = async () => {
+    try {
+      const content = await exportToBibtex(exportIds);
+      const defaultName = isMultiSelect ? "export" : (entry.key || "export");
+      const filePath = await save({
+        defaultPath: `${defaultName}.bib`,
+        filters: [{ name: "BibTeX", extensions: ["bib"] }],
+      });
+      if (filePath) {
+        await writeTextFile(filePath, content);
+      }
+    } catch (err) {
+      console.error("Failed to export to BibTeX:", err);
+    }
+    onClose?.();
+  };
+
+  const handleCopyCslJson = async () => {
+    try {
+      const content = await exportToCslJson(exportIds);
+      await writeText(content);
+    } catch (err) {
+      console.error("Failed to copy CSL JSON:", err);
+    }
+    onClose?.();
+  };
+
+  const handleCopyBibtex = async () => {
+    try {
+      const content = await exportToBibtex(exportIds);
+      await writeText(content);
+    } catch (err) {
+      console.error("Failed to copy BibTeX:", err);
     }
     onClose?.();
   };
@@ -148,7 +300,7 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
             <File className="h-4 w-4 mr-2" />
             PDF...
           </DropdownMenuItem>
-          <DropdownMenuItem disabled>
+          <DropdownMenuItem onClick={handleCreateNote}>
             <FileText className="h-4 w-4 mr-2" />
             Note
           </DropdownMenuItem>
@@ -179,14 +331,71 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
               ))}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          {activeCollectionId && (
+            <DropdownMenuItem onClick={() => handleRemoveFromCollection(activeCollectionId)}>
+              <FolderMinus className="h-4 w-4 mr-2" />
+              {isMultiSelect ? `Remove ${exportIds.length} from Collection` : "Remove from Collection"}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
         </>
       )}
 
-      <DropdownMenuItem disabled>
-        <Tags className="h-4 w-4 mr-2" />
-        Add Tag...
-      </DropdownMenuItem>
+      {tags.length > 0 ? (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <Tags className="h-4 w-4 mr-2" />
+            {isMultiSelect ? `Add Tag to ${exportIds.length} Items` : "Add Tag"}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-48">
+            {tags.map((tag) => (
+              <DropdownMenuItem
+                key={tag.id}
+                onClick={() => handleAddTag(tag.name)}
+              >
+                <span
+                  className="w-2 h-2 rounded-full mr-2"
+                  style={{ backgroundColor: tag.color || "#6b7280" }}
+                />
+                {tag.name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ) : (
+        <DropdownMenuItem disabled>
+          <Tags className="h-4 w-4 mr-2" />
+          Add Tag (no tags exist)
+        </DropdownMenuItem>
+      )}
+
+      <DropdownMenuSeparator />
+
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>
+          <Download className="h-4 w-4 mr-2" />
+          {isMultiSelect ? `Export ${exportIds.length} Items` : "Export As"}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className="w-48">
+          <DropdownMenuItem onClick={handleExportCslJson}>
+            <FileJson className="h-4 w-4 mr-2" />
+            CSL JSON...
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={handleExportBibtex}>
+            <FileCode className="h-4 w-4 mr-2" />
+            BibTeX...
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleCopyCslJson}>
+            <Copy className="h-4 w-4 mr-2" />
+            Copy as CSL JSON
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={handleCopyBibtex}>
+            <Copy className="h-4 w-4 mr-2" />
+            Copy as BibTeX
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
 
       <DropdownMenuSeparator />
 
@@ -211,20 +420,26 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
 
 // Original wrapper component for backwards compatibility
 export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
-  const { openTab } = useTabStore();
-  const { collections, removeEntry, invalidateAttachments, setTrashCount } = useLibraryStore();
+  const { openTab, tabs, closeTab } = useTabStore();
+  const { collections, tags, removeEntry, invalidateAttachments, setTrashCount, setCollections, setTags, setEntries, invalidateEntry, selectedEntryIds, activeCollectionId } = useLibraryStore();
+
+  // Use all selected entries for export when multiple are selected
+  const exportIds = selectedEntryIds.length > 1 && selectedEntryIds.includes(entry.id)
+    ? selectedEntryIds
+    : [entry.id];
+  const isMultiSelect = exportIds.length > 1;
 
   const handleOpen = () => {
     openTab({
       type: "entry",
       title: entry.title,
-      entryId: entry.id,
+      entryId: String(entry.id),
     });
   };
 
   const handleShowInFinder = async () => {
     try {
-      await showEntryInFinder(Number(entry.id));
+      await showEntryInFinder(entry.id);
     } catch (err) {
       console.error("Failed to show in Finder:", err);
     }
@@ -232,17 +447,58 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
 
   const handleCopyTitle = async () => {
     try {
-      await navigator.clipboard.writeText(entry.title);
+      await writeText(entry.title);
     } catch (err) {
       console.error("Failed to copy title:", err);
     }
   };
 
-  const handleAddToCollection = async (collectionId: string) => {
+  const handleAddToCollection = async (collectionId: number) => {
     try {
-      await addEntryToCollection(Number(entry.id), Number(collectionId));
+      await addEntryToCollection(entry.id, collectionId);
+      // Refresh collections to update item count
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      // Invalidate entry to refresh info panel
+      invalidateEntry();
     } catch (err) {
       console.error("Failed to add to collection:", err);
+    }
+  };
+
+  const handleRemoveFromCollection = async (collectionId: number) => {
+    try {
+      // Remove all selected entries from the collection
+      const entriesToRemove = isMultiSelect ? exportIds : [entry.id];
+      for (const entryId of entriesToRemove) {
+        await removeEntryFromCollection(entryId, collectionId);
+      }
+      // Refresh collections to update item count
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      // Refresh ALL entries (not filtered) to update the store
+      const allEntries = await getEntries({});
+      setEntries(allEntries);
+      // Invalidate entry to refresh info panel
+      invalidateEntry();
+    } catch (err) {
+      console.error("Failed to remove from collection:", err);
+    }
+  };
+
+  const handleAddTag = async (tagName: string) => {
+    try {
+      const entriesToTag = isMultiSelect ? exportIds : [entry.id];
+      await addTagToEntries(tagName, entriesToTag);
+      // Refresh tags to update item count
+      const allTags = await getTags();
+      setTags(allTags);
+      // Invalidate entry to refresh info panel
+      invalidateEntry();
+      toast.success(isMultiSelect ? `Tag added to ${entriesToTag.length} entries` : "Tag added");
+    } catch (err) {
+      console.error("Failed to add tag:", err);
+      toast.error("Failed to add tag");
     }
   };
 
@@ -253,25 +509,106 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
       if (selected) {
-        await addPdfAttachment(Number(entry.id), selected);
+        await addPdfAttachment(entry.id, selected);
         invalidateAttachments();
+        toast.success("PDF attached");
       }
     } catch (err) {
       console.error("Failed to add PDF attachment:", err);
+      toast.error("Failed to attach PDF");
+    }
+  };
+
+  const handleCreateNote = async () => {
+    try {
+      const note = await createAttachment({
+        entryId: entry.id,
+        attachmentType: "note",
+        title: `Notes - ${entry.title}`,
+      });
+      invalidateAttachments();
+      // Open the note in a new tab
+      openTab({
+        type: "entry",
+        title: note.title || `Notes - ${entry.title}`,
+        entryId: String(entry.id),
+        attachmentId: String(note.id),
+      });
+      toast.success("Note created");
+    } catch (err) {
+      console.error("Failed to create note:", err);
+      toast.error("Failed to create note");
     }
   };
 
   const handleDelete = async () => {
-    if (!confirm(`Move "${entry.title}" to Trash?`)) {
-      return;
-    }
     try {
-      await deleteEntry(Number(entry.id));
+      await deleteEntry(entry.id);
       removeEntry(entry.id);
+      // Close any open tabs for this entry
+      const entryTabs = tabs.filter(t => t.type === "entry" && t.entryId === String(entry.id));
+      entryTabs.forEach(t => closeTab(t.id));
       const count = await getTrashCount();
       setTrashCount(count);
+      // Refresh collections and tags to update item counts
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      const allTags = await getTags();
+      setTags(allTags);
+      toast.success("Moved to Trash");
     } catch (err) {
       console.error("Failed to delete entry:", err);
+      toast.error("Failed to move to Trash");
+    }
+  };
+
+  const handleExportCslJson = async () => {
+    try {
+      const content = await exportToCslJson(exportIds);
+      const defaultName = isMultiSelect ? "export" : (entry.key || "export");
+      const filePath = await save({
+        defaultPath: `${defaultName}.json`,
+        filters: [{ name: "CSL JSON", extensions: ["json"] }],
+      });
+      if (filePath) {
+        await writeTextFile(filePath, content);
+      }
+    } catch (err) {
+      console.error("Failed to export to CSL JSON:", err);
+    }
+  };
+
+  const handleExportBibtex = async () => {
+    try {
+      const content = await exportToBibtex(exportIds);
+      const defaultName = isMultiSelect ? "export" : (entry.key || "export");
+      const filePath = await save({
+        defaultPath: `${defaultName}.bib`,
+        filters: [{ name: "BibTeX", extensions: ["bib"] }],
+      });
+      if (filePath) {
+        await writeTextFile(filePath, content);
+      }
+    } catch (err) {
+      console.error("Failed to export to BibTeX:", err);
+    }
+  };
+
+  const handleCopyCslJson = async () => {
+    try {
+      const content = await exportToCslJson(exportIds);
+      await writeText(content);
+    } catch (err) {
+      console.error("Failed to copy CSL JSON:", err);
+    }
+  };
+
+  const handleCopyBibtex = async () => {
+    try {
+      const content = await exportToBibtex(exportIds);
+      await writeText(content);
+    } catch (err) {
+      console.error("Failed to copy BibTeX:", err);
     }
   };
 
@@ -302,7 +639,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
               <File className="h-4 w-4 mr-2" />
               PDF...
             </ContextMenuItem>
-            <ContextMenuItem disabled>
+            <ContextMenuItem onClick={handleCreateNote}>
               <FileText className="h-4 w-4 mr-2" />
               Note
             </ContextMenuItem>
@@ -333,14 +670,71 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
                 ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
+            {activeCollectionId && (
+              <ContextMenuItem onClick={() => handleRemoveFromCollection(activeCollectionId)}>
+                <FolderMinus className="h-4 w-4 mr-2" />
+                {isMultiSelect ? `Remove ${exportIds.length} from Collection` : "Remove from Collection"}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
           </>
         )}
 
-        <ContextMenuItem disabled>
-          <Tags className="h-4 w-4 mr-2" />
-          Add Tag...
-        </ContextMenuItem>
+        {tags.length > 0 ? (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <Tags className="h-4 w-4 mr-2" />
+              {isMultiSelect ? `Add Tag to ${exportIds.length} Items` : "Add Tag"}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-48">
+              {tags.map((tag) => (
+                <ContextMenuItem
+                  key={tag.id}
+                  onClick={() => handleAddTag(tag.name)}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full mr-2"
+                    style={{ backgroundColor: tag.color || "#6b7280" }}
+                  />
+                  {tag.name}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        ) : (
+          <ContextMenuItem disabled>
+            <Tags className="h-4 w-4 mr-2" />
+            Add Tag (no tags exist)
+          </ContextMenuItem>
+        )}
+
+        <ContextMenuSeparator />
+
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <Download className="h-4 w-4 mr-2" />
+            {isMultiSelect ? `Export ${exportIds.length} Items` : "Export As"}
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-48">
+            <ContextMenuItem onClick={handleExportCslJson}>
+              <FileJson className="h-4 w-4 mr-2" />
+              CSL JSON...
+            </ContextMenuItem>
+            <ContextMenuItem onClick={handleExportBibtex}>
+              <FileCode className="h-4 w-4 mr-2" />
+              BibTeX...
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={handleCopyCslJson}>
+              <Copy className="h-4 w-4 mr-2" />
+              Copy as CSL JSON
+            </ContextMenuItem>
+            <ContextMenuItem onClick={handleCopyBibtex}>
+              <Copy className="h-4 w-4 mr-2" />
+              Copy as BibTeX
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
 
         <ContextMenuSeparator />
 

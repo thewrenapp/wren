@@ -3,8 +3,8 @@ import {
   Sun,
   Moon,
   Monitor,
-  BookOpen,
 } from "lucide-react";
+import { AppLogo } from "@/components/ui/AppLogo";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -85,15 +85,9 @@ export function ProfileBar() {
           className="w-full h-14 flex-shrink-0 cursor-default"
         />
 
-        {/* App logo - macOS style squircle */}
+        {/* App logo */}
         <div className="pb-3">
-          <div
-            className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center shadow-md cursor-pointer hover:shadow-lg transition-shadow"
-            style={{ borderRadius: "22%" }}
-            title="Etal"
-          >
-            <BookOpen className="h-5 w-5 text-white" strokeWidth={2.5} />
-          </div>
+          <AppLogo size={40} className="shadow-md cursor-pointer hover:shadow-lg transition-shadow" />
         </div>
 
         {/* Spacer */}

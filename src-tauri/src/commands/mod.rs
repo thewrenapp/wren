@@ -1,7 +1,9 @@
 pub mod annotations;
 pub mod collections;
+pub mod duplicates;
 pub mod entries;
+pub mod export;
 pub mod import;
-pub mod items;
+pub mod schema;
 pub mod settings;
 pub mod tags;

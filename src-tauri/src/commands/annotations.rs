@@ -13,8 +13,8 @@ use uuid::Uuid;
 pub struct Annotation {
     pub id: i64,
     pub key: String,
-    #[serde(rename = "itemId")]
-    pub item_id: i64,
+    #[serde(rename = "attachmentId")]
+    pub attachment_id: i64,
     #[serde(rename = "annotationType")]
     pub annotation_type: String,
     #[serde(rename = "pageNumber")]
@@ -33,8 +33,8 @@ pub struct Annotation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAnnotationInput {
-    #[serde(rename = "itemId")]
-    pub item_id: i64,
+    #[serde(rename = "attachmentId")]
+    pub attachment_id: i64,
     #[serde(rename = "annotationType")]
     pub annotation_type: String,
     #[serde(rename = "pageNumber")]
@@ -59,7 +59,7 @@ pub struct UpdateAnnotationInput {
 struct AnnotationRow {
     id: i64,
     key: String,
-    item_id: i64,
+    attachment_id: i64,
     annotation_type: String,
     page_number: i32,
     position_json: String,
@@ -75,7 +75,7 @@ impl From<AnnotationRow> for Annotation {
         Self {
             id: row.id,
             key: row.key,
-            item_id: row.item_id,
+            attachment_id: row.attachment_id,
             annotation_type: row.annotation_type,
             page_number: row.page_number,
             position_json: row.position_json,
@@ -91,20 +91,20 @@ impl From<AnnotationRow> for Annotation {
 #[tauri::command]
 pub async fn get_annotations(
     state: State<'_, AppState>,
-    item_id: i64,
+    attachment_id: i64,
 ) -> Result<Vec<Annotation>, String> {
     let annotations: Vec<AnnotationRow> = sqlx::query_as::<_, AnnotationRow>(
         r#"
-        SELECT a.id, a.key, a.item_id, at.name as annotation_type,
+        SELECT a.id, a.key, a.attachment_id, at.name as annotation_type,
                a.page_number, a.position_json, a.selected_text,
                a.comment, a.color, a.date_added, a.date_modified
-        FROM annotations a
+        FROM attachment_annotations a
         JOIN annotation_types at ON a.annotation_type_id = at.id
-        WHERE a.item_id = ?
+        WHERE a.attachment_id = ?
         ORDER BY a.page_number, a.sort_index
         "#,
     )
-    .bind(item_id)
+    .bind(attachment_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| e.to_string())?;
@@ -131,8 +131,8 @@ pub async fn create_annotation(
 
     let result = sqlx::query(
         r#"
-        INSERT INTO annotations (
-            key, item_id, annotation_type_id, page_number,
+        INSERT INTO attachment_annotations (
+            key, attachment_id, annotation_type_id, page_number,
             position_json, selected_text, comment, color
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -140,7 +140,7 @@ pub async fn create_annotation(
         "#,
     )
     .bind(&key)
-    .bind(input.item_id)
+    .bind(input.attachment_id)
     .bind(annotation_type_id)
     .bind(input.page_number)
     .bind(&input.position_json)
@@ -154,7 +154,7 @@ pub async fn create_annotation(
     Ok(Annotation {
         id: result.get("id"),
         key,
-        item_id: input.item_id,
+        attachment_id: input.attachment_id,
         annotation_type: input.annotation_type,
         page_number: input.page_number,
         position_json: input.position_json,
@@ -172,7 +172,7 @@ pub async fn update_annotation(
     id: i64,
     input: UpdateAnnotationInput,
 ) -> Result<(), String> {
-    let mut query = String::from("UPDATE annotations SET date_modified = datetime('now')");
+    let mut query = String::from("UPDATE attachment_annotations SET date_modified = datetime('now')");
     let mut has_updates = false;
 
     if input.position_json.is_some() {
@@ -216,7 +216,7 @@ pub async fn update_annotation(
 
 #[tauri::command]
 pub async fn delete_annotation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    sqlx::query("DELETE FROM annotations WHERE id = ?")
+    sqlx::query("DELETE FROM attachment_annotations WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await
@@ -242,15 +242,15 @@ pub struct PdfAnnotationData {
 #[tauri::command]
 pub async fn save_annotation_to_pdf(
     state: State<'_, AppState>,
-    item_id: i64,
+    attachment_id: i64,
     annotation_key: String,
     annotation_data: PdfAnnotationData,
 ) -> Result<(), String> {
-    // Get the PDF file path from attachments table (item_id is actually entry_id now)
+    // Get the PDF file path from attachments table
     let file_path: String = sqlx::query_scalar(
-        "SELECT file_path FROM attachments WHERE entry_id = ? AND file_path IS NOT NULL LIMIT 1"
+        "SELECT file_path FROM attachments WHERE id = ? AND file_path IS NOT NULL"
     )
-    .bind(item_id)
+    .bind(attachment_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| format!("Failed to get file path: {}", e))?;
@@ -353,14 +353,14 @@ fn get_pdf_float(obj: &lopdf::Object) -> Option<f32> {
 #[tauri::command]
 pub async fn remove_annotation_from_pdf(
     state: State<'_, AppState>,
-    item_id: i64,
+    attachment_id: i64,
     annotation_key: String,
 ) -> Result<bool, String> {
-    // Get the PDF file path from attachments table (item_id is actually entry_id now)
+    // Get the PDF file path from attachments table
     let file_path: String = sqlx::query_scalar(
-        "SELECT file_path FROM attachments WHERE entry_id = ? AND file_path IS NOT NULL LIMIT 1"
+        "SELECT file_path FROM attachments WHERE id = ? AND file_path IS NOT NULL"
     )
-    .bind(item_id)
+    .bind(attachment_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| format!("Failed to get file path: {}", e))?;
@@ -378,13 +378,13 @@ pub async fn remove_annotation_from_pdf(
 #[tauri::command]
 pub async fn import_annotations_from_pdf(
     state: State<'_, AppState>,
-    item_id: i64,
+    attachment_id: i64,
 ) -> Result<Vec<Annotation>, String> {
-    // Get the PDF file path from attachments table (item_id is actually entry_id now)
+    // Get the PDF file path from attachments table
     let file_path: String = sqlx::query_scalar(
-        "SELECT file_path FROM attachments WHERE entry_id = ? AND file_path IS NOT NULL LIMIT 1"
+        "SELECT file_path FROM attachments WHERE id = ? AND file_path IS NOT NULL"
     )
-    .bind(item_id)
+    .bind(attachment_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| format!("Failed to get file path: {}", e))?;
@@ -407,10 +407,10 @@ pub async fn import_annotations_from_pdf(
     for pdf_ann in pdf_annotations {
         // Check if annotation already exists by key
         let exists: bool = sqlx::query_scalar(
-            "SELECT COUNT(*) > 0 FROM annotations WHERE key = ? AND item_id = ?",
+            "SELECT COUNT(*) > 0 FROM attachment_annotations WHERE key = ? AND attachment_id = ?",
         )
         .bind(&pdf_ann.id)
-        .bind(item_id)
+        .bind(attachment_id)
         .fetch_one(&state.db)
         .await
         .map_err(|e| e.to_string())?;
@@ -450,8 +450,8 @@ pub async fn import_annotations_from_pdf(
         // Insert into database
         let result = sqlx::query(
             r#"
-            INSERT INTO annotations (
-                key, item_id, annotation_type_id, page_number,
+            INSERT INTO attachment_annotations (
+                key, attachment_id, annotation_type_id, page_number,
                 position_json, selected_text, comment, color
             )
             VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
@@ -459,7 +459,7 @@ pub async fn import_annotations_from_pdf(
             "#,
         )
         .bind(&pdf_ann.id)
-        .bind(item_id)
+        .bind(attachment_id)
         .bind(annotation_type_id)
         .bind(pdf_ann.page_number as i32)
         .bind(&position_json)
@@ -472,7 +472,7 @@ pub async fn import_annotations_from_pdf(
         imported.push(Annotation {
             id: result.get("id"),
             key: pdf_ann.id,
-            item_id,
+            attachment_id,
             annotation_type: "highlight".to_string(),
             page_number: pdf_ann.page_number as i32,
             position_json,

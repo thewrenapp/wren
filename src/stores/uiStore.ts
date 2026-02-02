@@ -1,25 +1,25 @@
-import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
-export type ViewMode = "list" | "card";
-export type SortField = "title" | "dateAdded" | "dateModified" | "creator" | "year" | "entryType";
-export type SortDirection = "asc" | "desc";
-export type LibraryLayout = "normal" | "stacked";
-export type InfoPanePosition = "side" | "bottom";
+export type ViewMode = 'list' | 'card';
+export type SortField = 'title' | 'dateAdded' | 'dateModified' | 'creator' | 'year' | 'itemType';
+export type SortDirection = 'asc' | 'desc';
+export type LibraryLayout = 'normal' | 'stacked';
+export type InfoPanePosition = 'side' | 'bottom';
 
 // Column configuration for the table view
 export type ColumnId =
-  | "title"
-  | "creator"
-  | "entryType"
-  | "year"
-  | "dateAdded"
-  | "dateModified"
-  | "publication"
-  | "publisher"
-  | "attachments"
-  | "tags"
-  | "doi";
+  | 'title'
+  | 'creator'
+  | 'itemType'
+  | 'year'
+  | 'dateAdded'
+  | 'dateModified'
+  | 'publication'
+  | 'publisher'
+  | 'attachments'
+  | 'tags'
+  | 'doi';
 
 export interface ColumnConfig {
   id: ColumnId;
@@ -31,17 +31,17 @@ export interface ColumnConfig {
 
 // Default column configuration
 export const DEFAULT_COLUMNS: ColumnConfig[] = [
-  { id: "title", label: "Title", visible: true, width: 280, minWidth: 120 },
-  { id: "creator", label: "Creator", visible: true, width: 140, minWidth: 80 },
-  { id: "year", label: "Year", visible: true, width: 50, minWidth: 40 },
-  { id: "entryType", label: "Type", visible: false, width: 90, minWidth: 60 },
-  { id: "dateAdded", label: "Added", visible: true, width: 80, minWidth: 60 },
-  { id: "dateModified", label: "Modified", visible: false, width: 80, minWidth: 60 },
-  { id: "publication", label: "Publication", visible: false, width: 100, minWidth: 80 },
-  { id: "publisher", label: "Publisher", visible: false, width: 100, minWidth: 80 },
-  { id: "attachments", label: "Files", visible: true, width: 55, minWidth: 40 },
-  { id: "tags", label: "Tags", visible: false, width: 100, minWidth: 80 },
-  { id: "doi", label: "DOI", visible: false, width: 100, minWidth: 80 },
+  { id: 'title', label: 'Title', visible: true, width: 280, minWidth: 120 },
+  { id: 'creator', label: 'Creator', visible: true, width: 140, minWidth: 80 },
+  { id: 'year', label: 'Year', visible: true, width: 50, minWidth: 40 },
+  { id: 'itemType', label: 'Type', visible: false, width: 90, minWidth: 60 },
+  { id: 'dateAdded', label: 'Added', visible: true, width: 80, minWidth: 60 },
+  { id: 'dateModified', label: 'Modified', visible: false, width: 80, minWidth: 60 },
+  { id: 'publication', label: 'Publication', visible: false, width: 100, minWidth: 80 },
+  { id: 'publisher', label: 'Publisher', visible: false, width: 100, minWidth: 80 },
+  { id: 'attachments', label: 'Files', visible: true, width: 55, minWidth: 40 },
+  { id: 'tags', label: 'Tags', visible: false, width: 100, minWidth: 80 },
+  { id: 'doi', label: 'DOI', visible: false, width: 100, minWidth: 80 },
 ];
 
 interface UIState {
@@ -51,7 +51,7 @@ interface UIState {
   infoPanelHeight: number;
 
   // View settings
-  viewMode: ViewMode;
+  viewModeByFilter: Record<UIState['activeFilter'], ViewMode>;
   sortField: SortField;
   sortDirection: SortDirection;
   libraryLayout: LibraryLayout;
@@ -72,8 +72,18 @@ interface UIState {
   // Settings dialog
   settingsOpen: boolean;
 
+  // New Collection dialog
+  newCollectionDialogOpen: boolean;
+
   // Active filters
-  activeFilter: "all" | "pdfs" | "notes" | "recent" | "untagged" | "trash";
+  activeFilter: 'all' | 'pdfs' | 'notes' | 'recent' | 'untagged' | 'duplicates' | 'trash';
+
+  // Delete confirmation
+  deleteConfirmation: {
+    open: boolean;
+    entryIds: number[];
+    onConfirm: (() => void) | null;
+  };
 
   // Actions
   setSidebarWidth: (width: number) => void;
@@ -88,17 +98,22 @@ interface UIState {
   setCommandPaletteOpen: (open: boolean) => void;
   toggleCommandPalette: () => void;
   setSettingsOpen: (open: boolean) => void;
+  setNewCollectionDialogOpen: (open: boolean) => void;
   setInfoPaneOpen: (open: boolean) => void;
   toggleInfoPane: () => void;
   setPdfLeftPanelOpen: (open: boolean) => void;
   togglePdfLeftPanel: () => void;
-  setActiveFilter: (filter: UIState["activeFilter"]) => void;
+  setActiveFilter: (filter: UIState['activeFilter']) => void;
 
   // Column actions
   toggleColumnVisibility: (columnId: ColumnId) => void;
   setColumnWidth: (columnId: ColumnId, width: number) => void;
-  moveColumn: (columnId: ColumnId, direction: "left" | "right") => void;
+  moveColumn: (columnId: ColumnId, direction: 'left' | 'right') => void;
   resetColumns: () => void;
+
+  // Delete confirmation actions
+  showDeleteConfirmation: (entryIds: number[], onConfirm: () => void) => void;
+  hideDeleteConfirmation: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -108,31 +123,49 @@ export const useUIStore = create<UIState>()(
       sidebarWidth: 240,
       rightPaneWidth: 320,
       infoPanelHeight: 250,
-      viewMode: "list",
-      sortField: "dateAdded",
-      sortDirection: "desc",
+      viewModeByFilter: {
+        all: 'list',
+        pdfs: 'list',
+        notes: 'list',
+        recent: 'list',
+        untagged: 'list',
+        duplicates: 'list',
+        trash: 'list',
+      },
+      sortField: 'dateAdded',
+      sortDirection: 'desc',
       secondarySortField: null,
-      secondarySortDirection: "asc",
-      libraryLayout: "normal",
-      pdfInfoPanePosition: "side",
+      secondarySortDirection: 'asc',
+      libraryLayout: 'normal',
+      pdfInfoPanePosition: 'side',
       columns: [...DEFAULT_COLUMNS],
       infoPaneOpen: true,
       pdfLeftPanelOpen: true,
       commandPaletteOpen: false,
       settingsOpen: false,
-      activeFilter: "all",
+      newCollectionDialogOpen: false,
+      activeFilter: 'all',
+      deleteConfirmation: {
+        open: false,
+        entryIds: [],
+        onConfirm: null,
+      },
 
       // Actions
-      setSidebarWidth: (width) =>
-        set({ sidebarWidth: Math.max(180, Math.min(400, width)) }),
+      setSidebarWidth: (width) => set({ sidebarWidth: Math.max(180, Math.min(400, width)) }),
 
-      setRightPaneWidth: (width) =>
-        set({ rightPaneWidth: Math.max(250, Math.min(500, width)) }),
+      setRightPaneWidth: (width) => set({ rightPaneWidth: Math.max(250, Math.min(500, width)) }),
 
       setInfoPanelHeight: (height) =>
         set({ infoPanelHeight: Math.max(150, Math.min(400, height)) }),
 
-      setViewMode: (mode) => set({ viewMode: mode }),
+      setViewMode: (mode) =>
+        set((state) => ({
+          viewModeByFilter: {
+            ...state.viewModeByFilter,
+            [state.activeFilter]: mode,
+          },
+        })),
 
       setLibraryLayout: (layout) => set({ libraryLayout: layout }),
 
@@ -144,9 +177,7 @@ export const useUIStore = create<UIState>()(
           sortField: field,
           sortDirection:
             direction ??
-            (state.sortField === field && state.sortDirection === "asc"
-              ? "desc"
-              : "asc"),
+            (state.sortField === field && state.sortDirection === 'asc' ? 'desc' : 'asc'),
         });
       },
 
@@ -160,7 +191,7 @@ export const useUIStore = create<UIState>()(
 
       toggleSortDirection: () =>
         set((state) => ({
-          sortDirection: state.sortDirection === "asc" ? "desc" : "asc",
+          sortDirection: state.sortDirection === 'asc' ? 'desc' : 'asc',
         })),
 
       setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
@@ -170,15 +201,15 @@ export const useUIStore = create<UIState>()(
 
       setSettingsOpen: (open) => set({ settingsOpen: open }),
 
+      setNewCollectionDialogOpen: (open) => set({ newCollectionDialogOpen: open }),
+
       setInfoPaneOpen: (open) => set({ infoPaneOpen: open }),
 
-      toggleInfoPane: () =>
-        set((state) => ({ infoPaneOpen: !state.infoPaneOpen })),
+      toggleInfoPane: () => set((state) => ({ infoPaneOpen: !state.infoPaneOpen })),
 
       setPdfLeftPanelOpen: (open) => set({ pdfLeftPanelOpen: open }),
 
-      togglePdfLeftPanel: () =>
-        set((state) => ({ pdfLeftPanelOpen: !state.pdfLeftPanelOpen })),
+      togglePdfLeftPanel: () => set((state) => ({ pdfLeftPanelOpen: !state.pdfLeftPanelOpen })),
 
       setActiveFilter: (filter) => set({ activeFilter: filter }),
 
@@ -186,16 +217,14 @@ export const useUIStore = create<UIState>()(
       toggleColumnVisibility: (columnId) =>
         set((state) => ({
           columns: state.columns.map((col) =>
-            col.id === columnId ? { ...col, visible: !col.visible } : col
+            col.id === columnId ? { ...col, visible: !col.visible } : col,
           ),
         })),
 
       setColumnWidth: (columnId, width) =>
         set((state) => ({
           columns: state.columns.map((col) =>
-            col.id === columnId
-              ? { ...col, width: Math.max(col.minWidth, width) }
-              : col
+            col.id === columnId ? { ...col, width: Math.max(col.minWidth, width) } : col,
           ),
         })),
 
@@ -206,7 +235,7 @@ export const useUIStore = create<UIState>()(
           if (index === -1) return state;
 
           const newIndex =
-            direction === "left"
+            direction === 'left'
               ? Math.max(0, index - 1)
               : Math.min(columns.length - 1, index + 1);
 
@@ -218,14 +247,32 @@ export const useUIStore = create<UIState>()(
         }),
 
       resetColumns: () => set({ columns: [...DEFAULT_COLUMNS] }),
+
+      showDeleteConfirmation: (entryIds, onConfirm) =>
+        set({
+          deleteConfirmation: {
+            open: true,
+            entryIds,
+            onConfirm,
+          },
+        }),
+
+      hideDeleteConfirmation: () =>
+        set({
+          deleteConfirmation: {
+            open: false,
+            entryIds: [],
+            onConfirm: null,
+          },
+        }),
     }),
     {
-      name: "etal-ui",
+      name: 'wren-ui',
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         rightPaneWidth: state.rightPaneWidth,
         infoPanelHeight: state.infoPanelHeight,
-        viewMode: state.viewMode,
+        viewModeByFilter: state.viewModeByFilter,
         sortField: state.sortField,
         sortDirection: state.sortDirection,
         secondarySortField: state.secondarySortField,
@@ -236,6 +283,6 @@ export const useUIStore = create<UIState>()(
         pdfLeftPanelOpen: state.pdfLeftPanelOpen,
         columns: state.columns,
       }),
-    }
-  )
+    },
+  ),
 );

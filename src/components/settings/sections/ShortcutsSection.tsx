@@ -29,7 +29,7 @@ export function ShortcutsSection() {
           <ShortcutRow keys={["⇧", "↑/↓"]} description="Extend selection" />
           <ShortcutRow keys={["Esc"]} description="Clear selection" />
           <ShortcutRow keys={["Enter"]} description="Open selected item" />
-          <ShortcutRow keys={["Delete"]} description="Delete selected items" />
+          <ShortcutRow keys={["Delete"]} description="Move selected to trash" />
         </div>
       </section>
 

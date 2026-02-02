@@ -27,7 +27,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       theme: "system",
-      libraryPath: "~/Etal",
+      libraryPath: "~/Wren",
       embeddingModel: "all-MiniLM-L6-v2",
       showWelcomeOnStartup: true,
 
@@ -37,7 +37,7 @@ export const useSettingsStore = create<SettingsState>()(
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
     }),
     {
-      name: "etal-settings",
+      name: "wren-settings",
     }
   )
 );

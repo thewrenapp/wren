@@ -7,7 +7,10 @@ import {
 import { PDFViewer } from "@/components/pdf/PDFViewer";
 import { EntryInfoPanel } from "@/components/layout/RightPane/EntryInfoPanel";
 import { useUIStore } from "@/stores/uiStore";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { useTabStore } from "@/stores/tabStore";
 import { getEntry, type Entry, type Attachment } from "@/services/tauri/commands";
+import { toast } from "@/stores/toastStore";
 
 interface EntryTabProps {
   entryId: string;
@@ -26,8 +29,9 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
     libraryLayout,
     infoPaneOpen,
   } = useUIStore();
+  const { entryVersion } = useLibraryStore();
 
-  // Load entry details with attachments
+  // Load entry details with attachments (also refetch when entryVersion changes)
   useEffect(() => {
     async function loadEntry() {
       setLoading(true);
@@ -38,14 +42,25 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
         setEntry(entryData);
       } catch (err) {
         console.error("Failed to load entry:", err);
-        setError(err instanceof Error ? err.message : "Failed to load entry");
+        const errorMsg = err instanceof Error ? err.message : "Failed to load entry";
+        setError(errorMsg);
+
+        // If entry not found (deleted), automatically close this tab
+        if (errorMsg.toLowerCase().includes("not found")) {
+          const { tabs, closeTab } = useTabStore.getState();
+          const tab = tabs.find(t => t.type === "entry" && t.entryId === entryId);
+          if (tab) {
+            toast.info("Entry was deleted, closing tab");
+            closeTab(tab.id);
+          }
+        }
       } finally {
         setLoading(false);
       }
     }
 
     loadEntry();
-  }, [entryId]);
+  }, [entryId, entryVersion]);
 
   if (loading) {
     return (
@@ -82,16 +97,17 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
 
   // Create entry summary for info panel
   const entrySummary = {
-    id: String(entry.id),
+    id: entry.id,
     key: entry.key,
-    entryType: entry.entryType,
+    itemType: entry.itemType,
+    itemTypeDisplay: entry.itemTypeDisplay,
     title: entry.title,
     creatorsDisplay: entry.creators?.map(c =>
       c.name || [c.firstName, c.lastName].filter(Boolean).join(" ")
     ).join(", ") || "",
-    year: entry.publicationDate?.split("-")[0],
+    year: entry.date?.split("-")[0],
     dateAdded: entry.dateAdded,
-    tags: entry.tags.map(t => ({ ...t, id: String(t.id) })),
+    tags: entry.tags,
     attachmentCount: entry.attachmentCount,
     hasPdf: entry.attachments?.some(a => a.attachmentType === "pdf") || false,
     hasNote: entry.attachments?.some(a => a.attachmentType === "note") || false,
@@ -104,7 +120,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
 
   // Render main content (PDF or placeholder)
   const mainContent = targetAttachment?.attachmentType === "pdf" && targetAttachment.filePath ? (
-    <PDFViewer filePath={targetAttachment.filePath} itemId={String(entry.id)} />
+    <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} />
   ) : targetAttachment?.attachmentType === "note" ? (
     <div className="flex-1 flex items-center justify-center text-muted-foreground">
       <div className="text-center">

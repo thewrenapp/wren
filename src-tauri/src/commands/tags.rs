@@ -26,7 +26,12 @@ pub async fn get_tags(state: State<'_, AppState>) -> Result<Vec<Tag>, String> {
             t.id,
             t.name,
             t.color,
-            COALESCE((SELECT COUNT(*) FROM item_tags WHERE tag_id = t.id), 0) as item_count
+            COALESCE((
+                SELECT COUNT(*)
+                FROM entry_tags et
+                INNER JOIN entries e ON e.id = et.entry_id
+                WHERE et.tag_id = t.id AND e.is_deleted = 0
+            ), 0) as item_count
         FROM tags t
         ORDER BY t.name
         "#
@@ -87,7 +92,7 @@ pub async fn delete_tag(state: State<'_, AppState>, id: i64) -> Result<(), Strin
 #[tauri::command]
 pub async fn add_tag_to_item(
     state: State<'_, AppState>,
-    item_id: i64,
+    entry_id: i64,
     tag_name: String,
 ) -> Result<Tag, String> {
     // Get or create tag
@@ -122,9 +127,9 @@ pub async fn add_tag_to_item(
         }
     };
 
-    // Add to item
-    sqlx::query("INSERT OR IGNORE INTO item_tags (item_id, tag_id) VALUES (?, ?)")
-        .bind(item_id)
+    // Add to entry
+    sqlx::query("INSERT OR IGNORE INTO entry_tags (entry_id, tag_id) VALUES (?, ?)")
+        .bind(entry_id)
         .bind(tag.id)
         .execute(&state.db)
         .await
@@ -136,15 +141,134 @@ pub async fn add_tag_to_item(
 #[tauri::command]
 pub async fn remove_tag_from_item(
     state: State<'_, AppState>,
-    item_id: i64,
+    entry_id: i64,
     tag_id: i64,
 ) -> Result<(), String> {
-    sqlx::query("DELETE FROM item_tags WHERE item_id = ? AND tag_id = ?")
-        .bind(item_id)
+    sqlx::query("DELETE FROM entry_tags WHERE entry_id = ? AND tag_id = ?")
+        .bind(entry_id)
         .bind(tag_id)
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// Add a tag to multiple entries at once
+#[tauri::command]
+pub async fn add_tag_to_entries(
+    state: State<'_, AppState>,
+    tag_name: String,
+    entry_ids: Vec<i64>,
+) -> Result<Tag, String> {
+    // Get or create tag
+    let existing: Option<TagRow2> = sqlx::query_as::<_, TagRow2>(
+        "SELECT id, name, color FROM tags WHERE name = ? COLLATE NOCASE"
+    )
+    .bind(&tag_name)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let tag = if let Some(t) = existing {
+        Tag {
+            id: t.id,
+            name: t.name,
+            color: t.color,
+            item_count: 0,
+        }
+    } else {
+        // Create new tag
+        let result = sqlx::query("INSERT INTO tags (name) VALUES (?) RETURNING id")
+            .bind(&tag_name)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Tag {
+            id: result.get("id"),
+            name: tag_name,
+            color: None,
+            item_count: 0,
+        }
+    };
+
+    // Add tag to all entries
+    for entry_id in entry_ids {
+        sqlx::query("INSERT OR IGNORE INTO entry_tags (entry_id, tag_id) VALUES (?, ?)")
+            .bind(entry_id)
+            .bind(tag.id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(tag)
+}
+
+/// Update tag name and/or color
+#[tauri::command]
+pub async fn update_tag(
+    state: State<'_, AppState>,
+    id: i64,
+    name: Option<String>,
+    color: Option<String>,
+) -> Result<Tag, String> {
+    // Build dynamic update query
+    let mut updates = Vec::new();
+    if name.is_some() {
+        updates.push("name = ?");
+    }
+    if color.is_some() {
+        updates.push("color = ?");
+    }
+
+    if updates.is_empty() {
+        // Nothing to update, just return the current tag
+        let tag: TagRow2 = sqlx::query_as::<_, TagRow2>(
+            "SELECT id, name, color FROM tags WHERE id = ?"
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        return Ok(Tag {
+            id: tag.id,
+            name: tag.name,
+            color: tag.color,
+            item_count: 0,
+        });
+    }
+
+    let query = format!("UPDATE tags SET {} WHERE id = ?", updates.join(", "));
+
+    let mut q = sqlx::query(&query);
+    if let Some(ref n) = name {
+        q = q.bind(n);
+    }
+    if let Some(ref c) = color {
+        q = q.bind(c);
+    }
+    q = q.bind(id);
+
+    q.execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Fetch updated tag
+    let tag: TagRow2 = sqlx::query_as::<_, TagRow2>(
+        "SELECT id, name, color FROM tags WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(Tag {
+        id: tag.id,
+        name: tag.name,
+        color: tag.color,
+        item_count: 0,
+    })
 }

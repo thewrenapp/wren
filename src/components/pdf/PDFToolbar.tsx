@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Maximize,
+  Minimize,
   ArrowLeftToLine,
   Highlighter,
   ChevronDown,
@@ -101,6 +102,9 @@ interface PDFToolbarProps {
   onSearchClear?: () => void;
   searchMatchCount?: number;
   searchCurrentMatch?: number;
+  // Fullscreen props
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
 export function PDFToolbar({
@@ -134,6 +138,8 @@ export function PDFToolbar({
   onSearchClear,
   searchMatchCount = 0,
   searchCurrentMatch = 0,
+  isFullscreen = false,
+  onToggleFullscreen,
 }: PDFToolbarProps) {
   const scalePercent = typeof scale === "number" ? Math.round(scale * 100) : 100;
   const [editMode, setEditMode] = useState(false);
@@ -143,6 +149,24 @@ export function PDFToolbar({
   const [matchCase, setMatchCase] = useState(false);
   const [wholeWords, setWholeWords] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [isCompact, setIsCompact] = useState(false);
+
+  // Track toolbar width for responsive layout
+  useEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // Switch to compact mode when width is less than 600px
+        setIsCompact(entry.contentRect.width < 600);
+      }
+    });
+
+    observer.observe(toolbar);
+    return () => observer.disconnect();
+  }, []);
 
   // When edit mode is toggled off, reset tool mode to null
   const handleEditModeToggle = useCallback(() => {
@@ -221,7 +245,7 @@ export function PDFToolbar({
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex flex-col border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div ref={toolbarRef} className="flex flex-col border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         {/* Main Toolbar */}
         <div className="flex items-center justify-between px-3 py-1.5">
           {/* Left: Panel toggle + Zoom controls */}
@@ -246,33 +270,35 @@ export function PDFToolbar({
               <TooltipContent>Zoom out</TooltipContent>
             </Tooltip>
 
-            {/* Scale input */}
-            <div className="flex items-center">
-              <Input
-                type="number"
-                min={25}
-                max={1000}
-                defaultValue={scalePercent}
-                key={scalePercent}
-                onBlur={(e) => {
-                  const percent = parseInt(e.target.value, 10);
-                  if (!isNaN(percent) && percent >= 25 && percent <= 1000) {
-                    onScaleChange(percent / 100);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    const percent = parseInt(e.currentTarget.value, 10);
+            {/* Scale input - hidden in compact mode */}
+            {!isCompact && (
+              <div className="flex items-center">
+                <Input
+                  type="number"
+                  min={25}
+                  max={1000}
+                  defaultValue={scalePercent}
+                  key={scalePercent}
+                  onBlur={(e) => {
+                    const percent = parseInt(e.target.value, 10);
                     if (!isNaN(percent) && percent >= 25 && percent <= 1000) {
                       onScaleChange(percent / 100);
                     }
-                    e.currentTarget.blur();
-                  }
-                }}
-                className="w-14 h-6 text-center text-xs px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              />
-              <span className="text-muted-foreground text-xs ml-0.5">%</span>
-            </div>
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const percent = parseInt(e.currentTarget.value, 10);
+                      if (!isNaN(percent) && percent >= 25 && percent <= 1000) {
+                        onScaleChange(percent / 100);
+                      }
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  className="w-14 h-6 text-center text-xs px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <span className="text-muted-foreground text-xs ml-0.5">%</span>
+              </div>
+            )}
 
             <Tooltip>
               <TooltipTrigger asChild>
@@ -302,6 +328,20 @@ export function PDFToolbar({
               </TooltipTrigger>
               <TooltipContent>Fit page</TooltipContent>
             </Tooltip>
+
+            {onToggleFullscreen && (
+              <>
+                <div className="w-px h-4 bg-border mx-1" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen}>
+                      {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{isFullscreen ? "Exit fullscreen" : "Fullscreen"}</TooltipContent>
+                </Tooltip>
+              </>
+            )}
           </div>
 
           {/* Center: Page navigation */}
@@ -330,7 +370,10 @@ export function PDFToolbar({
                 }}
                 className="w-10 h-6 text-center text-xs px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
-              <span className="text-muted-foreground text-xs">/ {totalPages}</span>
+              {/* Hide total pages in compact mode */}
+              {!isCompact && (
+                <span className="text-muted-foreground text-xs">/ {totalPages}</span>
+              )}
             </div>
 
             <Button

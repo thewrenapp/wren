@@ -1,6 +1,7 @@
 import { Monitor, Sun, Moon, PanelRight, PanelBottom } from "lucide-react";
 import { useSettingsStore, type Theme } from "@/stores/settingsStore";
 import { useUIStore, type LibraryLayout } from "@/stores/uiStore";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
 export function GeneralSection() {
@@ -74,11 +75,9 @@ export function GeneralSection() {
 
         <div className="space-y-3">
           <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={showWelcomeOnStartup}
-              onChange={(e) => setShowWelcomeOnStartup(e.target.checked)}
-              className="h-4 w-4 rounded border-border"
+              onCheckedChange={(checked) => setShowWelcomeOnStartup(checked === true)}
             />
             <span className="text-sm">Show Welcome tab on startup</span>
           </label>

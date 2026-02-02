@@ -20,7 +20,7 @@ import { listen } from "@tauri-apps/api/event";
 
 export function AppLayout() {
   const { sidebarWidth, setSidebarWidth, setLibraryLayout, settingsOpen, setSettingsOpen } = useUIStore();
-  const { tabs, openTab } = useTabStore();
+  const { tabs, openTab, updateTab } = useTabStore();
   const { showWelcomeOnStartup } = useSettingsStore();
   const hasInitialized = useRef(false);
 
@@ -52,12 +52,18 @@ export function AppLayout() {
     hasInitialized.current = true;
 
     // Always ensure Library tab exists
-    const hasLibraryTab = tabs.some((t) => t.type === "library");
-    if (!hasLibraryTab) {
+    const libraryTab = tabs.find((t) => t.type === "library");
+    if (!libraryTab) {
       openTab({
         type: "library",
         title: "Library",
       });
+    } else {
+      // Sync library tab title to "Library" on startup since activeFilter resets to "all"
+      // This fixes stale tab titles like "Trash" from previous sessions
+      if (libraryTab.title !== "Library") {
+        updateTab(libraryTab.id, { title: "Library" });
+      }
     }
 
     // Show Welcome tab on startup if enabled and not already open

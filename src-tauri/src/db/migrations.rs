@@ -1,6 +1,5 @@
 use anyhow::Result;
-use sqlx::{Row, SqlitePool};
-use uuid::Uuid;
+use sqlx::SqlitePool;
 
 pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     tracing::info!("Running database migrations");
@@ -10,443 +9,192 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
 
-    // Insert default data
-    sqlx::query(SEED_DATA)
+    // Insert seed data
+    sqlx::query(SEED_ITEM_TYPES)
         .execute(pool)
         .await?;
 
-    // Run data migration from old schema to new schema (if needed)
-    migrate_items_to_entries(pool).await?;
+    sqlx::query(SEED_CREATOR_TYPES)
+        .execute(pool)
+        .await?;
+
+    sqlx::query(SEED_FIELDS)
+        .execute(pool)
+        .await?;
+
+    sqlx::query(SEED_ITEM_TYPE_FIELDS)
+        .execute(pool)
+        .await?;
+
+    sqlx::query(SEED_ITEM_TYPE_CREATOR_TYPES)
+        .execute(pool)
+        .await?;
+
+    sqlx::query(SEED_OTHER)
+        .execute(pool)
+        .await?;
 
     tracing::info!("Database migrations complete");
     Ok(())
 }
 
-/// Migrate existing items (PDFs, notes) to the new entry/attachment schema
-/// This is a one-time migration that converts:
-/// - Each PDF item → Entry (journal_article) + PDF Attachment
-/// - Each Markdown item → Entry (document) + Note Attachment
-async fn migrate_items_to_entries(pool: &SqlitePool) -> Result<()> {
-    // Check if migration has already been done
-    let migration_done: Option<i64> = sqlx::query_scalar(
-        "SELECT version FROM schema_migrations WHERE version = 1"
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    if migration_done.is_some() {
-        tracing::info!("Item to entry migration already completed");
-        return Ok(());
-    }
-
-    // Check if there are any old items to migrate
-    let item_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM items WHERE is_deleted = 0"
-    )
-    .fetch_one(pool)
-    .await?;
-
-    if item_count == 0 {
-        tracing::info!("No items to migrate");
-        // Mark migration as done even if no items
-        sqlx::query("INSERT INTO schema_migrations (version, name) VALUES (1, 'items_to_entries')")
-            .execute(pool)
-            .await?;
-        return Ok(());
-    }
-
-    tracing::info!("Migrating {} items to entries", item_count);
-
-    // Get entry type IDs
-    let journal_article_type_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM entry_types WHERE name = 'journal_article'"
-    )
-    .fetch_one(pool)
-    .await?;
-
-    let document_type_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM entry_types WHERE name = 'document'"
-    )
-    .fetch_one(pool)
-    .await?;
-
-    // Get attachment type IDs
-    let pdf_attachment_type_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM attachment_types WHERE name = 'pdf'"
-    )
-    .fetch_one(pool)
-    .await?;
-
-    let note_attachment_type_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM attachment_types WHERE name = 'note'"
-    )
-    .fetch_one(pool)
-    .await?;
-
-    // Migrate PDF items
-    let pdf_items = sqlx::query(
-        r#"
-        SELECT i.id, i.key, i.title, i.date_added, i.date_modified,
-               p.file_path, p.file_hash, p.file_size, p.page_count,
-               p.author, p.abstract_text, p.doi, p.publication_date,
-               p.publisher, p.journal, p.volume, p.issue, p.pages,
-               p.text_extracted, p.embedded
-        FROM items i
-        JOIN pdf_items p ON p.item_id = i.id
-        WHERE i.is_deleted = 0
-        "#
-    )
-    .fetch_all(pool)
-    .await?;
-
-    for row in pdf_items {
-        let old_item_id: i64 = row.get("id");
-        let entry_key = Uuid::new_v4().to_string();
-        let attachment_key = Uuid::new_v4().to_string();
-        let title: String = row.get("title");
-        let date_added: String = row.get("date_added");
-        let date_modified: String = row.get("date_modified");
-        let author: Option<String> = row.get("author");
-        let abstract_text: Option<String> = row.get("abstract_text");
-        let doi: Option<String> = row.get("doi");
-        let publication_date: Option<String> = row.get("publication_date");
-        let publisher: Option<String> = row.get("publisher");
-        let journal: Option<String> = row.get("journal");
-        let volume: Option<String> = row.get("volume");
-        let issue: Option<String> = row.get("issue");
-        let pages: Option<String> = row.get("pages");
-
-        // Convert author string to JSON array of creators
-        let creators_json = author.as_ref().map(|a| {
-            let creators: Vec<serde_json::Value> = a.split(';')
-                .map(|name| name.trim())
-                .filter(|name| !name.is_empty())
-                .map(|name| {
-                    serde_json::json!({
-                        "creatorType": "author",
-                        "name": name
-                    })
-                })
-                .collect();
-            serde_json::to_string(&creators).unwrap_or_default()
-        });
-
-        // Insert entry
-        let entry_id: i64 = sqlx::query_scalar(
-            r#"
-            INSERT INTO entries (
-                key, entry_type_id, title, creators, publication_date,
-                doi, publisher, journal, volume, issue, pages, abstract_text,
-                date_added, date_modified
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-            "#
-        )
-        .bind(&entry_key)
-        .bind(journal_article_type_id)
-        .bind(&title)
-        .bind(&creators_json)
-        .bind(&publication_date)
-        .bind(&doi)
-        .bind(&publisher)
-        .bind(&journal)
-        .bind(&volume)
-        .bind(&issue)
-        .bind(&pages)
-        .bind(&abstract_text)
-        .bind(&date_added)
-        .bind(&date_modified)
-        .fetch_one(pool)
-        .await?;
-
-        // Insert PDF attachment
-        let file_path: String = row.get("file_path");
-        let file_hash: String = row.get("file_hash");
-        let file_size: i64 = row.get("file_size");
-        let page_count: Option<i32> = row.get("page_count");
-        let text_extracted: i32 = row.get("text_extracted");
-        let embedded: i32 = row.get("embedded");
-
-        let attachment_id: i64 = sqlx::query_scalar(
-            r#"
-            INSERT INTO attachments (
-                key, entry_id, attachment_type_id, title,
-                file_path, file_hash, file_size, page_count,
-                text_extracted, embedded, date_added, date_modified
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-            "#
-        )
-        .bind(&attachment_key)
-        .bind(entry_id)
-        .bind(pdf_attachment_type_id)
-        .bind(&title)
-        .bind(&file_path)
-        .bind(&file_hash)
-        .bind(file_size)
-        .bind(page_count)
-        .bind(text_extracted)
-        .bind(embedded)
-        .bind(&date_added)
-        .bind(&date_modified)
-        .fetch_one(pool)
-        .await?;
-
-        // Migrate tags
-        sqlx::query(
-            r#"
-            INSERT INTO entry_tags (entry_id, tag_id)
-            SELECT ?, tag_id FROM item_tags WHERE item_id = ?
-            "#
-        )
-        .bind(entry_id)
-        .bind(old_item_id)
-        .execute(pool)
-        .await?;
-
-        // Migrate collections
-        sqlx::query(
-            r#"
-            INSERT INTO collection_entries (collection_id, entry_id, order_index, date_added)
-            SELECT collection_id, ?, order_index, date_added
-            FROM collection_items WHERE item_id = ?
-            "#
-        )
-        .bind(entry_id)
-        .bind(old_item_id)
-        .execute(pool)
-        .await?;
-
-        // Migrate annotations
-        sqlx::query(
-            r#"
-            INSERT INTO attachment_annotations (
-                key, attachment_id, annotation_type_id, page_number,
-                position_json, selected_text, comment, color,
-                date_added, date_modified, sort_index
-            )
-            SELECT key, ?, annotation_type_id, page_number,
-                   position_json, selected_text, comment, color,
-                   date_added, date_modified, sort_index
-            FROM annotations WHERE item_id = ?
-            "#
-        )
-        .bind(attachment_id)
-        .bind(old_item_id)
-        .execute(pool)
-        .await?;
-    }
-
-    // Migrate Markdown items
-    let md_items = sqlx::query(
-        r#"
-        SELECT i.id, i.key, i.title, i.date_added, i.date_modified,
-               m.file_path, m.file_hash, m.frontmatter, m.embedded
-        FROM items i
-        JOIN markdown_items m ON m.item_id = i.id
-        WHERE i.is_deleted = 0
-        "#
-    )
-    .fetch_all(pool)
-    .await?;
-
-    for row in md_items {
-        let old_item_id: i64 = row.get("id");
-        let entry_key = Uuid::new_v4().to_string();
-        let attachment_key = Uuid::new_v4().to_string();
-        let title: String = row.get("title");
-        let date_added: String = row.get("date_added");
-        let date_modified: String = row.get("date_modified");
-
-        // Insert entry
-        let entry_id: i64 = sqlx::query_scalar(
-            r#"
-            INSERT INTO entries (
-                key, entry_type_id, title, date_added, date_modified
-            ) VALUES (?, ?, ?, ?, ?)
-            RETURNING id
-            "#
-        )
-        .bind(&entry_key)
-        .bind(document_type_id)
-        .bind(&title)
-        .bind(&date_added)
-        .bind(&date_modified)
-        .fetch_one(pool)
-        .await?;
-
-        // Insert note attachment
-        let file_path: String = row.get("file_path");
-        let file_hash: String = row.get("file_hash");
-        let frontmatter: Option<String> = row.get("frontmatter");
-        let embedded: i32 = row.get("embedded");
-
-        sqlx::query(
-            r#"
-            INSERT INTO attachments (
-                key, entry_id, attachment_type_id, title,
-                file_path, file_hash, frontmatter, embedded,
-                date_added, date_modified
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
-        )
-        .bind(&attachment_key)
-        .bind(entry_id)
-        .bind(note_attachment_type_id)
-        .bind(&title)
-        .bind(&file_path)
-        .bind(&file_hash)
-        .bind(&frontmatter)
-        .bind(embedded)
-        .bind(&date_added)
-        .bind(&date_modified)
-        .execute(pool)
-        .await?;
-
-        // Migrate tags
-        sqlx::query(
-            r#"
-            INSERT INTO entry_tags (entry_id, tag_id)
-            SELECT ?, tag_id FROM item_tags WHERE item_id = ?
-            "#
-        )
-        .bind(entry_id)
-        .bind(old_item_id)
-        .execute(pool)
-        .await?;
-
-        // Migrate collections
-        sqlx::query(
-            r#"
-            INSERT INTO collection_entries (collection_id, entry_id, order_index, date_added)
-            SELECT collection_id, ?, order_index, date_added
-            FROM collection_items WHERE item_id = ?
-            "#
-        )
-        .bind(entry_id)
-        .bind(old_item_id)
-        .execute(pool)
-        .await?;
-    }
-
-    // Migrate item links to entry links
-    sqlx::query(
-        r#"
-        INSERT INTO entry_links (source_entry_id, target_entry_id, link_type_id, context, date_added)
-        SELECT
-            (SELECT e.id FROM entries e
-             JOIN attachments a ON a.entry_id = e.id
-             WHERE a.file_path = (SELECT file_path FROM pdf_items WHERE item_id = il.source_item_id)
-             LIMIT 1),
-            (SELECT e.id FROM entries e
-             JOIN attachments a ON a.entry_id = e.id
-             WHERE a.file_path = (SELECT file_path FROM pdf_items WHERE item_id = il.target_item_id)
-             LIMIT 1),
-            il.link_type_id,
-            il.context,
-            il.date_added
-        FROM item_links il
-        WHERE EXISTS (SELECT 1 FROM pdf_items WHERE item_id = il.source_item_id)
-          AND EXISTS (SELECT 1 FROM pdf_items WHERE item_id = il.target_item_id)
-        "#
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore errors - links are optional
-
-    // Mark migration as complete
-    sqlx::query("INSERT INTO schema_migrations (version, name) VALUES (1, 'items_to_entries')")
-        .execute(pool)
-        .await?;
-
-    tracing::info!("Migration complete: {} items migrated to entries", item_count);
-    Ok(())
-}
-
 const SCHEMA: &str = r#"
--- Item types
+-- =====================================================
+-- ITEM TYPES (40 Zotero-compatible types)
+-- =====================================================
 CREATE TABLE IF NOT EXISTS item_types (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
-    display_name TEXT NOT NULL
+    display_name TEXT NOT NULL,
+    csl_type TEXT,
+    icon TEXT,
+    sort_order INTEGER DEFAULT 0
 );
 
--- Core items table
-CREATE TABLE IF NOT EXISTS items (
+-- =====================================================
+-- FIELD DEFINITIONS
+-- =====================================================
+CREATE TABLE IF NOT EXISTS fields (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    csl_field TEXT,
+    field_type TEXT DEFAULT 'text',
+    description TEXT
+);
+
+-- =====================================================
+-- ITEM TYPE TO FIELD MAPPINGS
+-- =====================================================
+CREATE TABLE IF NOT EXISTS item_type_fields (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     item_type_id INTEGER NOT NULL REFERENCES item_types(id),
+    field_id INTEGER NOT NULL REFERENCES fields(id),
+    sort_order INTEGER DEFAULT 0,
+    is_required INTEGER DEFAULT 0,
+    UNIQUE(item_type_id, field_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_type_fields_type ON item_type_fields(item_type_id);
+
+-- =====================================================
+-- CREATOR TYPES (47 Zotero creator types)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS creator_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    csl_type TEXT
+);
+
+-- =====================================================
+-- ITEM TYPE TO CREATOR TYPE MAPPINGS
+-- =====================================================
+CREATE TABLE IF NOT EXISTS item_type_creator_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_type_id INTEGER NOT NULL REFERENCES item_types(id),
+    creator_type_id INTEGER NOT NULL REFERENCES creator_types(id),
+    is_primary INTEGER DEFAULT 0,
+    sort_order INTEGER DEFAULT 0,
+    UNIQUE(item_type_id, creator_type_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_type_creator_types_type ON item_type_creator_types(item_type_id);
+
+-- =====================================================
+-- ENTRIES (core entry table - common fields only)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT NOT NULL UNIQUE,
+    item_type_id INTEGER NOT NULL REFERENCES item_types(id),
     title TEXT NOT NULL,
+    date TEXT,
+    url TEXT,
+    access_date TEXT,
     date_added TEXT NOT NULL DEFAULT (datetime('now')),
     date_modified TEXT NOT NULL DEFAULT (datetime('now')),
-    is_deleted INTEGER NOT NULL DEFAULT 0
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    version INTEGER DEFAULT 1
 );
 
-CREATE INDEX IF NOT EXISTS idx_items_type ON items(item_type_id);
-CREATE INDEX IF NOT EXISTS idx_items_date_added ON items(date_added);
-CREATE INDEX IF NOT EXISTS idx_items_deleted ON items(is_deleted);
+CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(item_type_id);
+CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
+CREATE INDEX IF NOT EXISTS idx_entries_date_added ON entries(date_added);
+CREATE INDEX IF NOT EXISTS idx_entries_deleted ON entries(is_deleted);
+CREATE INDEX IF NOT EXISTS idx_entries_title ON entries(title);
 
--- PDF-specific data
-CREATE TABLE IF NOT EXISTS pdf_items (
+-- =====================================================
+-- ENTRY FIELDS (EAV for type-specific fields)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS entry_fields (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL UNIQUE REFERENCES items(id) ON DELETE CASCADE,
-    file_path TEXT NOT NULL,
-    file_hash TEXT NOT NULL,
-    file_size INTEGER NOT NULL,
-    page_count INTEGER,
-    author TEXT,
-    abstract_text TEXT,
-    doi TEXT,
-    publication_date TEXT,
-    publisher TEXT,
-    journal TEXT,
-    volume TEXT,
-    issue TEXT,
-    pages TEXT,
-    keywords TEXT,
-    text_extracted INTEGER NOT NULL DEFAULT 0,
-    embedded INTEGER NOT NULL DEFAULT 0
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    field_id INTEGER NOT NULL REFERENCES fields(id),
+    value TEXT,
+    UNIQUE(entry_id, field_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_pdf_items_hash ON pdf_items(file_hash);
-CREATE INDEX IF NOT EXISTS idx_pdf_items_doi ON pdf_items(doi);
+CREATE INDEX IF NOT EXISTS idx_entry_fields_entry ON entry_fields(entry_id);
+CREATE INDEX IF NOT EXISTS idx_entry_fields_field ON entry_fields(field_id);
+CREATE INDEX IF NOT EXISTS idx_entry_fields_value ON entry_fields(value);
 
--- Markdown notes
-CREATE TABLE IF NOT EXISTS markdown_items (
+-- =====================================================
+-- ENTRY CREATORS (normalized creator storage)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS entry_creators (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL UNIQUE REFERENCES items(id) ON DELETE CASCADE,
-    file_path TEXT NOT NULL,
-    file_hash TEXT NOT NULL,
-    frontmatter TEXT,
-    embedded INTEGER NOT NULL DEFAULT 0
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    creator_type_id INTEGER NOT NULL REFERENCES creator_types(id),
+    first_name TEXT,
+    last_name TEXT,
+    name TEXT,
+    sort_order INTEGER DEFAULT 0
 );
 
--- Collections (flat)
-CREATE TABLE IF NOT EXISTS collections (
+CREATE INDEX IF NOT EXISTS idx_entry_creators_entry ON entry_creators(entry_id);
+CREATE INDEX IF NOT EXISTS idx_entry_creators_type ON entry_creators(creator_type_id);
+CREATE INDEX IF NOT EXISTS idx_entry_creators_name ON entry_creators(last_name, first_name);
+
+-- =====================================================
+-- ATTACHMENT TYPES
+-- =====================================================
+CREATE TABLE IF NOT EXISTS attachment_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    icon TEXT
+);
+
+-- =====================================================
+-- ATTACHMENTS
+-- =====================================================
+CREATE TABLE IF NOT EXISTS attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    description TEXT,
-    color TEXT,
-    icon TEXT,
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    attachment_type_id INTEGER NOT NULL REFERENCES attachment_types(id),
+    title TEXT,
+    file_path TEXT,
+    file_hash TEXT,
+    file_size INTEGER,
+    url TEXT,
+    page_count INTEGER,
+    frontmatter TEXT,
+    thumbnail_path TEXT,
+    text_extracted INTEGER NOT NULL DEFAULT 0,
+    embedded INTEGER NOT NULL DEFAULT 0,
     date_added TEXT NOT NULL DEFAULT (datetime('now')),
     date_modified TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Collection items
-CREATE TABLE IF NOT EXISTS collection_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-    order_index INTEGER NOT NULL DEFAULT 0,
-    date_added TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(collection_id, item_id)
-);
+CREATE INDEX IF NOT EXISTS idx_attachments_entry ON attachments(entry_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_type ON attachments(attachment_type_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(file_hash);
 
-CREATE INDEX IF NOT EXISTS idx_collection_items_collection ON collection_items(collection_id);
-CREATE INDEX IF NOT EXISTS idx_collection_items_item ON collection_items(item_id);
-
--- Tags (flat)
+-- =====================================================
+-- TAGS
+-- =====================================================
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -456,197 +204,9 @@ CREATE TABLE IF NOT EXISTS tags (
 
 CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 
--- Item tags
-CREATE TABLE IF NOT EXISTS item_tags (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-    UNIQUE(item_id, tag_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_item_tags_item ON item_tags(item_id);
-CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);
-
--- Link types
-CREATE TABLE IF NOT EXISTS link_types (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    display_name TEXT NOT NULL,
-    inverse_name TEXT
-);
-
--- Item links (bidirectional)
-CREATE TABLE IF NOT EXISTS item_links (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-    target_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-    link_type_id INTEGER NOT NULL REFERENCES link_types(id),
-    context TEXT,
-    date_added TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(source_item_id, target_item_id, link_type_id),
-    CHECK(source_item_id != target_item_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_item_links_source ON item_links(source_item_id);
-CREATE INDEX IF NOT EXISTS idx_item_links_target ON item_links(target_item_id);
-
--- Annotation types
-CREATE TABLE IF NOT EXISTS annotation_types (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
-);
-
--- PDF Annotations (references entries, not items)
-CREATE TABLE IF NOT EXISTS annotations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT NOT NULL UNIQUE,
-    item_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    annotation_type_id INTEGER NOT NULL REFERENCES annotation_types(id),
-    page_number INTEGER NOT NULL,
-    position_json TEXT NOT NULL,
-    selected_text TEXT,
-    comment TEXT,
-    color TEXT NOT NULL DEFAULT '#FFEB3B',
-    date_added TEXT NOT NULL DEFAULT (datetime('now')),
-    date_modified TEXT NOT NULL DEFAULT (datetime('now')),
-    sort_index TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_annotations_item ON annotations(item_id);
-CREATE INDEX IF NOT EXISTS idx_annotations_page ON annotations(item_id, page_number);
-
--- Settings
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    value_type TEXT NOT NULL DEFAULT 'string',
-    date_modified TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Tab state
-CREATE TABLE IF NOT EXISTS tab_state (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
-    tab_type TEXT NOT NULL,
-    tab_data TEXT,
-    order_index INTEGER NOT NULL,
-    is_active INTEGER NOT NULL DEFAULT 0,
-    date_opened TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tab_state_order ON tab_state(order_index);
-
--- Search index status
-CREATE TABLE IF NOT EXISTS search_index_status (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL UNIQUE REFERENCES items(id) ON DELETE CASCADE,
-    fulltext_indexed INTEGER NOT NULL DEFAULT 0,
-    fulltext_indexed_at TEXT,
-    embedding_indexed INTEGER NOT NULL DEFAULT 0,
-    embedding_indexed_at TEXT,
-    last_content_hash TEXT
-);
-
--- FTS5 for quick search
-CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
-    title,
-    content,
-    item_id UNINDEXED,
-    content='',
-    tokenize='porter unicode61'
-);
-
 -- =====================================================
--- NEW SCHEMA: Entry-Attachment Model (Zotero-like)
+-- ENTRY TAGS
 -- =====================================================
-
--- Entry types (paper, book, thesis, etc.)
-CREATE TABLE IF NOT EXISTS entry_types (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    display_name TEXT NOT NULL,
-    icon TEXT
-);
-
--- Core entries table (main library entity)
-CREATE TABLE IF NOT EXISTS entries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT NOT NULL UNIQUE,
-    entry_type_id INTEGER NOT NULL REFERENCES entry_types(id),
-    title TEXT NOT NULL,
-    -- Creators (stored as JSON array for multiple authors/editors)
-    creators TEXT,
-    -- Bibliographic metadata
-    publication_date TEXT,
-    doi TEXT,
-    isbn TEXT,
-    issn TEXT,
-    url TEXT,
-    publisher TEXT,
-    journal TEXT,
-    volume TEXT,
-    issue TEXT,
-    pages TEXT,
-    abstract_text TEXT,
-    -- Repository/Archive info
-    repository TEXT,
-    archive_id TEXT,
-    -- Additional fields
-    language TEXT,
-    rights TEXT,
-    extra TEXT,
-    -- Timestamps
-    date_added TEXT NOT NULL DEFAULT (datetime('now')),
-    date_modified TEXT NOT NULL DEFAULT (datetime('now')),
-    is_deleted INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(entry_type_id);
-CREATE INDEX IF NOT EXISTS idx_entries_date_added ON entries(date_added);
-CREATE INDEX IF NOT EXISTS idx_entries_deleted ON entries(is_deleted);
-CREATE INDEX IF NOT EXISTS idx_entries_doi ON entries(doi);
-CREATE INDEX IF NOT EXISTS idx_entries_title ON entries(title);
-
--- Attachment types
-CREATE TABLE IF NOT EXISTS attachment_types (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    display_name TEXT NOT NULL,
-    icon TEXT
-);
-
--- Attachments (children of entries)
-CREATE TABLE IF NOT EXISTS attachments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT NOT NULL UNIQUE,
-    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    attachment_type_id INTEGER NOT NULL REFERENCES attachment_types(id),
-    title TEXT,
-    -- File attachments (PDF, note, snapshot)
-    file_path TEXT,
-    file_hash TEXT,
-    file_size INTEGER,
-    -- URL attachments (weblinks)
-    url TEXT,
-    -- PDF-specific
-    page_count INTEGER,
-    -- Note-specific
-    frontmatter TEXT,
-    -- Thumbnail (path to generated thumbnail image)
-    thumbnail_path TEXT,
-    -- Processing status
-    text_extracted INTEGER NOT NULL DEFAULT 0,
-    embedded INTEGER NOT NULL DEFAULT 0,
-    -- Timestamps
-    date_added TEXT NOT NULL DEFAULT (datetime('now')),
-    date_modified TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_attachments_entry ON attachments(entry_id);
-CREATE INDEX IF NOT EXISTS idx_attachments_type ON attachments(attachment_type_id);
-CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(file_hash);
-
--- Entry tags (link entries to tags)
 CREATE TABLE IF NOT EXISTS entry_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -657,7 +217,24 @@ CREATE TABLE IF NOT EXISTS entry_tags (
 CREATE INDEX IF NOT EXISTS idx_entry_tags_entry ON entry_tags(entry_id);
 CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag_id);
 
--- Collection entries (link entries to collections)
+-- =====================================================
+-- COLLECTIONS
+-- =====================================================
+CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT,
+    color TEXT,
+    icon TEXT,
+    parent_id INTEGER REFERENCES collections(id) ON DELETE SET NULL,
+    date_added TEXT NOT NULL DEFAULT (datetime('now')),
+    date_modified TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- =====================================================
+-- COLLECTION ENTRIES
+-- =====================================================
 CREATE TABLE IF NOT EXISTS collection_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
@@ -670,7 +247,19 @@ CREATE TABLE IF NOT EXISTS collection_entries (
 CREATE INDEX IF NOT EXISTS idx_collection_entries_collection ON collection_entries(collection_id);
 CREATE INDEX IF NOT EXISTS idx_collection_entries_entry ON collection_entries(entry_id);
 
--- Entry links (related entries)
+-- =====================================================
+-- LINK TYPES
+-- =====================================================
+CREATE TABLE IF NOT EXISTS link_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    inverse_name TEXT
+);
+
+-- =====================================================
+-- ENTRY LINKS
+-- =====================================================
 CREATE TABLE IF NOT EXISTS entry_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -685,7 +274,17 @@ CREATE TABLE IF NOT EXISTS entry_links (
 CREATE INDEX IF NOT EXISTS idx_entry_links_source ON entry_links(source_entry_id);
 CREATE INDEX IF NOT EXISTS idx_entry_links_target ON entry_links(target_entry_id);
 
--- Annotations on attachments (PDF annotations)
+-- =====================================================
+-- ANNOTATION TYPES
+-- =====================================================
+CREATE TABLE IF NOT EXISTS annotation_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+-- =====================================================
+-- ATTACHMENT ANNOTATIONS
+-- =====================================================
 CREATE TABLE IF NOT EXISTS attachment_annotations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT NOT NULL UNIQUE,
@@ -704,18 +303,20 @@ CREATE TABLE IF NOT EXISTS attachment_annotations (
 CREATE INDEX IF NOT EXISTS idx_attachment_annotations_attachment ON attachment_annotations(attachment_id);
 CREATE INDEX IF NOT EXISTS idx_attachment_annotations_page ON attachment_annotations(attachment_id, page_number);
 
--- FTS5 for entries search
-CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
-    title,
-    creators,
-    abstract_text,
-    entry_id UNINDEXED,
-    content='',
-    tokenize='porter unicode61'
+-- =====================================================
+-- SETTINGS
+-- =====================================================
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    value_type TEXT NOT NULL DEFAULT 'string',
+    date_modified TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Tab state for entries (new system)
-CREATE TABLE IF NOT EXISTS entry_tab_state (
+-- =====================================================
+-- TAB STATE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS tab_state (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_id INTEGER REFERENCES entries(id) ON DELETE CASCADE,
     attachment_id INTEGER REFERENCES attachments(id) ON DELETE CASCADE,
@@ -726,9 +327,22 @@ CREATE TABLE IF NOT EXISTS entry_tab_state (
     date_opened TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_entry_tab_state_order ON entry_tab_state(order_index);
+CREATE INDEX IF NOT EXISTS idx_tab_state_order ON tab_state(order_index);
 
--- Migration status tracking
+-- =====================================================
+-- FTS5 SEARCH
+-- =====================================================
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+    title,
+    abstract_note,
+    entry_id UNINDEXED,
+    content='',
+    tokenize='porter unicode61'
+);
+
+-- =====================================================
+-- SCHEMA MIGRATIONS TRACKING
+-- =====================================================
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -736,13 +350,493 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 "#;
 
-const SEED_DATA: &str = r#"
--- Insert item types if not exists
-INSERT OR IGNORE INTO item_types (id, name, display_name) VALUES
-    (1, 'pdf', 'PDF Document'),
-    (2, 'markdown', 'Markdown Note');
+// =====================================================
+// SEED DATA: 40 Item Types
+// =====================================================
+const SEED_ITEM_TYPES: &str = r#"
+INSERT OR IGNORE INTO item_types (id, name, display_name, csl_type, icon, sort_order) VALUES
+    (1, 'journalArticle', 'Journal Article', 'article-journal', 'file-text', 1),
+    (2, 'book', 'Book', 'book', 'book', 2),
+    (3, 'bookSection', 'Book Section', 'chapter', 'bookmark', 3),
+    (4, 'conferencePaper', 'Conference Paper', 'paper-conference', 'users', 4),
+    (5, 'thesis', 'Thesis', 'thesis', 'graduation-cap', 5),
+    (6, 'preprint', 'Preprint', 'article', 'file-clock', 6),
+    (7, 'report', 'Report', 'report', 'file-text', 7),
+    (8, 'dataset', 'Dataset', 'dataset', 'database', 8),
+    (9, 'standard', 'Standard', 'standard', 'scale', 9),
+    (10, 'manuscript', 'Manuscript', 'manuscript', 'pen-tool', 10),
+    (11, 'patent', 'Patent', 'patent', 'scroll', 11),
+    (12, 'case', 'Case', 'legal_case', 'gavel', 12),
+    (13, 'statute', 'Statute', 'legislation', 'landmark', 13),
+    (14, 'bill', 'Bill', 'bill', 'file-text', 14),
+    (15, 'hearing', 'Hearing', 'hearing', 'mic', 15),
+    (16, 'artwork', 'Artwork', 'graphic', 'palette', 16),
+    (17, 'film', 'Film', 'motion_picture', 'film', 17),
+    (18, 'videoRecording', 'Video Recording', 'motion_picture', 'video', 18),
+    (19, 'audioRecording', 'Audio Recording', 'song', 'music', 19),
+    (20, 'tvBroadcast', 'TV Broadcast', 'broadcast', 'tv', 20),
+    (21, 'radioBroadcast', 'Radio Broadcast', 'broadcast', 'radio', 21),
+    (22, 'podcast', 'Podcast', 'broadcast', 'headphones', 22),
+    (23, 'webpage', 'Web Page', 'webpage', 'globe', 23),
+    (24, 'blogPost', 'Blog Post', 'post-weblog', 'rss', 24),
+    (25, 'forumPost', 'Forum Post', 'post', 'message-circle', 25),
+    (26, 'encyclopediaArticle', 'Encyclopedia Article', 'entry-encyclopedia', 'book-open', 26),
+    (27, 'dictionaryEntry', 'Dictionary Entry', 'entry-dictionary', 'book-a', 27),
+    (28, 'interview', 'Interview', 'interview', 'mic', 28),
+    (29, 'letter', 'Letter', 'personal_communication', 'mail', 29),
+    (30, 'email', 'E-mail', 'personal_communication', 'at-sign', 30),
+    (31, 'instantMessage', 'Instant Message', 'personal_communication', 'message-square', 31),
+    (32, 'map', 'Map', 'map', 'map', 32),
+    (33, 'presentation', 'Presentation', 'speech', 'presentation', 33),
+    (34, 'computerProgram', 'Software', 'software', 'code', 34),
+    (35, 'document', 'Document', 'document', 'file', 35),
+    (36, 'newspaperArticle', 'Newspaper Article', 'article-newspaper', 'newspaper', 36),
+    (37, 'magazineArticle', 'Magazine Article', 'article-magazine', 'book-open', 37),
+    (38, 'note', 'Note', 'document', 'sticky-note', 38),
+    (39, 'attachment', 'Attachment', 'document', 'paperclip', 39),
+    (40, 'annotation', 'Annotation', 'document', 'highlighter', 40);
+"#;
 
--- Insert link types if not exists
+// =====================================================
+// SEED DATA: 47 Creator Types
+// =====================================================
+const SEED_CREATOR_TYPES: &str = r#"
+INSERT OR IGNORE INTO creator_types (id, name, display_name, csl_type) VALUES
+    (1, 'author', 'Author', 'author'),
+    (2, 'contributor', 'Contributor', 'contributor'),
+    (3, 'editor', 'Editor', 'editor'),
+    (4, 'translator', 'Translator', 'translator'),
+    (5, 'seriesEditor', 'Series Editor', 'collection-editor'),
+    (6, 'bookAuthor', 'Book Author', 'container-author'),
+    (7, 'reviewedAuthor', 'Reviewed Author', 'reviewed-author'),
+    (8, 'recipient', 'Recipient', 'recipient'),
+    (9, 'performer', 'Performer', 'performer'),
+    (10, 'composer', 'Composer', 'composer'),
+    (11, 'artist', 'Artist', 'author'),
+    (12, 'cosponsor', 'Cosponsor', 'author'),
+    (13, 'podcaster', 'Podcaster', 'host'),
+    (14, 'cartographer', 'Cartographer', 'author'),
+    (15, 'presenter', 'Presenter', 'author'),
+    (16, 'counsel', 'Counsel', 'author'),
+    (17, 'interviewee', 'Interview With', 'author'),
+    (18, 'interviewer', 'Interviewer', 'interviewer'),
+    (19, 'director', 'Director', 'director'),
+    (20, 'producer', 'Producer', 'producer'),
+    (21, 'scriptwriter', 'Scriptwriter', 'script-writer'),
+    (22, 'castMember', 'Cast Member', 'performer'),
+    (23, 'sponsor', 'Sponsor', 'author'),
+    (24, 'guest', 'Guest', 'guest'),
+    (25, 'wordsBy', 'Words By', 'author'),
+    (26, 'commenter', 'Commenter', 'author'),
+    (27, 'programmer', 'Programmer', 'author'),
+    (28, 'inventor', 'Inventor', 'author'),
+    (29, 'attorneyAgent', 'Attorney/Agent', 'author'),
+    (30, 'host', 'Host', 'host'),
+    (31, 'narrator', 'Narrator', 'narrator'),
+    (32, 'executiveProducer', 'Executive Producer', 'executive-producer'),
+    (33, 'seriesCreator', 'Series Creator', 'series-creator'),
+    (34, 'creator', 'Creator', 'author'),
+    (35, 'originalCreator', 'Original Creator', 'original-author'),
+    (36, 'organizer', 'Organizer', 'organizer'),
+    (37, 'chair', 'Chair', 'chair');
+"#;
+
+// =====================================================
+// SEED DATA: Field Definitions (90+ fields)
+// =====================================================
+const SEED_FIELDS: &str = r#"
+INSERT OR IGNORE INTO fields (id, name, display_name, csl_field, field_type) VALUES
+    -- Identifiers
+    (1, 'DOI', 'DOI', 'DOI', 'identifier'),
+    (2, 'ISBN', 'ISBN', 'ISBN', 'identifier'),
+    (3, 'ISSN', 'ISSN', 'ISSN', 'identifier'),
+    (4, 'PMID', 'PubMed ID', 'PMID', 'identifier'),
+    (5, 'PMCID', 'PMC ID', 'PMCID', 'identifier'),
+    (6, 'citationKey', 'Citation Key', 'citation-key', 'text'),
+    (7, 'callNumber', 'Call Number', 'call-number', 'text'),
+
+    -- Publication info
+    (10, 'abstractNote', 'Abstract', 'abstract', 'text'),
+    (11, 'publicationTitle', 'Publication', 'container-title', 'text'),
+    (12, 'journalAbbreviation', 'Journal Abbr', 'journalAbbreviation', 'text'),
+    (13, 'volume', 'Volume', 'volume', 'text'),
+    (14, 'issue', 'Issue', 'issue', 'text'),
+    (15, 'pages', 'Pages', 'page', 'text'),
+    (16, 'numPages', 'Num Pages', 'number-of-pages', 'number'),
+    (17, 'section', 'Section', 'section', 'text'),
+    (18, 'series', 'Series', 'collection-title', 'text'),
+    (19, 'seriesNumber', 'Series Number', 'collection-number', 'text'),
+    (20, 'seriesTitle', 'Series Title', 'collection-title', 'text'),
+    (21, 'seriesText', 'Series Text', NULL, 'text'),
+
+    -- Publisher info
+    (25, 'publisher', 'Publisher', 'publisher', 'text'),
+    (26, 'place', 'Place', 'publisher-place', 'text'),
+    (27, 'edition', 'Edition', 'edition', 'text'),
+    (28, 'numberOfVolumes', 'Num Volumes', 'number-of-volumes', 'number'),
+
+    -- Dates
+    (30, 'date', 'Date', 'issued', 'date'),
+    (31, 'accessDate', 'Accessed', 'accessed', 'date'),
+    (32, 'originalDate', 'Original Date', 'original-date', 'date'),
+    (33, 'filingDate', 'Filing Date', 'submitted', 'date'),
+    (34, 'issueDate', 'Issue Date', 'issued', 'date'),
+    (35, 'dateDecided', 'Date Decided', 'issued', 'date'),
+    (36, 'dateEnacted', 'Date Enacted', 'issued', 'date'),
+
+    -- Archive/Library
+    (40, 'archive', 'Archive', 'archive', 'text'),
+    (41, 'archiveLocation', 'Archive Location', 'archive_location', 'text'),
+    (42, 'libraryCatalog', 'Library Catalog', 'source', 'text'),
+
+    -- Other metadata
+    (45, 'shortTitle', 'Short Title', 'title-short', 'text'),
+    (46, 'language', 'Language', 'language', 'text'),
+    (47, 'rights', 'Rights', 'license', 'text'),
+    (48, 'extra', 'Extra', 'note', 'text'),
+
+    -- Thesis specific
+    (50, 'thesisType', 'Type', 'genre', 'text'),
+    (51, 'university', 'University', 'publisher', 'text'),
+
+    -- Patent specific
+    (55, 'patentNumber', 'Patent Number', 'number', 'text'),
+    (56, 'applicationNumber', 'Application Number', 'call-number', 'text'),
+    (57, 'priorityNumbers', 'Priority Numbers', NULL, 'text'),
+    (58, 'assignee', 'Assignee', NULL, 'text'),
+    (59, 'issuingAuthority', 'Issuing Authority', 'authority', 'text'),
+    (60, 'country', 'Country', 'jurisdiction', 'text'),
+    (61, 'legalStatus', 'Legal Status', NULL, 'text'),
+    (62, 'references', 'References', 'references', 'text'),
+
+    -- Legal specific
+    (65, 'court', 'Court', 'authority', 'text'),
+    (66, 'reporter', 'Reporter', 'container-title', 'text'),
+    (67, 'reporterVolume', 'Reporter Volume', 'volume', 'text'),
+    (68, 'firstPage', 'First Page', 'page-first', 'text'),
+    (69, 'docketNumber', 'Docket Number', 'number', 'text'),
+    (70, 'caseName', 'Case Name', 'title', 'text'),
+    (71, 'history', 'History', NULL, 'text'),
+    (72, 'nameOfAct', 'Name of Act', 'title', 'text'),
+    (73, 'billNumber', 'Bill Number', 'number', 'text'),
+    (74, 'code', 'Code', 'container-title', 'text'),
+    (75, 'codeNumber', 'Code Number', 'volume', 'text'),
+    (76, 'codeVolume', 'Code Volume', 'volume', 'text'),
+    (77, 'codePages', 'Code Pages', 'page', 'text'),
+    (78, 'session', 'Session', NULL, 'text'),
+    (79, 'legislativeBody', 'Legislative Body', 'authority', 'text'),
+    (80, 'publicLawNumber', 'Public Law Number', 'number', 'text'),
+    (81, 'committee', 'Committee', 'section', 'text'),
+    (82, 'documentNumber', 'Document Number', 'number', 'text'),
+
+    -- Conference/Meeting
+    (85, 'conferenceName', 'Conference', 'event-title', 'text'),
+    (86, 'proceedingsTitle', 'Proceedings Title', 'container-title', 'text'),
+    (87, 'meetingName', 'Meeting Name', 'event-title', 'text'),
+
+    -- Media specific
+    (90, 'runningTime', 'Running Time', 'dimensions', 'text'),
+    (91, 'format', 'Format', 'medium', 'text'),
+    (92, 'artworkSize', 'Artwork Size', 'dimensions', 'text'),
+    (93, 'artworkMedium', 'Medium', 'medium', 'text'),
+    (94, 'audioFileType', 'File Type', 'medium', 'text'),
+    (95, 'videoFileType', 'File Type', 'medium', 'text'),
+    (96, 'label', 'Label', 'publisher', 'text'),
+    (97, 'studio', 'Studio', 'publisher', 'text'),
+    (98, 'network', 'Network', 'publisher', 'text'),
+    (99, 'distributor', 'Distributor', 'publisher', 'text'),
+    (100, 'genre', 'Genre', 'genre', 'text'),
+    (101, 'episodeNumber', 'Episode', 'number', 'text'),
+
+    -- Software specific
+    (105, 'system', 'System', 'medium', 'text'),
+    (106, 'programmingLanguage', 'Programming Language', 'genre', 'text'),
+    (107, 'company', 'Company', 'publisher', 'text'),
+    (108, 'versionNumber', 'Version', 'version', 'text'),
+
+    -- Map specific
+    (110, 'scale', 'Scale', 'scale', 'text'),
+    (111, 'mapType', 'Type', 'genre', 'text'),
+
+    -- Web/Blog specific
+    (115, 'websiteTitle', 'Website Title', 'container-title', 'text'),
+    (116, 'websiteType', 'Website Type', 'genre', 'text'),
+    (117, 'blogTitle', 'Blog Title', 'container-title', 'text'),
+    (118, 'forumTitle', 'Forum Title', 'container-title', 'text'),
+    (119, 'postType', 'Post Type', 'genre', 'text'),
+
+    -- Other
+    (120, 'presentationType', 'Type', 'genre', 'text'),
+    (121, 'interviewMedium', 'Medium', 'medium', 'text'),
+    (122, 'letterType', 'Type', 'genre', 'text'),
+    (123, 'manuscriptType', 'Type', 'genre', 'text'),
+    (124, 'reportNumber', 'Report Number', 'number', 'text'),
+    (125, 'reportType', 'Report Type', 'genre', 'text'),
+    (126, 'institution', 'Institution', 'publisher', 'text'),
+    (127, 'medium', 'Medium', 'medium', 'text'),
+    (128, 'type', 'Type', 'genre', 'text'),
+
+    -- Book specific
+    (130, 'bookTitle', 'Book Title', 'container-title', 'text'),
+    (131, 'originalPublisher', 'Original Publisher', 'original-publisher', 'text'),
+    (132, 'originalPlace', 'Original Place', 'original-publisher-place', 'text'),
+
+    -- Encyclopedia/Dictionary
+    (135, 'encyclopediaTitle', 'Encyclopedia Title', 'container-title', 'text'),
+    (136, 'dictionaryTitle', 'Dictionary Title', 'container-title', 'text');
+"#;
+
+// =====================================================
+// SEED DATA: Item Type to Field Mappings
+// =====================================================
+const SEED_ITEM_TYPE_FIELDS: &str = r#"
+-- journalArticle fields
+INSERT OR IGNORE INTO item_type_fields (item_type_id, field_id, sort_order, is_required) VALUES
+    (1, 10, 1, 0),  -- abstractNote
+    (1, 11, 2, 0),  -- publicationTitle
+    (1, 13, 3, 0),  -- volume
+    (1, 14, 4, 0),  -- issue
+    (1, 15, 5, 0),  -- pages
+    (1, 30, 6, 0),  -- date
+    (1, 18, 7, 0),  -- series
+    (1, 20, 8, 0),  -- seriesTitle
+    (1, 21, 9, 0),  -- seriesText
+    (1, 12, 10, 0), -- journalAbbreviation
+    (1, 1, 11, 0),  -- DOI
+    (1, 6, 12, 0),  -- citationKey
+    (1, 4, 13, 0),  -- PMID
+    (1, 5, 14, 0),  -- PMCID
+    (1, 3, 15, 0),  -- ISSN
+    (1, 45, 16, 0), -- shortTitle
+    (1, 46, 17, 0), -- language
+    (1, 40, 18, 0), -- archive
+    (1, 41, 19, 0), -- archiveLocation
+    (1, 42, 20, 0), -- libraryCatalog
+    (1, 7, 21, 0),  -- callNumber
+    (1, 47, 22, 0), -- rights
+    (1, 48, 23, 0); -- extra
+
+-- book fields
+INSERT OR IGNORE INTO item_type_fields (item_type_id, field_id, sort_order, is_required) VALUES
+    (2, 10, 1, 0),  -- abstractNote
+    (2, 18, 2, 0),  -- series
+    (2, 19, 3, 0),  -- seriesNumber
+    (2, 13, 4, 0),  -- volume
+    (2, 28, 5, 0),  -- numberOfVolumes
+    (2, 27, 6, 0),  -- edition
+    (2, 26, 7, 0),  -- place
+    (2, 25, 8, 0),  -- publisher
+    (2, 30, 9, 0),  -- date
+    (2, 16, 10, 0), -- numPages
+    (2, 46, 11, 0), -- language
+    (2, 2, 12, 0),  -- ISBN
+    (2, 45, 13, 0), -- shortTitle
+    (2, 40, 14, 0), -- archive
+    (2, 41, 15, 0), -- archiveLocation
+    (2, 42, 16, 0), -- libraryCatalog
+    (2, 7, 17, 0),  -- callNumber
+    (2, 47, 18, 0), -- rights
+    (2, 48, 19, 0); -- extra
+
+-- bookSection fields
+INSERT OR IGNORE INTO item_type_fields (item_type_id, field_id, sort_order, is_required) VALUES
+    (3, 10, 1, 0),  -- abstractNote
+    (3, 130, 2, 0), -- bookTitle
+    (3, 18, 3, 0),  -- series
+    (3, 19, 4, 0),  -- seriesNumber
+    (3, 13, 5, 0),  -- volume
+    (3, 28, 6, 0),  -- numberOfVolumes
+    (3, 27, 7, 0),  -- edition
+    (3, 26, 8, 0),  -- place
+    (3, 25, 9, 0),  -- publisher
+    (3, 30, 10, 0), -- date
+    (3, 15, 11, 0), -- pages
+    (3, 46, 12, 0), -- language
+    (3, 2, 13, 0),  -- ISBN
+    (3, 45, 14, 0), -- shortTitle
+    (3, 40, 15, 0), -- archive
+    (3, 41, 16, 0), -- archiveLocation
+    (3, 42, 17, 0), -- libraryCatalog
+    (3, 7, 18, 0),  -- callNumber
+    (3, 47, 19, 0), -- rights
+    (3, 48, 20, 0); -- extra
+
+-- conferencePaper fields
+INSERT OR IGNORE INTO item_type_fields (item_type_id, field_id, sort_order, is_required) VALUES
+    (4, 10, 1, 0),  -- abstractNote
+    (4, 30, 2, 0),  -- date
+    (4, 86, 3, 0),  -- proceedingsTitle
+    (4, 85, 4, 0),  -- conferenceName
+    (4, 26, 5, 0),  -- place
+    (4, 25, 6, 0),  -- publisher
+    (4, 13, 7, 0),  -- volume
+    (4, 15, 8, 0),  -- pages
+    (4, 18, 9, 0),  -- series
+    (4, 46, 10, 0), -- language
+    (4, 1, 11, 0),  -- DOI
+    (4, 2, 12, 0),  -- ISBN
+    (4, 45, 13, 0), -- shortTitle
+    (4, 40, 14, 0), -- archive
+    (4, 41, 15, 0), -- archiveLocation
+    (4, 42, 16, 0), -- libraryCatalog
+    (4, 7, 17, 0),  -- callNumber
+    (4, 47, 18, 0), -- rights
+    (4, 48, 19, 0); -- extra
+
+-- thesis fields
+INSERT OR IGNORE INTO item_type_fields (item_type_id, field_id, sort_order, is_required) VALUES
+    (5, 10, 1, 0),  -- abstractNote
+    (5, 50, 2, 0),  -- thesisType
+    (5, 51, 3, 0),  -- university
+    (5, 26, 4, 0),  -- place
+    (5, 30, 5, 0),  -- date
+    (5, 16, 6, 0),  -- numPages
+    (5, 46, 7, 0),  -- language
+    (5, 45, 8, 0),  -- shortTitle
+    (5, 40, 9, 0),  -- archive
+    (5, 41, 10, 0), -- archiveLocation
+    (5, 42, 11, 0), -- libraryCatalog
+    (5, 7, 12, 0),  -- callNumber
+    (5, 47, 13, 0), -- rights
+    (5, 48, 14, 0); -- extra
+
+-- webpage fields
+INSERT OR IGNORE INTO item_type_fields (item_type_id, field_id, sort_order, is_required) VALUES
+    (23, 10, 1, 0),  -- abstractNote
+    (23, 115, 2, 0), -- websiteTitle
+    (23, 116, 3, 0), -- websiteType
+    (23, 30, 4, 0),  -- date
+    (23, 45, 5, 0),  -- shortTitle
+    (23, 46, 6, 0),  -- language
+    (23, 47, 7, 0),  -- rights
+    (23, 48, 8, 0);  -- extra
+
+-- patent fields
+INSERT OR IGNORE INTO item_type_fields (item_type_id, field_id, sort_order, is_required) VALUES
+    (11, 10, 1, 0),  -- abstractNote
+    (11, 60, 2, 0),  -- country
+    (11, 59, 3, 0),  -- issuingAuthority
+    (11, 55, 4, 0),  -- patentNumber
+    (11, 33, 5, 0),  -- filingDate
+    (11, 15, 6, 0),  -- pages
+    (11, 56, 7, 0),  -- applicationNumber
+    (11, 57, 8, 0),  -- priorityNumbers
+    (11, 34, 9, 0),  -- issueDate
+    (11, 62, 10, 0), -- references
+    (11, 61, 11, 0), -- legalStatus
+    (11, 46, 12, 0), -- language
+    (11, 45, 13, 0), -- shortTitle
+    (11, 58, 14, 0), -- assignee
+    (11, 47, 15, 0), -- rights
+    (11, 48, 16, 0); -- extra
+"#;
+
+// =====================================================
+// SEED DATA: Item Type to Creator Type Mappings
+// =====================================================
+const SEED_ITEM_TYPE_CREATOR_TYPES: &str = r#"
+-- journalArticle creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (1, 1, 1, 1),  -- author (primary)
+    (1, 2, 0, 2),  -- contributor
+    (1, 3, 0, 3),  -- editor
+    (1, 4, 0, 4),  -- translator
+    (1, 7, 0, 5);  -- reviewedAuthor
+
+-- book creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (2, 1, 1, 1),  -- author (primary)
+    (2, 2, 0, 2),  -- contributor
+    (2, 3, 0, 3),  -- editor
+    (2, 4, 0, 4),  -- translator
+    (2, 5, 0, 5);  -- seriesEditor
+
+-- bookSection creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (3, 1, 1, 1),  -- author (primary)
+    (3, 6, 0, 2),  -- bookAuthor
+    (3, 2, 0, 3),  -- contributor
+    (3, 3, 0, 4),  -- editor
+    (3, 4, 0, 5),  -- translator
+    (3, 5, 0, 6);  -- seriesEditor
+
+-- conferencePaper creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (4, 1, 1, 1),  -- author (primary)
+    (4, 2, 0, 2),  -- contributor
+    (4, 3, 0, 3),  -- editor
+    (4, 4, 0, 4),  -- translator
+    (4, 5, 0, 5);  -- seriesEditor
+
+-- thesis creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (5, 1, 1, 1),  -- author (primary)
+    (5, 2, 0, 2);  -- contributor
+
+-- patent creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (11, 28, 1, 1), -- inventor (primary)
+    (11, 29, 0, 2), -- attorneyAgent
+    (11, 2, 0, 3);  -- contributor
+
+-- film creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (17, 19, 1, 1), -- director (primary)
+    (17, 2, 0, 2),  -- contributor
+    (17, 20, 0, 3), -- producer
+    (17, 21, 0, 4), -- scriptwriter
+    (17, 22, 0, 5); -- castMember
+
+-- podcast creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (22, 13, 1, 1), -- podcaster (primary)
+    (22, 2, 0, 2),  -- contributor
+    (22, 24, 0, 3); -- guest
+
+-- webpage creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (23, 1, 1, 1),  -- author (primary)
+    (23, 2, 0, 2),  -- contributor
+    (23, 4, 0, 3);  -- translator
+
+-- interview creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (28, 17, 1, 1), -- interviewee (primary)
+    (28, 18, 0, 2), -- interviewer
+    (28, 2, 0, 3),  -- contributor
+    (28, 4, 0, 4);  -- translator
+
+-- presentation creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (33, 15, 1, 1), -- presenter (primary)
+    (33, 2, 0, 2);  -- contributor
+
+-- software creator types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order) VALUES
+    (34, 27, 1, 1), -- programmer (primary)
+    (34, 2, 0, 2);  -- contributor
+
+-- Add default author type for remaining item types
+INSERT OR IGNORE INTO item_type_creator_types (item_type_id, creator_type_id, is_primary, sort_order)
+SELECT id, 1, 1, 1 FROM item_types WHERE id NOT IN (1, 2, 3, 4, 5, 11, 17, 22, 23, 28, 33, 34);
+"#;
+
+// =====================================================
+// SEED DATA: Other (attachment types, link types, etc.)
+// =====================================================
+const SEED_OTHER: &str = r#"
+-- Attachment types
+INSERT OR IGNORE INTO attachment_types (id, name, display_name, icon) VALUES
+    (1, 'pdf', 'PDF Document', 'file-text'),
+    (2, 'note', 'Note', 'edit'),
+    (3, 'weblink', 'Web Link', 'link'),
+    (4, 'snapshot', 'Webpage Snapshot', 'camera'),
+    (5, 'image', 'Image', 'image'),
+    (6, 'video', 'Video', 'video'),
+    (7, 'audio', 'Audio', 'headphones'),
+    (8, 'generic', 'File', 'file');
+
+-- Link types
 INSERT OR IGNORE INTO link_types (id, name, display_name, inverse_name) VALUES
     (1, 'references', 'References', 'Referenced by'),
     (2, 'cites', 'Cites', 'Cited by'),
@@ -752,7 +846,7 @@ INSERT OR IGNORE INTO link_types (id, name, display_name, inverse_name) VALUES
     (6, 'extends', 'Extends', 'Extended by'),
     (7, 'related', 'Related to', 'Related to');
 
--- Insert annotation types if not exists
+-- Annotation types
 INSERT OR IGNORE INTO annotation_types (id, name) VALUES
     (1, 'highlight'),
     (2, 'underline'),
@@ -767,46 +861,4 @@ INSERT OR IGNORE INTO settings (key, value, value_type) VALUES
     ('sidebar_width', '240', 'number'),
     ('right_pane_width', '320', 'number'),
     ('right_pane_visible', 'true', 'boolean');
-
--- =====================================================
--- NEW SEED DATA: Entry Types & Attachment Types
--- =====================================================
-
--- Insert entry types (Zotero-compatible set)
-INSERT OR IGNORE INTO entry_types (id, name, display_name, icon) VALUES
-    (1, 'journal_article', 'Journal Article', 'file-text'),
-    (2, 'book', 'Book', 'book'),
-    (3, 'book_section', 'Book Section', 'bookmark'),
-    (4, 'conference_paper', 'Conference Paper', 'users'),
-    (5, 'thesis', 'Thesis', 'graduation-cap'),
-    (6, 'report', 'Report', 'file-text'),
-    (7, 'patent', 'Patent', 'scroll'),
-    (8, 'preprint', 'Preprint', 'file-clock'),
-    (9, 'webpage', 'Web Page', 'globe'),
-    (10, 'magazine_article', 'Magazine Article', 'newspaper'),
-    (11, 'newspaper_article', 'Newspaper Article', 'newspaper'),
-    (12, 'presentation', 'Presentation', 'presentation'),
-    (13, 'video', 'Video Recording', 'video'),
-    (14, 'podcast', 'Podcast', 'headphones'),
-    (15, 'software', 'Software', 'code'),
-    (16, 'dataset', 'Dataset', 'database'),
-    (17, 'standard', 'Standard', 'scale'),
-    (18, 'manuscript', 'Manuscript', 'pen-tool'),
-    (19, 'letter', 'Letter', 'mail'),
-    (20, 'interview', 'Interview', 'mic'),
-    (21, 'blog_post', 'Blog Post', 'rss'),
-    (22, 'forum_post', 'Forum Post', 'message-circle'),
-    (23, 'document', 'Document', 'file'),
-    (24, 'generic', 'Generic', 'file');
-
--- Insert attachment types
-INSERT OR IGNORE INTO attachment_types (id, name, display_name, icon) VALUES
-    (1, 'pdf', 'PDF Document', 'file-text'),
-    (2, 'note', 'Note', 'edit'),
-    (3, 'weblink', 'Web Link', 'link'),
-    (4, 'snapshot', 'Webpage Snapshot', 'camera'),
-    (5, 'image', 'Image', 'image'),
-    (6, 'video', 'Video', 'video'),
-    (7, 'audio', 'Audio', 'headphones'),
-    (8, 'generic', 'File', 'file');
 "#;

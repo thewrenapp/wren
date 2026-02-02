@@ -1,122 +1,95 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Item {
-    pub id: i64,
-    pub key: String,
-    #[serde(rename = "type")]
-    pub item_type: String,
-    pub title: String,
-    #[serde(rename = "dateAdded")]
-    pub date_added: String,
-    #[serde(rename = "dateModified")]
-    pub date_modified: String,
-    pub tags: Vec<Tag>,
-    pub collections: Vec<String>,
-}
+// =====================================================
+// SCHEMA TYPES (Item Types, Fields, Creator Types)
+// =====================================================
 
+/// Item type definition (journalArticle, book, thesis, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PdfItemDetails {
-    #[serde(rename = "filePath")]
-    pub file_path: String,
-    #[serde(rename = "pageCount")]
-    pub page_count: Option<i32>,
-    pub author: Option<String>,
-    #[serde(rename = "abstract")]
-    pub abstract_text: Option<String>,
-    pub doi: Option<String>,
-    #[serde(rename = "publicationDate")]
-    pub publication_date: Option<String>,
-    pub publisher: Option<String>,
-    pub journal: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MarkdownItemDetails {
-    #[serde(rename = "filePath")]
-    pub file_path: String,
-    pub frontmatter: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Collection {
-    pub id: i64,
-    pub key: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub color: Option<String>,
-    pub icon: Option<String>,
-    #[serde(rename = "itemCount")]
-    pub item_count: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Tag {
+pub struct ItemType {
     pub id: i64,
     pub name: String,
-    pub color: Option<String>,
-    #[serde(rename = "itemCount")]
-    pub item_count: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ItemLink {
-    pub id: i64,
-    #[serde(rename = "sourceItemId")]
-    pub source_item_id: i64,
-    #[serde(rename = "targetItemId")]
-    pub target_item_id: i64,
-    #[serde(rename = "linkType")]
-    pub link_type: String,
-    #[serde(rename = "linkTypeDisplay")]
-    pub link_type_display: String,
-    pub context: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateItemInput {
-    pub title: String,
-    #[serde(rename = "type")]
-    pub item_type: String,
-    #[serde(rename = "filePath")]
-    pub file_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateItemInput {
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateCollectionInput {
-    pub name: String,
-    pub description: Option<String>,
-    pub color: Option<String>,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "cslType")]
+    pub csl_type: Option<String>,
     pub icon: Option<String>,
 }
 
+/// Field definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Setting {
-    pub key: String,
-    pub value: String,
-    #[serde(rename = "valueType")]
-    pub value_type: String,
+pub struct FieldDefinition {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "cslField")]
+    pub csl_field: Option<String>,
+    #[serde(rename = "fieldType")]
+    pub field_type: String, // "text", "date", "number", "url", "identifier"
+    #[serde(rename = "sortOrder")]
+    pub sort_order: i32,
+    #[serde(rename = "isRequired")]
+    pub is_required: bool,
+}
+
+/// Creator type definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatorType {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "cslType")]
+    pub csl_type: Option<String>,
+}
+
+/// Creator type with primary flag for a specific item type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatorTypeInfo {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "isPrimary")]
+    pub is_primary: bool,
+}
+
+/// Complete item type info with valid fields and creator types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemTypeInfo {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "cslType")]
+    pub csl_type: Option<String>,
+    pub icon: Option<String>,
+    pub fields: Vec<FieldDefinition>,
+    #[serde(rename = "creatorTypes")]
+    pub creator_types: Vec<CreatorTypeInfo>,
 }
 
 // =====================================================
-// NEW MODELS: Entry-Attachment System
+// ENTRY & CREATOR MODELS
 // =====================================================
 
 /// A creator (author, editor, etc.) for an entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Creator {
+    pub id: Option<i64>,
     #[serde(rename = "creatorType")]
-    pub creator_type: String, // "author", "editor", "translator", etc.
+    pub creator_type: String,
+    #[serde(rename = "creatorTypeDisplay")]
+    pub creator_type_display: Option<String>,
     #[serde(rename = "firstName")]
     pub first_name: Option<String>,
     #[serde(rename = "lastName")]
     pub last_name: Option<String>,
-    pub name: Option<String>, // For single-field names (institutions, etc.)
+    pub name: Option<String>,
+    #[serde(rename = "sortOrder")]
+    pub sort_order: i32,
 }
 
 impl Creator {
@@ -146,84 +119,96 @@ impl Creator {
     }
 }
 
-/// Entry type information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntryType {
-    pub id: i64,
-    pub name: String,
-    #[serde(rename = "displayName")]
-    pub display_name: String,
-    pub icon: Option<String>,
-}
-
-/// A library entry (paper, book, etc.)
+/// A library entry (paper, book, etc.) with dynamic fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub id: i64,
     pub key: String,
-    #[serde(rename = "entryType")]
-    pub entry_type: String,
-    #[serde(rename = "entryTypeDisplay")]
-    pub entry_type_display: String,
+    #[serde(rename = "itemType")]
+    pub item_type: String,
+    #[serde(rename = "itemTypeDisplay")]
+    pub item_type_display: String,
     pub title: String,
-    pub creators: Vec<Creator>,
-    // Bibliographic metadata
-    #[serde(rename = "publicationDate")]
-    pub publication_date: Option<String>,
-    pub doi: Option<String>,
-    pub isbn: Option<String>,
-    pub issn: Option<String>,
+    pub date: Option<String>,
     pub url: Option<String>,
-    pub publisher: Option<String>,
-    pub journal: Option<String>,
-    pub volume: Option<String>,
-    pub issue: Option<String>,
-    pub pages: Option<String>,
-    #[serde(rename = "abstract")]
-    pub abstract_text: Option<String>,
-    // Repository/Archive
-    pub repository: Option<String>,
-    #[serde(rename = "archiveId")]
-    pub archive_id: Option<String>,
-    // Additional
-    pub language: Option<String>,
-    pub rights: Option<String>,
-    pub extra: Option<String>,
-    // Timestamps
+    #[serde(rename = "accessDate")]
+    pub access_date: Option<String>,
+    pub creators: Vec<Creator>,
+    /// Dynamic fields stored as key-value pairs
+    pub fields: HashMap<String, String>,
     #[serde(rename = "dateAdded")]
     pub date_added: String,
     #[serde(rename = "dateModified")]
     pub date_modified: String,
-    // Related data
     pub tags: Vec<Tag>,
-    pub collections: Vec<String>,
+    pub collections: Vec<i64>,
     pub attachments: Vec<Attachment>,
-    #[serde(rename = "attachmentCount")]
-    pub attachment_count: i64,
 }
 
 impl Entry {
-    /// Get the formatted creator string for display (e.g., "Smith et al." or "Smith & Jones")
+    /// Get the formatted creator string for display
     pub fn creators_display(&self) -> String {
-        let authors: Vec<&Creator> = self.creators.iter()
-            .filter(|c| c.creator_type == "author")
+        let primary_creators: Vec<&Creator> = self.creators.iter()
+            .filter(|c| c.sort_order == 0 || c.creator_type == "author")
             .collect();
 
-        match authors.len() {
-            0 => String::new(),
-            1 => authors[0].short_name(),
-            2 => format!("{} & {}", authors[0].short_name(), authors[1].short_name()),
-            _ => format!("{} et al.", authors[0].short_name()),
+        match primary_creators.len() {
+            0 => {
+                // Fall back to first creator
+                self.creators.first()
+                    .map(|c| c.short_name())
+                    .unwrap_or_default()
+            }
+            1 => primary_creators[0].short_name(),
+            2 => format!("{} & {}", primary_creators[0].short_name(), primary_creators[1].short_name()),
+            _ => format!("{} et al.", primary_creators[0].short_name()),
         }
     }
 
-    /// Get the year from publication_date
+    /// Get the year from date field
     pub fn year(&self) -> Option<String> {
-        self.publication_date.as_ref().map(|d| {
+        self.date.as_ref().map(|d| {
             d.split('-').next().unwrap_or(d).to_string()
         })
     }
+
+    /// Get a field value by name
+    pub fn get_field(&self, name: &str) -> Option<&String> {
+        self.fields.get(name)
+    }
 }
+
+/// Summary info for an entry (used in list views)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntrySummary {
+    pub id: i64,
+    pub key: String,
+    #[serde(rename = "itemType")]
+    pub item_type: String,
+    #[serde(rename = "itemTypeDisplay")]
+    pub item_type_display: String,
+    pub title: String,
+    #[serde(rename = "creatorsDisplay")]
+    pub creators_display: String,
+    pub year: Option<String>,
+    #[serde(rename = "dateAdded")]
+    pub date_added: String,
+    #[serde(rename = "dateModified")]
+    pub date_modified: Option<String>,
+    pub tags: Vec<Tag>,
+    #[serde(rename = "attachmentCount")]
+    pub attachment_count: i64,
+    #[serde(rename = "hasPdf")]
+    pub has_pdf: bool,
+    #[serde(rename = "hasNote")]
+    pub has_note: bool,
+    #[serde(rename = "thumbnailPath")]
+    pub thumbnail_path: Option<String>,
+}
+
+// =====================================================
+// ATTACHMENT MODELS
+// =====================================================
 
 /// Attachment type information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,84 +232,89 @@ pub struct Attachment {
     #[serde(rename = "attachmentTypeDisplay")]
     pub attachment_type_display: String,
     pub title: Option<String>,
-    // File attachments
     #[serde(rename = "filePath")]
     pub file_path: Option<String>,
     #[serde(rename = "fileHash")]
     pub file_hash: Option<String>,
     #[serde(rename = "fileSize")]
     pub file_size: Option<i64>,
-    // URL attachments
     pub url: Option<String>,
-    // PDF-specific
     #[serde(rename = "pageCount")]
     pub page_count: Option<i32>,
-    // Note-specific
     pub frontmatter: Option<String>,
-    // Thumbnail
     #[serde(rename = "thumbnailPath")]
     pub thumbnail_path: Option<String>,
-    // Timestamps
     #[serde(rename = "dateAdded")]
     pub date_added: String,
     #[serde(rename = "dateModified")]
     pub date_modified: String,
 }
 
+// =====================================================
+// TAG & COLLECTION MODELS
+// =====================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
+    pub color: Option<String>,
+    #[serde(rename = "itemCount")]
+    pub item_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Collection {
+    pub id: i64,
+    pub key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub icon: Option<String>,
+    #[serde(rename = "parentId")]
+    pub parent_id: Option<i64>,
+    #[serde(rename = "itemCount")]
+    pub item_count: i64,
+}
+
+// =====================================================
+// INPUT TYPES
+// =====================================================
+
 /// Input for creating a new entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateEntryInput {
-    #[serde(rename = "entryType")]
-    pub entry_type: String,
+    #[serde(rename = "itemType")]
+    pub item_type: String,
     pub title: String,
-    pub creators: Option<Vec<Creator>>,
-    #[serde(rename = "publicationDate")]
-    pub publication_date: Option<String>,
-    pub doi: Option<String>,
-    pub isbn: Option<String>,
-    pub issn: Option<String>,
+    pub date: Option<String>,
     pub url: Option<String>,
-    pub publisher: Option<String>,
-    pub journal: Option<String>,
-    pub volume: Option<String>,
-    pub issue: Option<String>,
-    pub pages: Option<String>,
-    #[serde(rename = "abstract")]
-    pub abstract_text: Option<String>,
-    pub repository: Option<String>,
-    #[serde(rename = "archiveId")]
-    pub archive_id: Option<String>,
-    pub language: Option<String>,
-    pub rights: Option<String>,
-    pub extra: Option<String>,
+    pub creators: Option<Vec<CreatorInput>>,
+    pub fields: Option<HashMap<String, String>>,
 }
 
 /// Input for updating an entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateEntryInput {
-    #[serde(rename = "entryType")]
-    pub entry_type: Option<String>,
+    #[serde(rename = "itemType")]
+    pub item_type: Option<String>,
     pub title: Option<String>,
-    pub creators: Option<Vec<Creator>>,
-    #[serde(rename = "publicationDate")]
-    pub publication_date: Option<String>,
-    pub doi: Option<String>,
-    pub isbn: Option<String>,
-    pub issn: Option<String>,
+    pub date: Option<String>,
     pub url: Option<String>,
-    pub publisher: Option<String>,
-    pub journal: Option<String>,
-    pub volume: Option<String>,
-    pub issue: Option<String>,
-    pub pages: Option<String>,
-    #[serde(rename = "abstract")]
-    pub abstract_text: Option<String>,
-    pub repository: Option<String>,
-    #[serde(rename = "archiveId")]
-    pub archive_id: Option<String>,
-    pub language: Option<String>,
-    pub rights: Option<String>,
-    pub extra: Option<String>,
+    pub creators: Option<Vec<CreatorInput>>,
+    pub fields: Option<HashMap<String, String>>,
+}
+
+/// Input for creating/updating a creator
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatorInput {
+    #[serde(rename = "creatorType")]
+    pub creator_type: String,
+    #[serde(rename = "firstName")]
+    pub first_name: Option<String>,
+    #[serde(rename = "lastName")]
+    pub last_name: Option<String>,
+    pub name: Option<String>,
 }
 
 /// Input for creating an attachment
@@ -340,28 +330,43 @@ pub struct CreateAttachmentInput {
     pub url: Option<String>,
 }
 
-/// Summary info for an entry (used in list views)
+/// Input for creating a collection
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntrySummary {
+pub struct CreateCollectionInput {
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub icon: Option<String>,
+    #[serde(rename = "parentId")]
+    pub parent_id: Option<i64>,
+}
+
+// =====================================================
+// LINK MODELS
+// =====================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntryLink {
     pub id: i64,
+    #[serde(rename = "sourceEntryId")]
+    pub source_entry_id: i64,
+    #[serde(rename = "targetEntryId")]
+    pub target_entry_id: i64,
+    #[serde(rename = "linkType")]
+    pub link_type: String,
+    #[serde(rename = "linkTypeDisplay")]
+    pub link_type_display: String,
+    pub context: Option<String>,
+}
+
+// =====================================================
+// SETTINGS
+// =====================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Setting {
     pub key: String,
-    #[serde(rename = "entryType")]
-    pub entry_type: String,
-    pub title: String,
-    #[serde(rename = "creatorsDisplay")]
-    pub creators_display: String,
-    pub year: Option<String>,
-    #[serde(rename = "dateAdded")]
-    pub date_added: String,
-    #[serde(rename = "dateModified")]
-    pub date_modified: Option<String>,
-    pub tags: Vec<Tag>,
-    #[serde(rename = "attachmentCount")]
-    pub attachment_count: i64,
-    #[serde(rename = "hasPdf")]
-    pub has_pdf: bool,
-    #[serde(rename = "hasNote")]
-    pub has_note: bool,
-    #[serde(rename = "thumbnailPath")]
-    pub thumbnail_path: Option<String>,
+    pub value: String,
+    #[serde(rename = "valueType")]
+    pub value_type: String,
 }

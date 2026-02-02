@@ -66,30 +66,21 @@ export interface AttachmentType {
 export interface Entry {
   id: number;
   key: string;
-  entryType: string;
-  entryTypeDisplay: string;
+  itemType: string;
+  itemTypeDisplay: string;
   title: string;
   creators: Creator[];
-  publicationDate?: string;
-  doi?: string;
-  isbn?: string;
-  issn?: string;
+  // Dynamic fields from EAV table
+  fields: Record<string, string>;
+  // Core fields (also in fields map but commonly accessed)
+  date?: string;
   url?: string;
-  publisher?: string;
-  journal?: string;
-  volume?: string;
-  issue?: string;
-  pages?: string;
-  abstract?: string;
-  repository?: string;
-  archiveId?: string;
-  language?: string;
-  rights?: string;
-  extra?: string;
+  accessDate?: string;
+  // Metadata
   dateAdded: string;
   dateModified: string;
   tags: Tag[];
-  collections: string[];
+  collections: number[];
   attachments: Attachment[];
   attachmentCount: number;
 }
@@ -97,7 +88,8 @@ export interface Entry {
 export interface EntrySummary {
   id: number;
   key: string;
-  entryType: string;
+  itemType: string;
+  itemTypeDisplay: string;
   title: string;
   creatorsDisplay: string;
   year?: string;
@@ -128,48 +120,29 @@ export interface Attachment {
   dateModified: string;
 }
 
+export interface CreatorInput {
+  creatorType: string;
+  firstName?: string;
+  lastName?: string;
+  name?: string; // For single-field names (institutions)
+}
+
 export interface CreateEntryInput {
-  entryType: string;
+  itemType: string;
   title: string;
-  creators?: Creator[];
-  publicationDate?: string;
-  doi?: string;
-  isbn?: string;
-  issn?: string;
+  date?: string;
   url?: string;
-  publisher?: string;
-  journal?: string;
-  volume?: string;
-  issue?: string;
-  pages?: string;
-  abstract?: string;
-  repository?: string;
-  archiveId?: string;
-  language?: string;
-  rights?: string;
-  extra?: string;
+  creators?: CreatorInput[];
+  fields?: Record<string, string>;
 }
 
 export interface UpdateEntryInput {
-  entryType?: string;
+  itemType?: string;
   title?: string;
-  creators?: Creator[];
-  publicationDate?: string;
-  doi?: string;
-  isbn?: string;
-  issn?: string;
+  date?: string;
   url?: string;
-  publisher?: string;
-  journal?: string;
-  volume?: string;
-  issue?: string;
-  pages?: string;
-  abstract?: string;
-  repository?: string;
-  archiveId?: string;
-  language?: string;
-  rights?: string;
-  extra?: string;
+  creators?: CreatorInput[];
+  fields?: Record<string, string>;
 }
 
 export interface CreateAttachmentInput {
@@ -198,8 +171,8 @@ export async function getEntries(params?: {
   });
 }
 
-export async function getEntry(id: number): Promise<Entry> {
-  return invoke("get_entry", { id });
+export async function getEntry(id: number, includeDeleted?: boolean): Promise<Entry> {
+  return invoke("get_entry", { id, includeDeleted: includeDeleted ?? false });
 }
 
 export async function createEntry(input: CreateEntryInput): Promise<Entry> {
@@ -215,6 +188,10 @@ export async function updateEntry(
 
 export async function deleteEntry(id: number): Promise<void> {
   return invoke("delete_entry", { id });
+}
+
+export async function duplicateEntry(id: number): Promise<Entry> {
+  return invoke("duplicate_entry", { id });
 }
 
 // =====================================================
@@ -249,6 +226,16 @@ export async function getEntryAttachments(
   entryId: number
 ): Promise<Attachment[]> {
   return invoke("get_entry_attachments", { entryId });
+}
+
+/**
+ * Batch fetch attachments for multiple entries in ONE call
+ * Returns a map of entryId -> attachments[]
+ */
+export async function getEntriesAttachments(
+  entryIds: number[]
+): Promise<Record<number, Attachment[]>> {
+  return invoke("get_entries_attachments", { entryIds });
 }
 
 export async function getAttachment(id: number): Promise<Attachment> {
@@ -332,9 +319,9 @@ export async function deleteTag(id: number): Promise<void> {
 
 export async function addEntryTag(
   entryId: number,
-  tagId: number
-): Promise<void> {
-  return invoke("add_entry_tag", { entryId, tagId });
+  tagName: string
+): Promise<Tag> {
+  return invoke("add_tag_to_item", { entryId, tagName });
 }
 
 export async function removeEntryTag(
@@ -342,6 +329,21 @@ export async function removeEntryTag(
   tagId: number
 ): Promise<void> {
   return invoke("remove_entry_tag", { entryId, tagId });
+}
+
+export async function addTagToEntries(
+  tagName: string,
+  entryIds: number[]
+): Promise<Tag> {
+  return invoke("add_tag_to_entries", { tagName, entryIds });
+}
+
+export async function updateTag(
+  id: number,
+  name?: string,
+  color?: string
+): Promise<Tag> {
+  return invoke("update_tag", { id, name, color });
 }
 
 // =====================================================
@@ -358,6 +360,26 @@ export async function importPdfs(filePaths: string[]): Promise<ImportResult[]> {
 
 export async function importFolder(folderPath: string): Promise<ImportResult[]> {
   return invoke("import_folder", { folderPath });
+}
+
+export interface BibtexImportResult {
+  imported: number;
+  skipped: number;
+  errors: string[];
+}
+
+export async function importBibtex(content: string): Promise<BibtexImportResult> {
+  return invoke("import_bibtex", { content });
+}
+
+export interface CslJsonImportResult {
+  imported: number;
+  skipped: number;
+  errors: string[];
+}
+
+export async function importCslJson(content: string): Promise<CslJsonImportResult> {
+  return invoke("import_csl_json", { content });
 }
 
 // =====================================================
@@ -403,7 +425,7 @@ export async function showEntryInFinder(entryId: number): Promise<void> {
 export interface Annotation {
   id: number;
   key: string;
-  itemId: number;
+  attachmentId: number;
   annotationType: string;
   pageNumber: number;
   positionJson: string;
@@ -415,7 +437,7 @@ export interface Annotation {
 }
 
 export interface CreateAnnotationInput {
-  itemId: number;
+  attachmentId: number;
   annotationType: string;
   pageNumber: number;
   positionJson: string;
@@ -434,8 +456,8 @@ export interface UpdateAnnotationInput {
 // Annotation Commands
 // =====================================================
 
-export async function getAnnotations(itemId: number): Promise<Annotation[]> {
-  return invoke("get_annotations", { itemId });
+export async function getAnnotations(attachmentId: number): Promise<Annotation[]> {
+  return invoke("get_annotations", { attachmentId });
 }
 
 export async function createAnnotation(
@@ -472,26 +494,89 @@ export interface PdfAnnotationData {
 // =====================================================
 
 export async function saveAnnotationToPdf(
-  itemId: number,
+  attachmentId: number,
   annotationKey: string,
   annotationData: PdfAnnotationData
 ): Promise<void> {
   return invoke("save_annotation_to_pdf", {
-    itemId,
+    attachmentId,
     annotationKey,
     annotationData,
   });
 }
 
 export async function removeAnnotationFromPdf(
-  itemId: number,
+  attachmentId: number,
   annotationKey: string
 ): Promise<boolean> {
-  return invoke("remove_annotation_from_pdf", { itemId, annotationKey });
+  return invoke("remove_annotation_from_pdf", { attachmentId, annotationKey });
 }
 
 export async function importAnnotationsFromPdf(
-  itemId: number
+  attachmentId: number
 ): Promise<Annotation[]> {
-  return invoke("import_annotations_from_pdf", { itemId });
+  return invoke("import_annotations_from_pdf", { attachmentId });
+}
+
+// =====================================================
+// Export Commands
+// =====================================================
+
+export async function exportToCslJson(entryIds: number[]): Promise<string> {
+  return invoke("export_to_csl_json", { entryIds });
+}
+
+export async function exportToBibtex(entryIds: number[]): Promise<string> {
+  return invoke("export_to_bibtex", { entryIds });
+}
+
+export async function exportAllToCslJson(): Promise<string> {
+  return invoke("export_all_to_csl_json");
+}
+
+export async function exportAllToBibtex(): Promise<string> {
+  return invoke("export_all_to_bibtex");
+}
+
+// =====================================================
+// Duplicate Detection Commands
+// =====================================================
+
+export interface DuplicateEntry {
+  id: number;
+  key: string;
+  title: string;
+  itemType: string;
+  date?: string;
+  dateAdded: string;
+  doi?: string;
+  creatorsDisplay?: string;
+  attachmentCount: number;
+}
+
+export interface DuplicateGroup {
+  entries: DuplicateEntry[];
+  matchReason: string;
+}
+
+export async function findDuplicates(): Promise<DuplicateGroup[]> {
+  return invoke("find_duplicates");
+}
+
+export async function getDuplicateCount(): Promise<number> {
+  return invoke("get_duplicate_count");
+}
+
+export async function mergeEntries(
+  targetId: number,
+  sourceIds: number[]
+): Promise<void> {
+  return invoke("merge_entries", { targetId, sourceIds });
+}
+
+export async function discardDuplicates(
+  keepId: number,
+  discardIds: number[]
+): Promise<void> {
+  return invoke("discard_duplicates", { keepId, discardIds });
 }

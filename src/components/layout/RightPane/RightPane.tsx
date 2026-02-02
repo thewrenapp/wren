@@ -3,18 +3,21 @@ import { useTabStore } from "@/stores/tabStore";
 import { EntryInfoPanel } from "./EntryInfoPanel";
 
 export function RightPane() {
-  const { entries, selectedEntryIds } = useLibraryStore();
+  const { entries, selectedEntryIds, trashedEntries } = useLibraryStore();
   const { tabs, activeTabId } = useTabStore();
 
   // Get the active tab
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
   // Get selected entry - either from selection or from active entry tab
+  // Check both entries and trashedEntries since we might be in trash view
   const selectedEntry =
     selectedEntryIds.length === 1
-      ? entries.find((e) => String(e.id) === String(selectedEntryIds[0]))
+      ? entries.find((e) => String(e.id) === String(selectedEntryIds[0])) ||
+        trashedEntries.find((e) => String(e.id) === String(selectedEntryIds[0]))
       : activeTab?.type === "entry" && activeTab.entryId
-        ? entries.find((e) => String(e.id) === String(activeTab.entryId))
+        ? entries.find((e) => String(e.id) === String(activeTab.entryId)) ||
+          trashedEntries.find((e) => String(e.id) === String(activeTab.entryId))
         : null;
 
   // Multiple entries selected

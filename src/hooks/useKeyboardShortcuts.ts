@@ -1,13 +1,77 @@
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { deleteEntry, duplicateEntry, exportToBibtex } from "@/services/tauri";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { toast } from "@/stores/toastStore";
+
+// Threshold for showing confirmation dialog
+const BULK_DELETE_THRESHOLD = 3;
 
 export function useKeyboardShortcuts() {
-  const { toggleCommandPalette, setViewMode, viewMode } = useUIStore();
+  const { toggleCommandPalette, setViewMode, viewMode, showDeleteConfirmation } = useUIStore();
   const { closeTab, activeTabId, tabs, setActiveTab, openTab } = useTabStore();
-  const { selectedEntryIds, entries, selectEntry, clearSelection } =
+  const { selectedEntryIds, entries, selectEntry, clearSelection, refreshLibrary } =
     useLibraryStore();
+
+  // Actual delete operation
+  const performDelete = useCallback(async () => {
+    if (selectedEntryIds.length === 0) return;
+
+    // Delete all selected entries (soft delete - moves to trash)
+    for (const id of selectedEntryIds) {
+      try {
+        await deleteEntry(id);
+      } catch (err) {
+        console.error(`Failed to delete entry ${id}:`, err);
+      }
+    }
+
+    clearSelection();
+    refreshLibrary();
+  }, [selectedEntryIds, clearSelection, refreshLibrary]);
+
+  // Handle delete for selected entries (with confirmation for bulk)
+  const handleDeleteSelected = useCallback(() => {
+    if (selectedEntryIds.length === 0) return;
+
+    // Show confirmation for bulk deletes
+    if (selectedEntryIds.length >= BULK_DELETE_THRESHOLD) {
+      showDeleteConfirmation(selectedEntryIds, performDelete);
+    } else {
+      // Direct delete for small number of entries
+      performDelete();
+    }
+  }, [selectedEntryIds, showDeleteConfirmation, performDelete]);
+
+  // Handle duplicate for single selected entry
+  const handleDuplicate = useCallback(async () => {
+    if (selectedEntryIds.length !== 1) return;
+
+    try {
+      await duplicateEntry(selectedEntryIds[0]);
+      toast.success("Entry duplicated");
+      refreshLibrary();
+    } catch (err) {
+      console.error("Failed to duplicate entry:", err);
+      toast.error("Failed to duplicate entry");
+    }
+  }, [selectedEntryIds, refreshLibrary]);
+
+  // Handle export to BibTeX (copy to clipboard)
+  const handleExport = useCallback(async () => {
+    if (selectedEntryIds.length === 0) return;
+
+    try {
+      const bibtex = await exportToBibtex(selectedEntryIds);
+      await writeText(bibtex);
+      toast.success(`Copied ${selectedEntryIds.length} entries as BibTeX`);
+    } catch (err) {
+      console.error("Failed to export:", err);
+      toast.error("Failed to export");
+    }
+  }, [selectedEntryIds]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -126,9 +190,30 @@ export function useKeyboardShortcuts() {
           openTab({
             type: "entry",
             title: entry.title,
-            entryId: entry.id,
+            entryId: String(entry.id),
           });
         }
+        return;
+      }
+
+      // Delete/Backspace: Move selected entries to trash
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedEntryIds.length > 0) {
+        e.preventDefault();
+        handleDeleteSelected();
+        return;
+      }
+
+      // Cmd+D: Duplicate entry
+      if (isMeta && e.key === "d" && selectedEntryIds.length === 1) {
+        e.preventDefault();
+        handleDuplicate();
+        return;
+      }
+
+      // Cmd+E: Export selected as BibTeX (copy to clipboard)
+      if (isMeta && e.key === "e" && selectedEntryIds.length > 0) {
+        e.preventDefault();
+        handleExport();
         return;
       }
     };
@@ -148,5 +233,8 @@ export function useKeyboardShortcuts() {
     selectEntry,
     clearSelection,
     openTab,
+    handleDeleteSelected,
+    handleDuplicate,
+    handleExport,
   ]);
 }

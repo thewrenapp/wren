@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { Toaster } from "@/components/ui/Toaster";
+import { DeleteConfirmationDialog } from "@/components/dialogs/DeleteConfirmationDialog";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useTabStore } from "@/stores/tabStore";
 
@@ -45,7 +47,13 @@ function App() {
     return () => document.removeEventListener("contextmenu", handleContextMenu);
   }, []);
 
-  return <AppLayout />;
+  return (
+    <>
+      <AppLayout />
+      <Toaster />
+      <DeleteConfirmationDialog />
+    </>
+  );
 }
 
 export default App;

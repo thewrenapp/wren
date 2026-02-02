@@ -1,3 +1,4 @@
+import { Checkbox } from "@/components/ui/checkbox";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export function AISearchSection() {
@@ -17,7 +18,7 @@ export function AISearchSection() {
             <select
               value={embeddingModel}
               onChange={(e) => setEmbeddingModel(e.target.value)}
-              className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+              className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
             >
               <option value="all-MiniLM-L6-v2">
                 all-MiniLM-L6-v2 (Fast, 384 dims)
@@ -48,20 +49,12 @@ export function AISearchSection() {
 
         <div className="space-y-3">
           <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              defaultChecked={true}
-              className="h-4 w-4 rounded border-border"
-            />
+            <Checkbox defaultChecked />
             <span className="text-sm">Automatically index new items</span>
           </label>
 
           <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              defaultChecked={true}
-              className="h-4 w-4 rounded border-border"
-            />
+            <Checkbox defaultChecked />
             <span className="text-sm">Index PDF content for full-text search</span>
           </label>
         </div>

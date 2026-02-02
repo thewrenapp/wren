@@ -19,10 +19,10 @@ impl AppState {
         std::fs::create_dir_all(&library_path)?;
         std::fs::create_dir_all(library_path.join("files").join("pdfs"))?;
         std::fs::create_dir_all(library_path.join("files").join("notes"))?;
-        std::fs::create_dir_all(library_path.join(".etal"))?;
+        std::fs::create_dir_all(library_path.join(".wren"))?;
 
         // Initialize database
-        let db_path = library_path.join(".etal").join("etal.db");
+        let db_path = library_path.join(".wren").join("wren.db");
         let db = db::connection::create_pool(&db_path).await?;
 
         // Run migrations
@@ -37,11 +37,11 @@ impl AppState {
     }
 
     fn get_library_path() -> Result<PathBuf> {
-        // Default to ~/Etal
+        // Default to ~/Wren
         let home = directories::UserDirs::new()
             .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
 
-        Ok(home.home_dir().join("Etal"))
+        Ok(home.home_dir().join("Wren"))
     }
 
     pub async fn get_library_path_string(&self) -> String {

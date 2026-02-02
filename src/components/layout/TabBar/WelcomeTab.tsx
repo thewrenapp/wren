@@ -1,4 +1,5 @@
-import { FileText, File, FolderOpen, Command, ArrowRight, BookOpen } from "lucide-react";
+import { FileText, File, FolderOpen, Command, ArrowRight } from "lucide-react";
+import { AppLogo } from "@/components/ui/AppLogo";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/uiStore";
@@ -43,17 +44,12 @@ export function WelcomeTab() {
       <div className="max-w-md text-center space-y-6">
         {/* Logo */}
         <div className="flex justify-center">
-          <div
-            className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center shadow-md"
-            style={{ borderRadius: "22%" }}
-          >
-            <BookOpen className="h-8 w-8 text-white" strokeWidth={2.5} />
-          </div>
+          <AppLogo size={64} className="shadow-md" />
         </div>
 
         {/* Title */}
         <div>
-          <h1 className="text-2xl font-bold mb-2">Welcome to Etal</h1>
+          <h1 className="text-2xl font-bold mb-2">Welcome to Wren</h1>
           <p className="text-muted-foreground">
             Your personal reference manager for PDFs and notes
           </p>

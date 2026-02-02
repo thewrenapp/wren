@@ -1,9 +1,25 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { LayoutGrid, List, Plus, SortAsc, SortDesc, File, FolderOpen, RotateCcw, Trash2, Check } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { open as openInBrowser } from "@tauri-apps/plugin-shell";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import {
+  LayoutGrid,
+  List,
+  Plus,
+  SortAsc,
+  SortDesc,
+  File,
+  FolderOpen,
+  RotateCcw,
+  Trash2,
+  Check,
+  FileType,
+  StickyNote,
+  CheckSquare,
+  Square,
+  XSquare,
+} from 'lucide-react';
+import { open } from '@tauri-apps/plugin-dialog';
+import { open as openInBrowser } from '@tauri-apps/plugin-shell';
+import { Button } from '@/components/ui/button';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,7 +30,7 @@ import {
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
-} from "@/components/ui/dropdown-menu";
+} from '@/components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -22,21 +38,36 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { useUIStore, type SortField } from "@/stores/uiStore";
-import { useLibraryStore, type Attachment } from "@/stores/libraryStore";
-import { useTabStore } from "@/stores/tabStore";
-import { useImport, useLibrarySync } from "@/hooks/useLibrarySync";
-import { getEntryAttachments, getTrashedEntries, restoreEntry, emptyTrash, getTrashCount } from "@/services/tauri";
-import { EntryTable } from "./EntryTable";
-import { EntryCardView } from "./EntryCardView";
-import { ColumnConfigDropdown } from "./ColumnConfigDropdown";
-import { QuickSearchBar } from "./QuickSearchBar";
-import { cn } from "@/lib/utils";
+} from '@/components/ui/dialog';
+import { useUIStore, type SortField } from '@/stores/uiStore';
+import { useLibraryStore, type Attachment } from '@/stores/libraryStore';
+import { useTabStore } from '@/stores/tabStore';
+import { useImport, useLibrarySync } from '@/hooks/useLibrarySync';
+import {
+  getEntryAttachments,
+  getEntriesAttachments,
+  getTrashedEntries,
+  restoreEntry,
+  emptyTrash,
+  getTrashCount,
+  permanentDeleteEntry,
+} from '@/services/tauri';
+import { EntryTable } from './EntryTable';
+import { EntryCardView } from './EntryCardView';
+import { ColumnConfigDropdown } from './ColumnConfigDropdown';
+import { QuickSearchBar } from './QuickSearchBar';
+import { DuplicatesView } from './DuplicatesView';
+import { cn } from '@/lib/utils';
+import {
+  filterEntriesByType,
+  filterEntriesBySearch,
+  sortEntries,
+  type FilterType,
+} from '@/lib/filters';
 
 export function MiddlePane() {
   const {
-    viewMode,
+    viewModeByFilter,
     setViewMode,
     sortField,
     sortDirection,
@@ -64,34 +95,31 @@ export function MiddlePane() {
   const { importFiles, importFolder } = useImport();
   const { refresh } = useLibrarySync();
 
+  const viewMode = viewModeByFilter[activeFilter];
+
   // Trash state
   const [showEmptyTrashDialog, setShowEmptyTrashDialog] = useState(false);
   const [isTrashLoading, setIsTrashLoading] = useState(false);
 
   // State for fetched attachments (keyed by entry ID)
-  const [attachmentsMap, setAttachmentsMap] = useState<Record<string, Attachment[]>>({});
-  const fetchedEntryIdsRef = useRef<Set<string>>(new Set());
+  const [attachmentsMap, setAttachmentsMap] = useState<Record<number, Attachment[]>>({});
+  const fetchedEntryIdsRef = useRef<Set<number>>(new Set());
 
   // Load trashed entries when filter changes to trash
   const loadTrashedEntries = useCallback(async () => {
     setIsTrashLoading(true);
     try {
       const trashed = await getTrashedEntries();
-      const mappedTrashed = trashed.map((entry) => ({
-        ...entry,
-        id: String(entry.id),
-        tags: entry.tags.map((t) => ({ ...t, id: String(t.id) })),
-      }));
-      setTrashedEntries(mappedTrashed);
+      setTrashedEntries(trashed);
     } catch (err) {
-      console.error("Failed to load trashed entries:", err);
+      console.error('Failed to load trashed entries:', err);
     } finally {
       setIsTrashLoading(false);
     }
   }, [setTrashedEntries]);
 
   useEffect(() => {
-    if (activeFilter === "trash") {
+    if (activeFilter === 'trash') {
       loadTrashedEntries();
     }
   }, [activeFilter, loadTrashedEntries]);
@@ -100,7 +128,7 @@ export function MiddlePane() {
   const handleRestoreSelected = async () => {
     for (const id of selectedEntryIds) {
       try {
-        await restoreEntry(Number(id));
+        await restoreEntry(id);
       } catch (err) {
         console.error(`Failed to restore entry ${id}:`, err);
       }
@@ -119,8 +147,22 @@ export function MiddlePane() {
       setTrashedEntries([]);
       setTrashCount(0);
     } catch (err) {
-      console.error("Failed to empty trash:", err);
+      console.error('Failed to empty trash:', err);
     }
+  };
+
+  const handleDeleteSelectedPermanently = async () => {
+    for (const id of selectedEntryIds) {
+      try {
+        await permanentDeleteEntry(id);
+      } catch (err) {
+        console.error(`Failed to permanently delete entry ${id}:`, err);
+      }
+    }
+    clearSelection();
+    await loadTrashedEntries();
+    const count = await getTrashCount();
+    setTrashCount(count);
   };
 
   // Clear attachment cache when version changes (e.g., after adding an attachment)
@@ -131,28 +173,28 @@ export function MiddlePane() {
     }
   }, [attachmentVersion]);
 
-  // Fetch attachments when entries are expanded or cache is invalidated
+  // Fetch attachments when entries are expanded or cache is invalidated (BATCH)
   useEffect(() => {
     const fetchAttachments = async () => {
-      for (const entryId of expandedEntryIds) {
-        // Skip if already fetched
-        if (fetchedEntryIdsRef.current.has(entryId)) continue;
-        fetchedEntryIdsRef.current.add(entryId);
+      // Find entry IDs that need fetching
+      const idsToFetch = expandedEntryIds.filter((id) => !fetchedEntryIdsRef.current.has(id));
 
-        try {
-          const attachments = await getEntryAttachments(Number(entryId));
-          setAttachmentsMap((prev) => ({
-            ...prev,
-            [entryId]: attachments.map((a) => ({
-              ...a,
-              id: String(a.id),
-              entryId: String(a.entryId),
-            })),
-          }));
-        } catch (err) {
-          console.error(`Failed to fetch attachments for entry ${entryId}:`, err);
-          fetchedEntryIdsRef.current.delete(entryId);
-        }
+      if (idsToFetch.length === 0) return;
+
+      // Mark as fetching to prevent duplicate requests
+      idsToFetch.forEach((id) => fetchedEntryIdsRef.current.add(id));
+
+      try {
+        // Batch fetch ALL attachments in ONE call
+        const attachmentsMap = await getEntriesAttachments(idsToFetch);
+        setAttachmentsMap((prev) => ({
+          ...prev,
+          ...attachmentsMap,
+        }));
+      } catch (err) {
+        console.error('Failed to fetch attachments:', err);
+        // Remove from fetched set so we can retry
+        idsToFetch.forEach((id) => fetchedEntryIdsRef.current.delete(id));
       }
     };
 
@@ -163,14 +205,14 @@ export function MiddlePane() {
     try {
       const selected = await open({
         multiple: true,
-        filters: [{ name: "PDF", extensions: ["pdf"] }],
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
       });
 
       if (selected && Array.isArray(selected) && selected.length > 0) {
         await importFiles(selected);
       }
     } catch (err) {
-      console.error("Import error:", err);
+      console.error('Import error:', err);
     }
   };
 
@@ -180,97 +222,37 @@ export function MiddlePane() {
       multiple: false,
     });
 
-    if (selected && typeof selected === "string") {
+    if (selected && typeof selected === 'string') {
       await importFolder(selected);
     }
   };
 
   // Determine which entries to display (regular or trashed)
-  const isTrashView = activeFilter === "trash";
+  const isTrashView = activeFilter === 'trash';
   const displayEntries = isTrashView ? trashedEntries : entries;
 
-  // Filter entries based on active filter and search query
-  const filteredEntries = displayEntries.filter((entry) => {
-    // Skip sidebar filter for trash view (already showing trash)
-    if (!isTrashView) {
-      // Apply sidebar filter
-      let matchesFilter = true;
-      switch (activeFilter) {
-        case "pdfs":
-          matchesFilter = entry.hasPdf;
-          break;
-        case "notes":
-          matchesFilter = entry.hasNote;
-          break;
-        case "recent":
-          const weekAgo = new Date();
-          weekAgo.setDate(weekAgo.getDate() - 7);
-          matchesFilter = new Date(entry.dateAdded) > weekAgo;
-          break;
-        case "untagged":
-          matchesFilter = entry.tags.length === 0;
-          break;
-      }
+  // Memoized filter entries using shared utility
+  const filteredEntries = useMemo(() => {
+    // Skip filter for trash view (already showing trash)
+    const typeFiltered = isTrashView
+      ? displayEntries
+      : filterEntriesByType(displayEntries, activeFilter as FilterType);
+    return filterEntriesBySearch(typeFiltered, searchQuery);
+  }, [displayEntries, isTrashView, activeFilter, searchQuery]);
 
-      if (!matchesFilter) return false;
-    }
-
-    // Apply search query
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      const matchesSearch =
-        entry.title.toLowerCase().includes(query) ||
-        (entry.creatorsDisplay?.toLowerCase().includes(query) ?? false) ||
-        entry.tags.some((tag) => tag.name.toLowerCase().includes(query)) ||
-        (entry.year?.includes(query) ?? false);
-      return matchesSearch;
-    }
-
-    return true;
-  });
-
-  // Helper function to compare by a specific field
-  const compareByField = (a: typeof filteredEntries[0], b: typeof filteredEntries[0], field: string): number => {
-    switch (field) {
-      case "title":
-        return a.title.localeCompare(b.title);
-      case "creator":
-        return (a.creatorsDisplay || "").localeCompare(b.creatorsDisplay || "");
-      case "year":
-        // Numeric sort - treat empty/null as 0 so they sort to beginning
-        const yearA = a.year ? parseInt(a.year, 10) : 0;
-        const yearB = b.year ? parseInt(b.year, 10) : 0;
-        return yearA - yearB;
-      case "dateAdded":
-        return new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
-      case "dateModified":
-        const modA = a.dateModified ? new Date(a.dateModified).getTime() : 0;
-        const modB = b.dateModified ? new Date(b.dateModified).getTime() : 0;
-        return modA - modB;
-      case "entryType":
-        return a.entryType.localeCompare(b.entryType);
-      default:
-        return new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
-    }
-  };
-
-  // Sort entries with primary and optional secondary sort
-  const sortedEntries = [...filteredEntries].sort((a, b) => {
-    // Primary sort
-    let comparison = compareByField(a, b, sortField);
-    comparison = sortDirection === "asc" ? comparison : -comparison;
-
-    // Secondary sort (if primary values are equal and secondary sort is configured)
-    if (comparison === 0 && secondarySortField) {
-      let secondaryComparison = compareByField(a, b, secondarySortField);
-      comparison = secondarySortDirection === "asc" ? secondaryComparison : -secondaryComparison;
-    }
-
-    return comparison;
-  });
+  // Memoized sort entries using shared utility
+  const sortedEntries = useMemo(() => {
+    return sortEntries(
+      filteredEntries,
+      sortField,
+      sortDirection,
+      secondarySortField,
+      secondarySortDirection,
+    );
+  }, [filteredEntries, sortField, sortDirection, secondarySortField, secondarySortDirection]);
 
   // Entry handlers
-  const handleEntryClick = (entryId: string, event: React.MouseEvent) => {
+  const handleEntryClick = (entryId: number, event: React.MouseEvent) => {
     if (event.metaKey || event.ctrlKey) {
       selectEntry(entryId, true);
     } else {
@@ -278,41 +260,48 @@ export function MiddlePane() {
     }
   };
 
-  const handleEntryDoubleClick = async (entryId: string) => {
-    console.log("handleEntryDoubleClick called with entryId:", entryId);
+  // Keyboard navigation handler
+  const handleKeyboardSelect = useCallback(
+    (entryId: number) => {
+      selectEntry(entryId);
+    },
+    [selectEntry],
+  );
 
+  // Bulk selection handlers
+  const handleSelectAll = useCallback(() => {
+    sortedEntries.forEach((e) => selectEntry(e.id, true));
+  }, [sortedEntries, selectEntry]);
+
+  const handleSelectPdfs = useCallback(() => {
+    clearSelection();
+    sortedEntries.filter((e) => e.hasPdf).forEach((e) => selectEntry(e.id, true));
+  }, [sortedEntries, selectEntry, clearSelection]);
+
+  const handleSelectUntagged = useCallback(() => {
+    clearSelection();
+    sortedEntries.filter((e) => e.tags.length === 0).forEach((e) => selectEntry(e.id, true));
+  }, [sortedEntries, selectEntry, clearSelection]);
+
+  const handleEntryDoubleClick = async (entryId: number) => {
     // Don't open trashed entries - user should restore first
-    if (isTrashView) {
-      console.log("In trash view, returning early");
-      return;
-    }
+    if (isTrashView) return;
 
-    // Find entry from the displayed entries, not just the store entries
+    // Find entry from the displayed entries
     const entry = sortedEntries.find((e) => e.id === entryId);
-    console.log("Found entry:", entry);
-    if (!entry) {
-      console.log("Entry not found, returning early");
-      return;
-    }
+    if (!entry) return;
 
     // Get attachments - from cache or fetch
     let attachments = attachmentsMap[entryId];
-    console.log("Cached attachments:", attachments);
     if (!attachments) {
       try {
-        console.log("Fetching attachments for entry:", entryId);
-        const fetched = await getEntryAttachments(Number(entryId));
-        console.log("Fetched attachments:", fetched);
-        attachments = fetched.map((a) => ({
-          ...a,
-          id: String(a.id),
-          entryId: String(a.entryId),
-        }));
+        const fetched = await getEntryAttachments(entryId);
+        attachments = fetched;
         setAttachmentsMap((prev) => ({ ...prev, [entryId]: attachments! }));
       } catch (err) {
-        console.error("Failed to fetch attachments:", err);
+        console.error('Failed to fetch attachments:', err);
         // Fallback: just open entry tab
-        openTab({ type: "entry", title: entry.title, entryId: entry.id });
+        openTab({ type: 'entry', title: entry.title, entryId: String(entry.id) });
         return;
       }
     }
@@ -320,170 +309,187 @@ export function MiddlePane() {
     // Determine which attachment to open based on filter
     let targetAttachment: Attachment | undefined;
 
-    if (activeFilter === "notes") {
+    if (activeFilter === 'notes') {
       // Notes filter: only open notes
-      targetAttachment = attachments.find((a) => a.attachmentType === "note");
-    } else if (activeFilter === "pdfs") {
+      targetAttachment = attachments.find((a) => a.attachmentType === 'note');
+    } else if (activeFilter === 'pdfs') {
       // PDFs filter: only open PDFs
-      targetAttachment = attachments.find((a) => a.attachmentType === "pdf");
+      targetAttachment = attachments.find((a) => a.attachmentType === 'pdf');
     } else {
       // For "all", "recent", "untagged", collections, etc.
       // Priority: PDF > Note > Weblink
       targetAttachment =
-        attachments.find((a) => a.attachmentType === "pdf") ||
-        attachments.find((a) => a.attachmentType === "note") ||
-        attachments.find((a) => a.attachmentType === "weblink");
+        attachments.find((a) => a.attachmentType === 'pdf') ||
+        attachments.find((a) => a.attachmentType === 'note') ||
+        attachments.find((a) => a.attachmentType === 'weblink');
     }
 
-    console.log("Target attachment:", targetAttachment);
-
     if (targetAttachment) {
-      if (targetAttachment.attachmentType === "weblink" && targetAttachment.url) {
+      if (targetAttachment.attachmentType === 'weblink' && targetAttachment.url) {
         // Open weblink in browser
         try {
           await openInBrowser(targetAttachment.url);
         } catch (err) {
-          console.error("Failed to open URL:", err);
+          console.error('Failed to open URL:', err);
         }
       } else {
         // Open PDF or note in app tab
-        console.log("Opening tab for attachment:", targetAttachment.id);
         openTab({
-          type: "entry",
+          type: 'entry',
           title: targetAttachment.title || entry.title,
-          entryId: entry.id,
-          attachmentId: targetAttachment.id,
+          entryId: String(entry.id),
+          attachmentId: String(targetAttachment.id),
         });
       }
     } else {
       // No matching attachment, just open entry details
-      console.log("No attachment found, opening entry details");
-      openTab({ type: "entry", title: entry.title, entryId: entry.id });
+      openTab({ type: 'entry', title: entry.title, entryId: String(entry.id) });
     }
   };
 
   // Attachment handlers
-  const handleAttachmentClick = (entryId: string, _attachmentId: string) => {
+  const handleAttachmentClick = (entryId: number, _attachmentId: number) => {
     selectEntry(entryId);
   };
 
-  const handleAttachmentDoubleClick = async (entryId: string, attachmentId: string) => {
+  const handleAttachmentDoubleClick = async (entryId: number, attachmentId: number) => {
     const entry = entries.find((e) => e.id === entryId);
     const attachment = attachmentsMap[entryId]?.find((a) => a.id === attachmentId);
     if (!entry || !attachment) return;
 
-    if (attachment.attachmentType === "weblink" && attachment.url) {
+    if (attachment.attachmentType === 'weblink' && attachment.url) {
       // Open weblink in browser
       try {
         await openInBrowser(attachment.url);
       } catch (err) {
-        console.error("Failed to open URL:", err);
+        console.error('Failed to open URL:', err);
       }
     } else {
       // Open PDF or note in app tab
       openTab({
-        type: "entry",
+        type: 'entry',
         title: attachment.title || entry.title,
-        entryId: entry.id,
-        attachmentId: attachmentId,
+        entryId: String(entry.id),
+        attachmentId: String(attachmentId),
       });
     }
   };
 
   const getFilterTitle = () => {
     switch (activeFilter) {
-      case "pdfs":
-        return "PDFs";
-      case "notes":
-        return "Notes";
-      case "recent":
-        return "Recently Added";
-      case "untagged":
-        return "Untagged";
-      case "trash":
-        return "Trash";
+      case 'pdfs':
+        return 'PDFs';
+      case 'notes':
+        return 'Notes';
+      case 'recent':
+        return 'Recently Added';
+      case 'untagged':
+        return 'Untagged';
+      case 'trash':
+        return 'Trash';
+      case 'duplicates':
+        return 'Duplicates';
       default:
-        return "All Items";
+        return 'All Items';
     }
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className='flex flex-col h-full'>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b bg-background">
-        <div className="flex items-center gap-2">
-          <h2 className="font-semibold text-sm">{getFilterTitle()}</h2>
-          <span className="text-xs text-muted-foreground">
-            {sortedEntries.length} {sortedEntries.length !== 1 ? "entries" : "entry"}
+      <div className='flex items-center justify-between px-4 py-2 border-b bg-background'>
+        <div className='flex items-center gap-2'>
+          <h2 className='font-semibold text-sm'>{getFilterTitle()}</h2>
+          <span className='text-xs text-muted-foreground'>
+            {sortedEntries.length} {sortedEntries.length !== 1 ? 'entries' : 'entry'}
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Trash actions */}
-          {isTrashView && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRestoreSelected}
-                disabled={selectedEntryIds.length === 0}
-                className="h-7"
-              >
-                <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                Restore
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setShowEmptyTrashDialog(true)}
-                disabled={trashedEntries.length === 0}
-                className="h-7"
-              >
-                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                Empty Trash
-              </Button>
-              <div className="w-px h-4 bg-border mx-1" />
-            </>
-          )}
-
+        <div className='flex items-center gap-2'>
           <QuickSearchBar />
 
-          {viewMode === "list" && <ColumnConfigDropdown />}
+          {/* Bulk selection dropdown */}
+          {!isTrashView && activeFilter !== 'duplicates' && sortedEntries.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant='ghost'
+                  size='icon-sm'
+                  className='h-7 w-7'
+                  title='Selection options'
+                >
+                  {selectedEntryIds.length > 0 ? (
+                    <CheckSquare className='h-4 w-4' />
+                  ) : (
+                    <Square className='h-4 w-4' />
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align='end' className='w-40'>
+                <DropdownMenuItem onClick={handleSelectAll}>
+                  <CheckSquare className='h-4 w-4 mr-2' />
+                  Select All
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleSelectPdfs}>
+                  <FileType className='h-4 w-4 mr-2' />
+                  Select PDFs
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleSelectUntagged}>
+                  <Square className='h-4 w-4 mr-2' />
+                  Select Untagged
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={clearSelection}
+                  disabled={selectedEntryIds.length === 0}
+                >
+                  <XSquare className='h-4 w-4 mr-2' />
+                  Deselect All
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          {viewMode === 'list' && <ColumnConfigDropdown />}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="h-7 w-7"
-                title="Sort options"
-              >
-                {sortDirection === "asc" ? (
-                  <SortAsc className="h-4 w-4" />
+              <Button variant='ghost' size='icon-sm' className='h-7 w-7' title='Sort options'>
+                {sortDirection === 'asc' ? (
+                  <SortAsc className='h-4 w-4' />
                 ) : (
-                  <SortDesc className="h-4 w-4" />
+                  <SortDesc className='h-4 w-4' />
                 )}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">
+            <DropdownMenuContent align='end' className='w-48'>
+              <DropdownMenuLabel className='text-xs text-muted-foreground'>
                 Sort by
               </DropdownMenuLabel>
-              {(["title", "creator", "year", "dateAdded", "dateModified", "entryType"] as SortField[]).map((field) => (
+              {(
+                [
+                  'title',
+                  'creator',
+                  'year',
+                  'dateAdded',
+                  'dateModified',
+                  'itemType',
+                ] as SortField[]
+              ).map((field) => (
                 <DropdownMenuItem
                   key={field}
                   onClick={() => setSort(field)}
-                  className="flex items-center justify-between"
+                  className='flex items-center justify-between'
                 >
                   <span>
-                    {field === "title" && "Title"}
-                    {field === "creator" && "Creator"}
-                    {field === "year" && "Year"}
-                    {field === "dateAdded" && "Date Added"}
-                    {field === "dateModified" && "Date Modified"}
-                    {field === "entryType" && "Type"}
+                    {field === 'title' && 'Title'}
+                    {field === 'creator' && 'Creator'}
+                    {field === 'year' && 'Year'}
+                    {field === 'dateAdded' && 'Date Added'}
+                    {field === 'dateModified' && 'Date Modified'}
+                    {field === 'itemType' && 'Type'}
                   </span>
-                  {sortField === field && <Check className="h-4 w-4" />}
+                  {sortField === field && <Check className='h-4 w-4' />}
                 </DropdownMenuItem>
               ))}
 
@@ -491,44 +497,53 @@ export function MiddlePane() {
 
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
-                  <span className="text-muted-foreground">Then by</span>
+                  <span className='text-muted-foreground'>Then by</span>
                   {secondarySortField && (
-                    <span className="ml-1 text-xs text-muted-foreground">
-                      ({secondarySortField === "title" && "Title"}
-                      {secondarySortField === "creator" && "Creator"}
-                      {secondarySortField === "year" && "Year"}
-                      {secondarySortField === "dateAdded" && "Added"}
-                      {secondarySortField === "dateModified" && "Modified"}
-                      {secondarySortField === "entryType" && "Type"})
+                    <span className='ml-1 text-xs text-muted-foreground'>
+                      ({secondarySortField === 'title' && 'Title'}
+                      {secondarySortField === 'creator' && 'Creator'}
+                      {secondarySortField === 'year' && 'Year'}
+                      {secondarySortField === 'dateAdded' && 'Added'}
+                      {secondarySortField === 'dateModified' && 'Modified'}
+                      {secondarySortField === 'itemType' && 'Type'})
                     </span>
                   )}
                 </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-40">
+                <DropdownMenuSubContent className='w-40'>
                   <DropdownMenuItem
                     onClick={() => setSecondarySort(null)}
-                    className="flex items-center justify-between"
+                    className='flex items-center justify-between'
                   >
-                    <span className="text-muted-foreground">None</span>
-                    {secondarySortField === null && <Check className="h-4 w-4" />}
+                    <span className='text-muted-foreground'>None</span>
+                    {secondarySortField === null && <Check className='h-4 w-4' />}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  {(["title", "creator", "year", "dateAdded", "dateModified", "entryType"] as SortField[])
+                  {(
+                    [
+                      'title',
+                      'creator',
+                      'year',
+                      'dateAdded',
+                      'dateModified',
+                      'itemType',
+                    ] as SortField[]
+                  )
                     .filter((field) => field !== sortField)
                     .map((field) => (
                       <DropdownMenuItem
                         key={field}
                         onClick={() => setSecondarySort(field)}
-                        className="flex items-center justify-between"
+                        className='flex items-center justify-between'
                       >
                         <span>
-                          {field === "title" && "Title"}
-                          {field === "creator" && "Creator"}
-                          {field === "year" && "Year"}
-                          {field === "dateAdded" && "Date Added"}
-                          {field === "dateModified" && "Date Modified"}
-                          {field === "entryType" && "Type"}
+                          {field === 'title' && 'Title'}
+                          {field === 'creator' && 'Creator'}
+                          {field === 'year' && 'Year'}
+                          {field === 'dateAdded' && 'Date Added'}
+                          {field === 'dateModified' && 'Date Modified'}
+                          {field === 'itemType' && 'Type'}
                         </span>
-                        {secondarySortField === field && <Check className="h-4 w-4" />}
+                        {secondarySortField === field && <Check className='h-4 w-4' />}
                       </DropdownMenuItem>
                     ))}
                 </DropdownMenuSubContent>
@@ -537,51 +552,48 @@ export function MiddlePane() {
               <DropdownMenuSeparator />
 
               <DropdownMenuItem onClick={() => setSort(sortField)}>
-                {sortDirection === "asc" ? "Sort Descending" : "Sort Ascending"}
+                {sortDirection === 'asc' ? 'Sort Descending' : 'Sort Ascending'}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <div className="flex items-center border rounded-md">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setViewMode("list")}
-              className={cn(
-                "h-7 w-7 rounded-r-none",
-                viewMode === "list" && "bg-accent"
-              )}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setViewMode("card")}
-              className={cn(
-                "h-7 w-7 rounded-l-none",
-                viewMode === "card" && "bg-accent"
-              )}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-          </div>
+          {/* Hide view toggle for duplicates view (has its own layout) */}
+          {activeFilter !== 'duplicates' && (
+            <div className='flex items-center border rounded-md'>
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                onClick={() => setViewMode('list')}
+                className={cn('h-7 w-7 rounded-r-none', viewMode === 'list' && 'bg-accent')}
+              >
+                <List className='h-4 w-4' />
+              </Button>
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                onClick={() => setViewMode('card')}
+                className={cn('h-7 w-7 rounded-l-none', viewMode === 'card' && 'bg-accent')}
+              >
+                <LayoutGrid className='h-4 w-4' />
+              </Button>
+            </div>
+          )}
 
           {/* Hide import button in trash view */}
           {!isTrashView && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" className="h-7 w-7" disabled={isLoading}>
-                  <Plus className="h-4 w-4" />
+                <Button variant='ghost' size='icon-sm' className='h-7 w-7' disabled={isLoading}>
+                  <Plus className='h-4 w-4' />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent align='end'>
                 <DropdownMenuItem onClick={handleImportFiles}>
-                  <File className="h-4 w-4 mr-2" />
+                  <File className='h-4 w-4 mr-2' />
                   Import PDFs...
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleImportFolder}>
-                  <FolderOpen className="h-4 w-4 mr-2" />
+                  <FolderOpen className='h-4 w-4 mr-2' />
                   Import Folder...
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -591,65 +603,142 @@ export function MiddlePane() {
       </div>
 
       {/* Content */}
-      {(isLoading || isTrashLoading) ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <p className="text-sm">Loading...</p>
+      {activeFilter === 'duplicates' ? (
+        <DuplicatesView />
+      ) : isLoading || isTrashLoading ? (
+        <div className='flex-1 flex items-center justify-center text-muted-foreground'>
+          <p className='text-sm'>Loading...</p>
         </div>
       ) : sortedEntries.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-4">
-          <div className="text-center">
+        <div className='flex-1 flex flex-col items-center justify-center text-muted-foreground gap-4'>
+          <div className='text-center'>
             {isTrashView ? (
               <>
-                <Trash2 className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                <p className="text-sm">Trash is empty</p>
-                <p className="text-xs">Deleted items will appear here</p>
+                <Trash2 className='h-8 w-8 mx-auto mb-2 opacity-50' />
+                <p className='text-sm font-medium'>Trash is empty</p>
+                <p className='text-xs'>Deleted items will appear here</p>
+              </>
+            ) : searchQuery ? (
+              <>
+                <p className='text-sm font-medium'>No results found</p>
+                <p className='text-xs'>No entries match "{searchQuery}"</p>
+              </>
+            ) : activeFilter === 'pdfs' ? (
+              <>
+                <FileType className='h-8 w-8 mx-auto mb-2 opacity-50' />
+                <p className='text-sm font-medium'>No PDFs</p>
+                <p className='text-xs'>Import PDF files to see them here</p>
+              </>
+            ) : activeFilter === 'notes' ? (
+              <>
+                <StickyNote className='h-8 w-8 mx-auto mb-2 opacity-50' />
+                <p className='text-sm font-medium'>No notes</p>
+                <p className='text-xs'>Create notes on your entries</p>
+              </>
+            ) : activeFilter === 'recent' ? (
+              <>
+                <p className='text-sm font-medium'>No recent items</p>
+                <p className='text-xs'>Items added in the last 7 days appear here</p>
+              </>
+            ) : activeFilter === 'untagged' ? (
+              <>
+                <p className='text-sm font-medium'>No untagged items</p>
+                <p className='text-xs'>All your entries have tags</p>
+              </>
+            ) : entries.length === 0 ? (
+              <>
+                <p className='text-sm font-medium'>Your library is empty</p>
+                <p className='text-xs'>Import PDFs to start building your collection</p>
               </>
             ) : (
               <>
-                <p className="text-sm">No entries</p>
-                <p className="text-xs">Import PDFs to get started</p>
+                <p className='text-sm font-medium'>No entries in this view</p>
+                <p className='text-xs'>Try selecting a different filter</p>
               </>
             )}
           </div>
-          {!isTrashView && (
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={handleImportFiles}>
-                <File className="h-4 w-4 mr-2" />
+          {!isTrashView && !searchQuery && entries.length === 0 && (
+            <div className='flex gap-2'>
+              <Button variant='outline' size='sm' onClick={handleImportFiles}>
+                <File className='h-4 w-4 mr-2' />
                 Import PDFs
               </Button>
-              <Button variant="outline" size="sm" onClick={handleImportFolder}>
-                <FolderOpen className="h-4 w-4 mr-2" />
+              <Button variant='outline' size='sm' onClick={handleImportFolder}>
+                <FolderOpen className='h-4 w-4 mr-2' />
                 Import Folder
               </Button>
             </div>
           )}
         </div>
-      ) : viewMode === "list" ? (
-        <div className="flex-1 overflow-hidden">
-          <EntryTable
-            entries={sortedEntries}
-            selectedIds={selectedEntryIds}
-            expandedIds={expandedEntryIds}
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSort={setSort}
-            onEntryClick={handleEntryClick}
-            onEntryDoubleClick={handleEntryDoubleClick}
-            onToggleExpand={toggleEntryExpanded}
-            attachmentsMap={attachmentsMap}
-            onAttachmentClick={handleAttachmentClick}
-            onAttachmentDoubleClick={handleAttachmentDoubleClick}
-          />
-        </div>
       ) : (
-        <ScrollArea className="flex-1">
-          <EntryCardView
-            entries={sortedEntries}
-            selectedIds={selectedEntryIds}
-            onEntryClick={handleEntryClick}
-            onEntryDoubleClick={handleEntryDoubleClick}
-          />
-        </ScrollArea>
+        <div className='flex-1 flex flex-col overflow-hidden'>
+          {/* Trash action bar - above table */}
+          {isTrashView && sortedEntries.length > 0 && (
+            <div className='flex items-center gap-2 px-4 py-2 border-b bg-muted/30'>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={handleRestoreSelected}
+                disabled={selectedEntryIds.length === 0}
+                className='h-7'
+              >
+                <RotateCcw className='h-3.5 w-3.5 mr-1.5' />
+                Restore{selectedEntryIds.length > 0 ? ` (${selectedEntryIds.length})` : ''}
+              </Button>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={handleDeleteSelectedPermanently}
+                disabled={selectedEntryIds.length === 0}
+                className='h-7 text-destructive hover:text-destructive'
+              >
+                <Trash2 className='h-3.5 w-3.5 mr-1.5' />
+                Delete{selectedEntryIds.length > 0 ? ` (${selectedEntryIds.length})` : ''}
+              </Button>
+              <div className='flex-1' />
+              <Button
+                variant='destructive'
+                size='sm'
+                onClick={() => setShowEmptyTrashDialog(true)}
+                className='h-7'
+              >
+                <Trash2 className='h-3.5 w-3.5 mr-1.5' />
+                Empty Trash
+              </Button>
+            </div>
+          )}
+
+          {/* Table or Card view */}
+          {viewMode === 'list' ? (
+            <div className='flex-1 overflow-hidden'>
+              <EntryTable
+                entries={sortedEntries}
+                selectedIds={selectedEntryIds}
+                expandedIds={expandedEntryIds}
+                sortField={sortField}
+                sortDirection={sortDirection}
+                onSort={setSort}
+                onEntryClick={handleEntryClick}
+                onEntryDoubleClick={handleEntryDoubleClick}
+                onToggleExpand={toggleEntryExpanded}
+                attachmentsMap={attachmentsMap}
+                onAttachmentClick={handleAttachmentClick}
+                onAttachmentDoubleClick={handleAttachmentDoubleClick}
+                onKeyboardSelect={handleKeyboardSelect}
+              />
+            </div>
+          ) : (
+            <ScrollArea className='flex-1'>
+              <EntryCardView
+                entries={sortedEntries}
+                selectedIds={selectedEntryIds}
+                onEntryClick={handleEntryClick}
+                onEntryDoubleClick={handleEntryDoubleClick}
+                isTrashView={isTrashView}
+              />
+            </ScrollArea>
+          )}
+        </div>
       )}
 
       {/* Empty Trash Confirmation Dialog */}
@@ -658,15 +747,16 @@ export function MiddlePane() {
           <DialogHeader>
             <DialogTitle>Empty Trash?</DialogTitle>
             <DialogDescription>
-              This will permanently delete {trashedEntries.length} {trashedEntries.length === 1 ? "item" : "items"} and their files.
-              This action cannot be undone.
+              This will permanently delete {trashedEntries.length}{' '}
+              {trashedEntries.length === 1 ? 'item' : 'items'} and their files. This action cannot
+              be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowEmptyTrashDialog(false)}>
+            <Button variant='outline' onClick={() => setShowEmptyTrashDialog(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={handleEmptyTrash}>
+            <Button variant='destructive' onClick={handleEmptyTrash}>
               Empty Trash
             </Button>
           </DialogFooter>

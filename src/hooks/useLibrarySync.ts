@@ -1,9 +1,7 @@
 import { useEffect, useCallback, useRef } from "react";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { toast } from "@/stores/toastStore";
 import * as tauri from "@/services/tauri";
-
-// Shared refresh function reference
-let refreshFn: (() => Promise<void>) | null = null;
 
 /**
  * Hook to sync library store with the Tauri backend.
@@ -19,6 +17,7 @@ export function useLibrarySync() {
     setError,
     activeCollectionId,
     activeTagId,
+    _setRefreshFn,
   } = useLibraryStore();
 
   const isMounted = useRef(false);
@@ -26,7 +25,6 @@ export function useLibrarySync() {
   const loadLibrary = useCallback(async () => {
     setLoading(true);
     setError(null);
-    console.log("Loading library...");
 
     try {
       // Load entries, collections, tags, and trash count in parallel
@@ -40,33 +38,16 @@ export function useLibrarySync() {
         tauri.getTrashCount(),
       ]);
 
-      console.log("Loaded entries:", entries);
-      console.log("Entries with PDF:", entries.filter(e => e.hasPdf));
-
-      // Map entries - id conversion
-      const mappedEntries = entries.map((entry) => ({
-        ...entry,
-        id: String(entry.id),
-        tags: entry.tags.map((t) => ({ ...t, id: String(t.id) })),
-      }));
-
-      const mappedCollections = collections.map((c) => ({
-        ...c,
-        id: String(c.id),
-      }));
-
-      const mappedTags = tags.map((t) => ({
-        ...t,
-        id: String(t.id),
-      }));
-
-      setEntries(mappedEntries);
-      setCollections(mappedCollections);
-      setTags(mappedTags);
+      // Set data directly - no ID conversion needed (using numbers now)
+      setEntries(entries);
+      setCollections(collections);
+      setTags(tags);
       setTrashCount(trashCount);
     } catch (err) {
       console.error("Failed to load library:", err);
-      setError(err instanceof Error ? err.message : "Failed to load library");
+      const message = err instanceof Error ? err.message : "Failed to load library";
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -81,13 +62,13 @@ export function useLibrarySync() {
     activeTagId,
   ]);
 
-  // Store refresh function for useImport
+  // Store refresh function in Zustand store (replaces global mutable state)
   useEffect(() => {
-    refreshFn = loadLibrary;
+    _setRefreshFn(loadLibrary);
     return () => {
-      refreshFn = null;
+      _setRefreshFn(null);
     };
-  }, [loadLibrary]);
+  }, [loadLibrary, _setRefreshFn]);
 
   // Load library on mount
   useEffect(() => {
@@ -102,16 +83,10 @@ export function useLibrarySync() {
 
 /**
  * Hook to import PDFs using the Tauri backend.
- * Does NOT trigger useLibrarySync - call refresh separately after importing.
+ * Uses store's refreshLibrary action for refresh.
  */
 export function useImport() {
-  const { setLoading, setError } = useLibraryStore();
-
-  const refresh = useCallback(async () => {
-    if (refreshFn) {
-      await refreshFn();
-    }
-  }, []);
+  const { setLoading, setError, refreshLibrary } = useLibraryStore();
 
   const importFiles = useCallback(
     async (filePaths: string[]) => {
@@ -125,23 +100,32 @@ export function useImport() {
         const errors = results.filter(
           (r) => !r.success && r.error !== "File already exists in library"
         );
+        const successes = results.filter((r) => r.success);
+
         if (errors.length > 0) {
           console.warn("Some imports failed:", errors);
+          toast.warning(`${errors.length} file(s) failed to import`);
+        }
+
+        if (successes.length > 0) {
+          toast.success(`Imported ${successes.length} PDF${successes.length !== 1 ? "s" : ""}`);
         }
 
         // Refresh library to show new entries
-        await refresh();
+        await refreshLibrary();
 
         return results;
       } catch (err) {
         console.error("Failed to import files:", err);
-        setError(err instanceof Error ? err.message : "Failed to import files");
+        const message = err instanceof Error ? err.message : "Failed to import files";
+        setError(message);
+        toast.error(message);
         throw err;
       } finally {
         setLoading(false);
       }
     },
-    [refresh, setLoading, setError]
+    [refreshLibrary, setLoading, setError]
   );
 
   const importFolder = useCallback(
@@ -156,26 +140,35 @@ export function useImport() {
         const errors = results.filter(
           (r) => !r.success && r.error !== "File already exists in library"
         );
+        const successes = results.filter((r) => r.success);
+
         if (errors.length > 0) {
           console.warn("Some imports failed:", errors);
+          toast.warning(`${errors.length} file(s) failed to import`);
+        }
+
+        if (successes.length > 0) {
+          toast.success(`Imported ${successes.length} PDF${successes.length !== 1 ? "s" : ""} from folder`);
+        } else if (errors.length === 0) {
+          toast.info("No new PDFs found in folder");
         }
 
         // Refresh library to show new entries
-        await refresh();
+        await refreshLibrary();
 
         return results;
       } catch (err) {
         console.error("Failed to import folder:", err);
-        setError(
-          err instanceof Error ? err.message : "Failed to import folder"
-        );
+        const message = err instanceof Error ? err.message : "Failed to import folder";
+        setError(message);
+        toast.error(message);
         throw err;
       } finally {
         setLoading(false);
       }
     },
-    [refresh, setLoading, setError]
+    [refreshLibrary, setLoading, setError]
   );
 
-  return { importFiles, importFolder, refresh };
+  return { importFiles, importFolder, refresh: refreshLibrary };
 }

@@ -1,4 +1,5 @@
-import { BookOpen, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import { AppLogo } from "@/components/ui/AppLogo";
 
 export function AboutSection() {
   return (
@@ -6,14 +7,9 @@ export function AboutSection() {
       {/* App Info */}
       <section className="space-y-4">
         <div className="flex items-center gap-4">
-          <div
-            className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center shadow-md"
-            style={{ borderRadius: "22%" }}
-          >
-            <BookOpen className="h-8 w-8 text-white" strokeWidth={2.5} />
-          </div>
+          <AppLogo size={64} className="shadow-md" />
           <div>
-            <h3 className="text-xl font-semibold">Etal</h3>
+            <h3 className="text-xl font-semibold">Wren</h3>
             <p className="text-sm text-muted-foreground">
               Reference Management for the Modern Researcher
             </p>
@@ -73,7 +69,7 @@ export function AboutSection() {
         </h3>
 
         <p className="text-sm text-muted-foreground">
-          Etal is inspired by great tools like Zotero, Papers, and Notion.
+          Wren is inspired by great tools like Zotero, Papers, and Notion.
           Built with love for researchers everywhere.
         </p>
       </section>

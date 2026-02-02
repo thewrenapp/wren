@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useRef, useEffect, useCallback } from "react";
 import { ChevronDown, ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SortField, SortDirection } from "@/stores/uiStore";
@@ -14,18 +14,20 @@ export interface Column<TData> {
 interface DataTableProps<TData> {
   columns: Column<TData>[];
   data: TData[];
-  selectedIds?: string[];
-  expandedIds?: string[];
+  selectedIds?: number[];
+  expandedIds?: number[];
   sortField?: SortField;
   sortDirection?: SortDirection;
   onSort?: (field: SortField) => void;
   onRowClick?: (row: TData, event: React.MouseEvent) => void;
   onRowDoubleClick?: (row: TData) => void;
   onRowContextMenu?: (row: TData, event: React.MouseEvent) => void;
-  onToggleExpand?: (id: string) => void;
-  getRowId: (row: TData) => string;
+  onToggleExpand?: (id: number) => void;
+  getRowId: (row: TData) => number;
   renderSubRow?: (row: TData) => React.ReactNode;
   hasExpandableRows?: (row: TData) => boolean;
+  /** Callback when keyboard navigation selects a row */
+  onKeyboardSelect?: (row: TData) => void;
 }
 
 export function DataTable<TData>({
@@ -43,9 +45,128 @@ export function DataTable<TData>({
   getRowId,
   renderSubRow,
   hasExpandableRows,
+  onKeyboardSelect,
 }: DataTableProps<TData>) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
+
+  // Find current focused row index based on selection
+  const getFocusedIndex = useCallback(() => {
+    if (selectedIds.length === 0) return -1;
+    const lastSelectedId = selectedIds[selectedIds.length - 1];
+    return data.findIndex((row) => getRowId(row) === lastSelectedId);
+  }, [selectedIds, data, getRowId]);
+
+  // Scroll row into view
+  const scrollRowIntoView = useCallback((rowId: number) => {
+    const rowElement = rowRefs.current.get(rowId);
+    if (rowElement) {
+      rowElement.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, []);
+
+  // Handle keyboard navigation
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (data.length === 0) return;
+
+      const currentIndex = getFocusedIndex();
+
+      switch (event.key) {
+        case "ArrowDown": {
+          event.preventDefault();
+          const nextIndex = currentIndex < data.length - 1 ? currentIndex + 1 : currentIndex;
+          if (nextIndex !== currentIndex || currentIndex === -1) {
+            const targetIndex = currentIndex === -1 ? 0 : nextIndex;
+            const row = data[targetIndex];
+            if (row) {
+              onKeyboardSelect?.(row);
+              scrollRowIntoView(getRowId(row));
+            }
+          }
+          break;
+        }
+        case "ArrowUp": {
+          event.preventDefault();
+          const prevIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+          if (prevIndex !== currentIndex || currentIndex === -1) {
+            const targetIndex = currentIndex === -1 ? 0 : prevIndex;
+            const row = data[targetIndex];
+            if (row) {
+              onKeyboardSelect?.(row);
+              scrollRowIntoView(getRowId(row));
+            }
+          }
+          break;
+        }
+        case "Enter": {
+          event.preventDefault();
+          if (currentIndex >= 0) {
+            const row = data[currentIndex];
+            if (row) {
+              onRowDoubleClick?.(row);
+            }
+          }
+          break;
+        }
+        case " ": {
+          // Space toggles expand/collapse
+          event.preventDefault();
+          if (currentIndex >= 0 && onToggleExpand) {
+            const row = data[currentIndex];
+            if (row) {
+              const canExpand = hasExpandableRows ? hasExpandableRows(row) : !!renderSubRow;
+              if (canExpand) {
+                onToggleExpand(getRowId(row));
+              }
+            }
+          }
+          break;
+        }
+        case "Home": {
+          event.preventDefault();
+          if (data.length > 0) {
+            const row = data[0];
+            if (row) {
+              onKeyboardSelect?.(row);
+              scrollRowIntoView(getRowId(row));
+            }
+          }
+          break;
+        }
+        case "End": {
+          event.preventDefault();
+          if (data.length > 0) {
+            const row = data[data.length - 1];
+            if (row) {
+              onKeyboardSelect?.(row);
+              scrollRowIntoView(getRowId(row));
+            }
+          }
+          break;
+        }
+      }
+    },
+    [data, getFocusedIndex, getRowId, onKeyboardSelect, onRowDoubleClick, onToggleExpand, hasExpandableRows, renderSubRow, scrollRowIntoView]
+  );
+
+  // Auto-focus container when selection changes via click
+  useEffect(() => {
+    if (selectedIds.length > 0 && containerRef.current) {
+      // Focus only if not already focused within
+      if (!containerRef.current.contains(document.activeElement)) {
+        containerRef.current.focus();
+      }
+    }
+  }, [selectedIds]);
+
   return (
-    <div className="h-full overflow-auto">
+    <div
+      ref={containerRef}
+      className="h-full overflow-auto focus:outline-none"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+    >
       <table className="w-full border-collapse table-fixed min-w-full">
         {/* Column sizing */}
         <colgroup>
@@ -99,6 +220,13 @@ export function DataTable<TData>({
             return (
               <Fragment key={rowId}>
                 <tr
+                  ref={(el) => {
+                    if (el) {
+                      rowRefs.current.set(rowId, el);
+                    } else {
+                      rowRefs.current.delete(rowId);
+                    }
+                  }}
                   data-state={isSelected ? "selected" : undefined}
                   className={cn(
                     "cursor-pointer transition-colors border-b h-8 select-none",
@@ -152,7 +280,7 @@ export function DataTable<TData>({
 
       {data.length === 0 && (
         <div className="flex items-center justify-center h-24 text-muted-foreground text-sm">
-          No results.
+          No items to display
         </div>
       )}
     </div>

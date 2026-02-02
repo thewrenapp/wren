@@ -26,7 +26,12 @@ pub async fn get_collections(state: State<'_, AppState>) -> Result<Vec<Collectio
             c.description,
             c.color,
             c.icon,
-            COALESCE((SELECT COUNT(*) FROM collection_items WHERE collection_id = c.id), 0) as item_count
+            COALESCE((
+                SELECT COUNT(*)
+                FROM collection_entries ce
+                INNER JOIN entries e ON e.id = ce.entry_id
+                WHERE ce.collection_id = c.id AND e.is_deleted = 0
+            ), 0) as item_count
         FROM collections c
         ORDER BY c.name
         "#
@@ -44,6 +49,7 @@ pub async fn get_collections(state: State<'_, AppState>) -> Result<Vec<Collectio
             description: c.description,
             color: c.color,
             icon: c.icon,
+            parent_id: None, // TODO: Add parent_id to query
             item_count: c.item_count,
         })
         .collect())
@@ -79,6 +85,7 @@ pub async fn create_collection(
         description: input.description,
         color: input.color,
         icon: input.icon,
+        parent_id: input.parent_id,
         item_count: 0,
     })
 }
@@ -145,17 +152,17 @@ pub async fn delete_collection(state: State<'_, AppState>, id: i64) -> Result<()
 #[tauri::command]
 pub async fn add_item_to_collection(
     state: State<'_, AppState>,
-    item_id: i64,
+    entry_id: i64,
     collection_id: i64,
 ) -> Result<(), String> {
     sqlx::query(
         r#"
-        INSERT OR IGNORE INTO collection_items (collection_id, item_id, order_index)
-        VALUES (?, ?, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM collection_items WHERE collection_id = ?))
+        INSERT OR IGNORE INTO collection_entries (collection_id, entry_id, order_index)
+        VALUES (?, ?, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM collection_entries WHERE collection_id = ?))
         "#
     )
     .bind(collection_id)
-    .bind(item_id)
+    .bind(entry_id)
     .bind(collection_id)
     .execute(&state.db)
     .await
@@ -167,12 +174,12 @@ pub async fn add_item_to_collection(
 #[tauri::command]
 pub async fn remove_item_from_collection(
     state: State<'_, AppState>,
-    item_id: i64,
+    entry_id: i64,
     collection_id: i64,
 ) -> Result<(), String> {
-    sqlx::query("DELETE FROM collection_items WHERE collection_id = ? AND item_id = ?")
+    sqlx::query("DELETE FROM collection_entries WHERE collection_id = ? AND entry_id = ?")
         .bind(collection_id)
-        .bind(item_id)
+        .bind(entry_id)
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;

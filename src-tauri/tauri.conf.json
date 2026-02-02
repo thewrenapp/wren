@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Etal",
+  "productName": "Wren",
   "version": "0.1.0",
-  "identifier": "com.etal.app",
+  "identifier": "com.wren.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Etal",
+        "title": "Wren",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -30,7 +30,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/Etal/**", "$DOCUMENT/**", "$DOWNLOAD/**"]
+        "scope": ["$HOME/Wren/**", "$DOCUMENT/**", "$DOWNLOAD/**"]
       }
     },
     "macOSPrivateApi": true

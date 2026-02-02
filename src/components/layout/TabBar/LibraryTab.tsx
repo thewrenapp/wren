@@ -18,8 +18,8 @@ export function LibraryTab() {
   } = useUIStore();
   const { selectedEntryIds } = useLibraryStore();
 
-  // Show info pane only when an entry is selected
-  const showInfoPane = selectedEntryIds.length > 0;
+  // Show info pane only when exactly one entry is selected
+  const showInfoPane = selectedEntryIds.length === 1;
 
   const totalWidth = typeof window !== "undefined" ? window.innerWidth : 1000;
   const totalHeight = typeof window !== "undefined" ? window.innerHeight : 800;

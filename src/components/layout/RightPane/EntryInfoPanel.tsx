@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { toast } from "@/stores/toastStore";
 import {
   Info,
   FileText,
@@ -9,97 +10,503 @@ import {
   Globe,
   ExternalLink,
   File,
+  Users,
+  Copy,
+  Check,
+  Pencil,
+  X,
+  Save,
+  Trash2,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { InfoSection } from "./InfoSection";
 import { useLibraryStore, type EntrySummary } from "@/stores/libraryStore";
+import { useTabStore } from "@/stores/tabStore";
+import { useUIStore } from "@/stores/uiStore";
+import { useSchemaStore } from "@/stores/schemaStore";
 import { formatDate } from "@/lib/utils";
-import { getEntry, type Entry as TauriEntry } from "@/services/tauri";
+import {
+  getEntry,
+  updateEntry,
+  addEntryTag,
+  removeEntryTag,
+  addEntryToCollection,
+  removeEntryFromCollection,
+  getTags,
+  getCollections,
+  type Entry as TauriEntry,
+  type Creator,
+} from "@/services/tauri";
+import type { ItemTypeInfo } from "@/types/schema";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 interface EntryInfoPanelProps {
   entry: EntrySummary;
 }
 
 export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
-  const { collections } = useLibraryStore();
+  const { collections, setTags, setCollections, entryVersion, invalidateEntry, refreshLibrary } = useLibraryStore();
+  const { tabs, updateTab } = useTabStore();
+  const { activeFilter } = useUIStore();
+  const { getItemTypeInfo, loadSchema, isLoaded, itemTypes } = useSchemaStore();
+  const isTrashView = activeFilter === "trash";
   const [fullEntry, setFullEntry] = useState<TauriEntry | null>(null);
+  const [itemTypeInfo, setItemTypeInfo] = useState<ItemTypeInfo | null>(null);
 
-  // Fetch full entry details
+  // Edit mode state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedItemType, setEditedItemType] = useState("");
+  const [editedTitle, setEditedTitle] = useState("");
+  const [editedDate, setEditedDate] = useState("");
+  const [editedUrl, setEditedUrl] = useState("");
+  const [editedFields, setEditedFields] = useState<Record<string, string>>({});
+  const [editedCreators, setEditedCreators] = useState<Creator[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Tag/Collection adding state
+  const [isAddingTag, setIsAddingTag] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [isAddingCollection, setIsAddingCollection] = useState(false);
+
+  // Load schema on mount
   useEffect(() => {
-    console.log("Fetching entry details for ID:", entry.id);
-    getEntry(Number(entry.id))
+    if (!isLoaded) {
+      loadSchema();
+    }
+  }, [isLoaded, loadSchema]);
+
+  // Fetch full entry details (also refetch when entryVersion changes)
+  // Pass includeDeleted=true when viewing trash items
+  useEffect(() => {
+    getEntry(entry.id, isTrashView)
       .then((data) => {
-        console.log("Fetched entry data:", data);
-        console.log("Attachments:", data.attachments);
         setFullEntry(data);
       })
       .catch(console.error);
-  }, [entry.id]);
+  }, [entry.id, entryVersion, isTrashView]);
 
-  // Get collections this entry belongs to (placeholder - would need real data)
-  const entryCollections = collections.filter(() => false);
+  // Fetch item type info when entry changes or edited item type changes
+  useEffect(() => {
+    const typeToFetch = isEditing ? editedItemType : entry.itemType;
+    if (typeToFetch) {
+      getItemTypeInfo(typeToFetch).then(setItemTypeInfo);
+    }
+  }, [entry.itemType, editedItemType, isEditing, getItemTypeInfo]);
+
+  // Initialize edit state when entering edit mode
+  const startEditing = useCallback(() => {
+    if (fullEntry) {
+      setEditedItemType(fullEntry.itemType || "");
+      setEditedTitle(fullEntry.title || "");
+      setEditedDate(fullEntry.date || "");
+      setEditedUrl(fullEntry.url || "");
+      setEditedFields({ ...fullEntry.fields });
+      setEditedCreators([...fullEntry.creators]);
+      setIsEditing(true);
+    }
+  }, [fullEntry]);
+
+  // Cancel editing
+  const cancelEditing = () => {
+    setIsEditing(false);
+  };
+
+  // Save changes
+  const saveChanges = async () => {
+    if (!fullEntry) return;
+
+    setIsSaving(true);
+    try {
+      await updateEntry(fullEntry.id, {
+        itemType: editedItemType !== fullEntry.itemType ? editedItemType : undefined,
+        title: editedTitle,
+        date: editedDate || undefined,
+        url: editedUrl || undefined,
+        fields: editedFields,
+        creators: editedCreators.map((c) => ({
+          creatorType: c.creatorType,
+          firstName: c.firstName,
+          lastName: c.lastName,
+          name: c.name,
+        })),
+      });
+
+      // Refresh entry data
+      const updated = await getEntry(fullEntry.id, isTrashView);
+      setFullEntry(updated);
+      // Update any open tabs for this entry with the new title
+      const entryTabs = tabs.filter(t => t.type === "entry" && t.entryId === String(fullEntry.id));
+      entryTabs.forEach(t => updateTab(t.id, { title: editedTitle }));
+      // Invalidate to trigger refresh in other components (e.g., entry list, entry tabs)
+      invalidateEntry();
+      // Refresh entries list to update table/card views
+      await refreshLibrary();
+      setIsEditing(false);
+      toast.success("Changes saved");
+    } catch (err) {
+      console.error("Failed to save:", err);
+      toast.error("Failed to save changes");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Update a field value
+  const updateField = (fieldName: string, value: string) => {
+    if (fieldName === "title") setEditedTitle(value);
+    else if (fieldName === "date") setEditedDate(value);
+    else if (fieldName === "url") setEditedUrl(value);
+    else setEditedFields((prev) => ({ ...prev, [fieldName]: value }));
+  };
+
+  // Get field value (edited or original)
+  const getFieldValue = (fieldName: string): string => {
+    if (isEditing) {
+      if (fieldName === "title") return editedTitle;
+      if (fieldName === "date") return editedDate;
+      if (fieldName === "url") return editedUrl;
+      return editedFields[fieldName] || "";
+    }
+
+    if (!fullEntry) return "";
+    if (fieldName === "title") return fullEntry.title || "";
+    if (fieldName === "date") return fullEntry.date || "";
+    if (fieldName === "url") return fullEntry.url || "";
+    if (fieldName === "accessDate") return fullEntry.accessDate || "";
+    return fullEntry.fields?.[fieldName] || "";
+  };
+
+  // Get collections this entry belongs to
+  const entryCollections = fullEntry?.collections
+    ? collections.filter((c) => fullEntry.collections.includes(c.id))
+    : [];
+
+  // Filter fields that have values (when not editing)
+  const fieldsWithValues =
+    itemTypeInfo?.fields.filter((field) => {
+      if (isEditing) return true; // Show all fields when editing
+      const value = getFieldValue(field.name);
+      return value && value.trim() !== "";
+    }) || [];
+
+  // Add creator
+  const addCreator = () => {
+    const primaryType = itemTypeInfo?.creatorTypes.find((ct) => ct.isPrimary);
+    setEditedCreators((prev) => [
+      ...prev,
+      {
+        creatorType: primaryType?.name || "author",
+        firstName: "",
+        lastName: "",
+        sortOrder: prev.length,
+      },
+    ]);
+  };
+
+  // Update creator
+  const updateCreator = (index: number, field: keyof Creator, value: string) => {
+    setEditedCreators((prev) =>
+      prev.map((c, i) => (i === index ? { ...c, [field]: value } : c))
+    );
+  };
+
+  // Remove creator
+  const removeCreator = (index: number) => {
+    setEditedCreators((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Add tag
+  const handleAddTag = async () => {
+    if (!fullEntry || !newTagName.trim()) return;
+    try {
+      await addEntryTag(fullEntry.id, newTagName.trim());
+      // Refresh entry to get updated tags
+      const updated = await getEntry(fullEntry.id, isTrashView);
+      setFullEntry(updated);
+      // Refresh global tags list for sidebar
+      const allTags = await getTags();
+      setTags(allTags);
+      setNewTagName("");
+      setIsAddingTag(false);
+    } catch (err) {
+      console.error("Failed to add tag:", err);
+    }
+  };
+
+  // Remove tag
+  const handleRemoveTag = async (tagId: number) => {
+    if (!fullEntry) return;
+    try {
+      await removeEntryTag(fullEntry.id, tagId);
+      const updated = await getEntry(fullEntry.id, isTrashView);
+      setFullEntry(updated);
+      // Refresh global tags for sidebar count
+      const allTags = await getTags();
+      setTags(allTags);
+    } catch (err) {
+      console.error("Failed to remove tag:", err);
+    }
+  };
+
+  // Add to collection
+  const handleAddToCollection = async (collectionId: number) => {
+    if (!fullEntry) return;
+    try {
+      await addEntryToCollection(fullEntry.id, collectionId);
+      const updated = await getEntry(fullEntry.id, isTrashView);
+      setFullEntry(updated);
+      // Refresh collections to update sidebar counts
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      setIsAddingCollection(false);
+    } catch (err) {
+      console.error("Failed to add to collection:", err);
+    }
+  };
+
+  // Remove from collection
+  const handleRemoveFromCollection = async (collectionId: number) => {
+    if (!fullEntry) return;
+    try {
+      await removeEntryFromCollection(fullEntry.id, collectionId);
+      const updated = await getEntry(fullEntry.id, isTrashView);
+      setFullEntry(updated);
+      // Refresh collections to update sidebar counts
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+    } catch (err) {
+      console.error("Failed to remove from collection:", err);
+    }
+  };
+
+  const currentCreators = isEditing ? editedCreators : fullEntry?.creators || [];
 
   return (
     <div className="h-full flex flex-col bg-background">
       {/* Header */}
-      <div className="px-3 py-2 border-b">
-        <h3 className="text-sm font-semibold line-clamp-2">{entry.title}</h3>
-        {entry.creatorsDisplay && (
-          <p className="text-xs text-muted-foreground mt-1">{entry.creatorsDisplay}</p>
+      <div className="px-3 py-2 border-b flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          {isEditing ? (
+            <Input
+              value={editedTitle}
+              onChange={(e) => setEditedTitle(e.target.value)}
+              className="text-sm font-semibold h-auto py-1"
+              placeholder="Title"
+            />
+          ) : (
+            <h3 className="text-sm font-semibold line-clamp-2">{fullEntry?.title || entry.title}</h3>
+          )}
+          {!isEditing && (fullEntry?.creators?.length || entry.creatorsDisplay) && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {fullEntry?.creators?.length
+                ? fullEntry.creators
+                    .map((c) => c.name || [c.firstName, c.lastName].filter(Boolean).join(" "))
+                    .join(", ")
+                : entry.creatorsDisplay}
+            </p>
+          )}
+        </div>
+        {!isEditing ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 flex-shrink-0"
+            onClick={startEditing}
+            title="Edit"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        ) : (
+          <div className="flex gap-1 flex-shrink-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={cancelEditing}
+              title="Cancel"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="default"
+              size="icon"
+              className="h-7 w-7"
+              onClick={saveChanges}
+              disabled={isSaving}
+              title="Save"
+            >
+              <Save className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         )}
       </div>
 
       <ScrollArea className="flex-1">
-        {/* Info Section */}
+        {/* Info Section - Dynamic Fields */}
         <InfoSection
           title="Info"
           icon={<Info className="h-4 w-4" />}
           defaultOpen={true}
         >
           <div className="space-y-2">
-            <MetadataField label="Item Type" value={formatEntryType(entry.entryType)} />
-            <MetadataField label="Title" value={entry.title} />
-            {entry.creatorsDisplay && (
-              <MetadataField label="Author" value={entry.creatorsDisplay} />
+            {/* Item Type */}
+            <div className="flex items-start">
+              <span className="text-xs text-muted-foreground w-24 flex-shrink-0 pt-1.5">
+                Item Type
+              </span>
+              <div className="flex-1 min-w-0">
+                {isEditing ? (
+                  <select
+                    value={editedItemType}
+                    onChange={(e) => setEditedItemType(e.target.value)}
+                    className="w-full text-sm bg-background border rounded px-2 py-1 h-7"
+                  >
+                    {itemTypes.map((type) => (
+                      <option key={type.name} value={type.name}>
+                        {type.displayName}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-sm pt-0.5 block">
+                    {itemTypeInfo?.displayName || entry.itemTypeDisplay || formatItemType(fullEntry?.itemType || entry.itemType)}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Dynamic fields based on item type */}
+            {fieldsWithValues.map((field) => {
+              // Skip title - it's in the header
+              // Skip abstractNote - it has its own section
+              if (field.name === "title" || field.name === "abstractNote") return null;
+
+              const value = getFieldValue(field.name);
+              if (!isEditing && !value) return null;
+
+              return (
+                <MetadataField
+                  key={field.name}
+                  label={field.displayName}
+                  value={value}
+                  isEditing={isEditing}
+                  onChange={(val) => updateField(field.name, val)}
+                  copyable={field.fieldType === "identifier"}
+                  link={field.fieldType === "url" && !isEditing}
+                  inputType={field.fieldType === "date" ? "date" : "text"}
+                />
+              );
+            })}
+
+            {/* Date Added (always show, not editable) */}
+            <MetadataField
+              label="Date Added"
+              value={formatDate(entry.dateAdded)}
+              isEditing={false}
+            />
+
+            {/* Date Modified */}
+            {(fullEntry?.dateModified || entry.dateModified) && (
+              <MetadataField
+                label="Date Modified"
+                value={formatDate((fullEntry?.dateModified || entry.dateModified)!)}
+                isEditing={false}
+              />
             )}
-            {entry.year && <MetadataField label="Year" value={entry.year} />}
-            {fullEntry?.doi && <MetadataField label="DOI" value={fullEntry.doi} copyable />}
-            {fullEntry?.isbn && <MetadataField label="ISBN" value={fullEntry.isbn} />}
-            {fullEntry?.url && (
-              <MetadataField label="URL" value={fullEntry.url} link />
-            )}
-            {fullEntry?.journal && (
-              <MetadataField label="Journal" value={fullEntry.journal} />
-            )}
-            {fullEntry?.publisher && (
-              <MetadataField label="Publisher" value={fullEntry.publisher} />
-            )}
-            {fullEntry?.volume && (
-              <MetadataField label="Volume" value={fullEntry.volume} />
-            )}
-            {fullEntry?.issue && (
-              <MetadataField label="Issue" value={fullEntry.issue} />
-            )}
-            {fullEntry?.pages && (
-              <MetadataField label="Pages" value={fullEntry.pages} />
-            )}
-            {fullEntry?.repository && (
-              <MetadataField label="Repository" value={fullEntry.repository} />
-            )}
-            {fullEntry?.archiveId && (
-              <MetadataField label="Archive ID" value={fullEntry.archiveId} />
-            )}
-            <MetadataField label="Date Added" value={formatDate(entry.dateAdded)} />
           </div>
         </InfoSection>
 
-        {/* Abstract Section */}
-        {fullEntry?.abstract && (
-          <InfoSection title="Abstract" icon={<FileText className="h-4 w-4" />}>
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              {fullEntry.abstract}
+        {/* Creators Section */}
+        <InfoSection
+          title="Creators"
+          icon={<Users className="h-4 w-4" />}
+          count={currentCreators.length}
+          onAdd={isEditing ? addCreator : undefined}
+        >
+          {currentCreators.length > 0 ? (
+            <div className="space-y-2">
+              {currentCreators.map((creator, index) => (
+                <div key={index} className="flex items-start gap-2">
+                  {isEditing ? (
+                    <>
+                      <select
+                        value={creator.creatorType}
+                        onChange={(e) =>
+                          updateCreator(index, "creatorType", e.target.value)
+                        }
+                        className="text-xs bg-background border rounded px-1 py-1 w-20"
+                      >
+                        {itemTypeInfo?.creatorTypes.map((ct) => (
+                          <option key={ct.name} value={ct.name}>
+                            {ct.displayName}
+                          </option>
+                        ))}
+                      </select>
+                      <Input
+                        value={creator.firstName || ""}
+                        onChange={(e) =>
+                          updateCreator(index, "firstName", e.target.value)
+                        }
+                        placeholder="First"
+                        className="h-7 text-sm flex-1"
+                      />
+                      <Input
+                        value={creator.lastName || ""}
+                        onChange={(e) =>
+                          updateCreator(index, "lastName", e.target.value)
+                        }
+                        placeholder="Last"
+                        className="h-7 text-sm flex-1"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 flex-shrink-0"
+                        onClick={() => removeCreator(index)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xs text-muted-foreground w-20 flex-shrink-0 pt-0.5 capitalize">
+                        {creator.creatorType}
+                      </span>
+                      <span className="flex-1 text-sm">
+                        {creator.name ||
+                          [creator.firstName, creator.lastName]
+                            .filter(Boolean)
+                            .join(" ")}
+                      </span>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {isEditing ? "Click + to add creators" : "No creators"}
             </p>
+          )}
+        </InfoSection>
+
+        {/* Abstract Section */}
+        {(isEditing || fullEntry?.fields?.abstractNote) && (
+          <InfoSection title="Abstract" icon={<FileText className="h-4 w-4" />}>
+            {isEditing ? (
+              <textarea
+                value={editedFields.abstractNote || ""}
+                onChange={(e) => updateField("abstractNote", e.target.value)}
+                className="w-full text-sm bg-background border rounded px-2 py-1 min-h-[100px] resize-y"
+                placeholder="Abstract..."
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                {fullEntry?.fields?.abstractNote}
+              </p>
+            )}
           </InfoSection>
         )}
 
@@ -107,10 +514,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
         <InfoSection
           title="Attachments"
           icon={<Paperclip className="h-4 w-4" />}
-          count={entry.attachmentCount}
-          onAdd={() => {
-            // TODO: Add attachment
-          }}
+          count={fullEntry?.attachments?.length ?? entry.attachmentCount}
         >
           {fullEntry?.attachments && fullEntry.attachments.length > 0 ? (
             <div className="space-y-1">
@@ -136,24 +540,51 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
           title="Collections"
           icon={<FolderOpen className="h-4 w-4" />}
           count={entryCollections.length}
-          onAdd={() => {
-            // TODO: Add to collection
-          }}
+          onAdd={() => setIsAddingCollection(true)}
         >
+          {isAddingCollection && (
+            <div className="mb-2">
+              <select
+                className="w-full text-sm bg-background border rounded px-2 py-1"
+                onChange={(e) => {
+                  if (e.target.value) {
+                    handleAddToCollection(Number(e.target.value));
+                  }
+                }}
+                defaultValue=""
+              >
+                <option value="" disabled>Select collection...</option>
+                {collections
+                  .filter((c) => !entryCollections.some((ec) => ec.id === c.id))
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+              </select>
+            </div>
+          )}
           {entryCollections.length > 0 ? (
             <div className="space-y-1">
               {entryCollections.map((collection) => (
                 <div
                   key={collection.id}
-                  className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer"
+                  className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 group"
                 >
                   <FolderOpen className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm">{collection.name}</span>
+                  <span className="text-sm flex-1">{collection.name}</span>
+                  <button
+                    onClick={() => handleRemoveFromCollection(collection.id)}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-destructive/10 rounded"
+                    title="Remove from collection"
+                  >
+                    <X className="h-3 w-3 text-destructive" />
+                  </button>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">Not in any collections</p>
+            <p className="text-sm text-muted-foreground">
+              Not in any collections
+            </p>
           )}
         </InfoSection>
 
@@ -161,24 +592,50 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
         <InfoSection
           title="Tags"
           icon={<Tags className="h-4 w-4" />}
-          count={entry.tags.length}
-          onAdd={() => {
-            // TODO: Add tag
-          }}
+          count={fullEntry?.tags?.length || 0}
+          onAdd={() => setIsAddingTag(true)}
         >
-          {entry.tags.length > 0 ? (
+          {isAddingTag && (
+            <div className="mb-2 flex gap-1">
+              <Input
+                value={newTagName}
+                onChange={(e) => setNewTagName(e.target.value)}
+                placeholder="Tag name..."
+                className="h-7 text-sm flex-1"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAddTag();
+                  if (e.key === "Escape") {
+                    setIsAddingTag(false);
+                    setNewTagName("");
+                  }
+                }}
+                autoFocus
+              />
+              <Button size="sm" className="h-7 px-2" onClick={handleAddTag}>
+                Add
+              </Button>
+            </div>
+          )}
+          {(fullEntry?.tags?.length || 0) > 0 ? (
             <div className="flex flex-wrap gap-1">
-              {entry.tags.map((tag) => (
+              {fullEntry?.tags?.map((tag) => (
                 <span
                   key={tag.id}
-                  className="px-2 py-0.5 text-xs bg-muted rounded-full"
+                  className="px-2 py-0.5 text-xs bg-muted rounded-full flex items-center gap-1 group"
                 >
                   {tag.name}
+                  <button
+                    onClick={() => handleRemoveTag(tag.id)}
+                    className="opacity-0 group-hover:opacity-100 hover:text-destructive"
+                    title="Remove tag"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
                 </span>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">No tags</p>
+            <p className="text-sm text-muted-foreground italic">Click + to add tags</p>
           )}
         </InfoSection>
 
@@ -187,20 +644,19 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
           title="Related"
           icon={<Link2 className="h-4 w-4" />}
           count={0}
-          onAdd={() => {
-            // TODO: Add related entry
-          }}
         >
           <p className="text-sm text-muted-foreground">No related items</p>
         </InfoSection>
 
         {/* Actions */}
-        <div className="p-3 space-y-2">
-          <Button variant="outline" size="sm" className="w-full justify-start">
-            <ExternalLink className="h-4 w-4 mr-2" />
-            Open in External App
-          </Button>
-        </div>
+        {!isEditing && (
+          <div className="p-3 space-y-2">
+            <Button variant="outline" size="sm" className="w-full justify-start">
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Open in External App
+            </Button>
+          </div>
+        )}
       </ScrollArea>
     </div>
   );
@@ -211,14 +667,29 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
 interface MetadataFieldProps {
   label: string;
   value: string;
+  isEditing?: boolean;
+  onChange?: (value: string) => void;
   copyable?: boolean;
   link?: boolean;
+  inputType?: "text" | "date" | "url";
 }
 
-function MetadataField({ label, value, copyable, link }: MetadataFieldProps) {
+function MetadataField({
+  label,
+  value,
+  isEditing,
+  onChange,
+  copyable,
+  link,
+  inputType = "text",
+}: MetadataFieldProps) {
+  const [copied, setCopied] = useState(false);
+
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(value);
+      await writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error("Failed to copy:", err);
     }
@@ -226,27 +697,41 @@ function MetadataField({ label, value, copyable, link }: MetadataFieldProps) {
 
   return (
     <div className="flex items-start">
-      <span className="text-xs text-muted-foreground w-24 flex-shrink-0 pt-0.5">
+      <span className="text-xs text-muted-foreground w-24 flex-shrink-0 pt-1.5">
         {label}
       </span>
-      <div className="flex-1 min-w-0">
-        {link ? (
+      <div className="flex-1 min-w-0 flex items-start gap-1">
+        {isEditing ? (
+          <Input
+            type={inputType}
+            value={value}
+            onChange={(e) => onChange?.(e.target.value)}
+            className="h-7 text-sm"
+          />
+        ) : link ? (
           <a
             href={value}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-primary hover:underline truncate block"
+            className="text-sm text-primary hover:underline truncate block flex-1 pt-0.5"
           >
             {value}
           </a>
         ) : (
-          <span
-            className={`text-sm ${copyable ? "cursor-pointer hover:text-primary" : ""}`}
-            onClick={copyable ? handleCopy : undefined}
-            title={copyable ? "Click to copy" : undefined}
+          <span className="text-sm flex-1 break-words pt-0.5">{value}</span>
+        )}
+        {copyable && !isEditing && (
+          <button
+            onClick={handleCopy}
+            className="p-0.5 rounded hover:bg-muted flex-shrink-0 mt-0.5"
+            title="Copy to clipboard"
           >
-            {value}
-          </span>
+            {copied ? (
+              <Check className="h-3 w-3 text-green-500" />
+            ) : (
+              <Copy className="h-3 w-3 text-muted-foreground" />
+            )}
+          </button>
         )}
       </div>
     </div>
@@ -258,15 +743,19 @@ function AttachmentIcon({ type }: { type: string }) {
     case "pdf":
       return <File className="h-4 w-4 text-red-500" />;
     case "note":
-      return <FileText className="h-4 w-4 text-blue-500" />;
+      return <FileText className="h-4 w-4 text-primary" />;
     case "weblink":
-      return <Globe className="h-4 w-4 text-green-500" />;
+      return <Globe className="h-4 w-4 text-primary/70" />;
     default:
       return <Paperclip className="h-4 w-4 text-muted-foreground" />;
   }
 }
 
-function getAttachmentTitle(attachment: { filePath?: string; url?: string; attachmentType: string }): string {
+function getAttachmentTitle(attachment: {
+  filePath?: string;
+  url?: string;
+  attachmentType: string;
+}): string {
   if (attachment.filePath) {
     const parts = attachment.filePath.split("/");
     return parts[parts.length - 1];
@@ -277,20 +766,28 @@ function getAttachmentTitle(attachment: { filePath?: string; url?: string; attac
   return `${attachment.attachmentType} attachment`;
 }
 
-function formatEntryType(type: string): string {
+function formatItemType(type: string): string {
   const typeMap: Record<string, string> = {
-    paper: "Paper",
-    journal_article: "Journal Article",
+    journalArticle: "Journal Article",
     book: "Book",
-    book_chapter: "Book Chapter",
-    conference_paper: "Conference Paper",
+    bookSection: "Book Section",
+    conferencePaper: "Conference Paper",
     thesis: "Thesis",
     report: "Report",
-    website: "Website",
-    magazine_article: "Magazine Article",
-    newspaper_article: "Newspaper Article",
-    software: "Software",
-    generic: "Generic",
+    preprint: "Preprint",
+    webpage: "Web Page",
+    blogPost: "Blog Post",
+    magazineArticle: "Magazine Article",
+    newspaperArticle: "Newspaper Article",
+    computerProgram: "Software",
+    document: "Document",
+    dataset: "Dataset",
+    patent: "Patent",
+    artwork: "Artwork",
+    film: "Film",
+    podcast: "Podcast",
+    note: "Note",
+    attachment: "Attachment",
   };
-  return typeMap[type] || type.replace(/_/g, " ");
+  return typeMap[type] || type.replace(/([A-Z])/g, " $1").trim();
 }

@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { GlobalWorkerOptions } from "pdfjs-dist";
+import { toast } from "@/stores/toastStore";
 
 // CSS imports in correct order
 import "pdfjs-dist/web/pdf_viewer.css";
@@ -32,6 +34,7 @@ import {
 
 import { PDFToolbar, type SearchOptions } from "./PDFToolbar";
 import { HighlightPopup } from "./HighlightPopup";
+import { AnnotationPanel } from "./AnnotationPanel";
 import {
   getAnnotations,
   createAnnotation,
@@ -62,7 +65,7 @@ interface AppHighlight extends Highlight {
 
 interface PDFViewerProps {
   filePath: string;
-  itemId: string;
+  attachmentId: string;
 }
 
 // Tool modes
@@ -212,7 +215,7 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
   );
 }
 
-export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
+export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
   const [highlights, setHighlights] = useState<AppHighlight[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string>("");
   const [scale, setScale] = useState<PdfScaleValue | undefined>(undefined);
@@ -220,7 +223,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
   const [highlightColor, setHighlightColor] = useState("#FFE28F");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
-  const [toolMode, setToolMode] = useState<ToolMode>("highlight");
+  const [toolMode, setToolMode] = useState<ToolMode>(null);
   const [drawingColor, setDrawingColor] = useState("#000000");
   const [shapeColor, setShapeColor] = useState("#000000");
   const [darkMode, setDarkMode] = useState(false);
@@ -229,6 +232,16 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
   const [searchMatchCount, setSearchMatchCount] = useState(0);
   const [searchCurrentMatch, setSearchCurrentMatch] = useState(0);
   const [viewerReady, setViewerReady] = useState(false);
+
+  // Left panel tab state
+  const [leftPanelTab, setLeftPanelTab] = useState<"thumbnails" | "outline" | "annotations">("thumbnails");
+
+  // Fullscreen state
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Saved selection ref for Cmd+C copy
+  const savedSelectionRef = useRef<string>("");
 
   // Get panel states from global store
   const {
@@ -258,6 +271,122 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
     });
 
     return () => observer.disconnect();
+  }, []);
+
+  // Fullscreen change handler
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  // Save selection for Cmd+C copy
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Save selection on mouseup (when user finishes selecting text)
+    const handleMouseUp = () => {
+      setTimeout(() => {
+        const selection = window.getSelection();
+        const selectedText = selection?.toString().trim();
+        if (selectedText) {
+          savedSelectionRef.current = selectedText;
+        }
+      }, 10);
+    };
+
+    // Also save on selectionchange for better tracking
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      const selectedText = selection?.toString().trim();
+      if (selectedText) {
+        const anchorNode = selection?.anchorNode;
+        if (anchorNode && container.contains(anchorNode)) {
+          savedSelectionRef.current = selectedText;
+        }
+      }
+    };
+
+    // Clear saved selection on left-click when selection is cleared
+    const handleClick = () => {
+      setTimeout(() => {
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed) {
+          savedSelectionRef.current = "";
+        }
+      }, 100);
+    };
+
+    container.addEventListener("mouseup", handleMouseUp);
+    document.addEventListener("selectionchange", handleSelectionChange);
+    document.addEventListener("click", handleClick);
+
+    return () => {
+      container.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      document.removeEventListener("click", handleClick);
+    };
+  }, []);
+
+  // Copy selected text handler - Cmd+C / Ctrl+C
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      // Only handle Cmd+C / Ctrl+C
+      if (!((e.metaKey || e.ctrlKey) && e.key === "c")) return;
+
+      // Get selected text (or use saved selection)
+      const selection = window.getSelection();
+      let selectedText = selection?.toString().trim();
+
+      // If no current selection, try saved selection
+      if (!selectedText && savedSelectionRef.current) {
+        selectedText = savedSelectionRef.current;
+      }
+      if (!selectedText) return;
+
+      // Check if we're in the PDF container
+      const container = containerRef.current;
+      const anchorNode = selection?.anchorNode;
+      const inContainer = container && (
+        (anchorNode && container.contains(anchorNode)) ||
+        savedSelectionRef.current
+      );
+      if (!inContainer) return;
+
+      // Prevent default and use Tauri clipboard
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        await writeText(selectedText);
+        savedSelectionRef.current = ""; // Clear saved selection after copy
+        toast.success("Copied to clipboard");
+      } catch (err) {
+        console.error("Failed to copy text:", err);
+        toast.error(`Failed to copy: ${err}`);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Toggle fullscreen
+  const toggleFullscreen = useCallback(async () => {
+    if (!containerRef.current) return;
+
+    try {
+      if (!document.fullscreenElement) {
+        await containerRef.current.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {
+      console.error("Failed to toggle fullscreen:", err);
+    }
   }, []);
 
   // Reset utils initialization flag when URL changes
@@ -351,7 +480,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
   useEffect(() => {
     async function loadAnnotations() {
       try {
-        const annotations = await getAnnotations(parseInt(itemId, 10));
+        const annotations = await getAnnotations(parseInt(attachmentId, 10));
         const appHighlights = annotations.map(convertAnnotationToHighlight);
         setHighlights(appHighlights);
       } catch {
@@ -359,7 +488,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
       }
     }
     loadAnnotations();
-  }, [itemId]);
+  }, [attachmentId]);
 
   function convertAnnotationToHighlight(annotation: Annotation): AppHighlight {
     const position = JSON.parse(annotation.positionJson) as ScaledPosition;
@@ -423,7 +552,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
       (async () => {
         try {
           const annotation = await createAnnotation({
-            itemId: parseInt(itemId, 10),
+            attachmentId: parseInt(attachmentId, 10),
             annotationType: highlightType,
             pageNumber: position.boundingRect.pageNumber,
             positionJson: JSON.stringify(position),
@@ -441,7 +570,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
         }
       })();
     },
-    [itemId, highlightColor, toolMode]
+    [attachmentId, highlightColor, toolMode]
   );
 
   // Create freetext note
@@ -462,7 +591,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
       (async () => {
         try {
           const annotation = await createAnnotation({
-            itemId: parseInt(itemId, 10),
+            attachmentId: parseInt(attachmentId, 10),
             annotationType: "freetext",
             pageNumber: position.boundingRect.pageNumber,
             positionJson: JSON.stringify(position),
@@ -479,7 +608,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
         }
       })();
     },
-    [itemId]
+    [attachmentId]
   );
 
   // Create drawing highlight
@@ -498,7 +627,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
       (async () => {
         try {
           const annotation = await createAnnotation({
-            itemId: parseInt(itemId, 10),
+            attachmentId: parseInt(attachmentId, 10),
             annotationType: "drawing",
             pageNumber: position.boundingRect.pageNumber,
             positionJson: JSON.stringify(position),
@@ -515,7 +644,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
         }
       })();
     },
-    [itemId, drawingColor]
+    [attachmentId, drawingColor]
   );
 
   // Create shape highlight
@@ -537,7 +666,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
       (async () => {
         try {
           const annotation = await createAnnotation({
-            itemId: parseInt(itemId, 10),
+            attachmentId: parseInt(attachmentId, 10),
             annotationType: "shape",
             pageNumber: position.boundingRect.pageNumber,
             positionJson: JSON.stringify(position),
@@ -554,7 +683,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
         }
       })();
     },
-    [itemId]
+    [attachmentId]
   );
 
   // Change highlight color
@@ -683,6 +812,47 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
     options: { highlightAll: true, matchCase: false, wholeWords: false },
   });
 
+  // PDF-specific keyboard shortcuts (Cmd++/-/0 for zoom)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMeta = e.metaKey || e.ctrlKey;
+
+      // Don't handle if typing in an input
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+
+      // Zoom in: Cmd++ or Cmd+=
+      if (isMeta && (e.key === "+" || e.key === "=")) {
+        e.preventDefault();
+        zoomIn();
+        return;
+      }
+
+      // Zoom out: Cmd+-
+      if (isMeta && e.key === "-") {
+        e.preventDefault();
+        zoomOut();
+        return;
+      }
+
+      // Reset zoom: Cmd+0
+      if (isMeta && e.key === "0") {
+        e.preventDefault();
+        fitWidth();
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [zoomIn, zoomOut, fitWidth]);
+
   // Search functions using PDF.js findController (provided by react-pdf-highlighter-plus)
   const handleSearch = useCallback((query: string, options: SearchOptions) => {
     const findController = pdfHighlighterUtilsRef.current?.getFindController();
@@ -796,7 +966,7 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
   }
 
   return (
-    <div className="flex h-full flex-col bg-muted/30">
+    <div ref={containerRef} className="pdf-viewer-container flex h-full flex-col bg-muted/30">
       <PDFToolbar
         scale={displayScale}
         onZoomIn={zoomIn}
@@ -828,6 +998,8 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
         onSearchClear={handleSearchClear}
         searchMatchCount={searchMatchCount}
         searchCurrentMatch={searchCurrentMatch}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
       />
 
       <div className="relative flex-1 overflow-hidden flex h-full">
@@ -839,18 +1011,69 @@ export function PDFViewer({ filePath, itemId }: PDFViewerProps) {
 
             return (
               <div className="flex h-full w-full">
-                {/* Left Panel - Outline & Thumbnails */}
-                <LeftPanel
-                  pdfDocument={pdfDocument}
-                  viewer={pdfHighlighterUtilsRef.current?.getViewer()}
-                  linkService={pdfHighlighterUtilsRef.current?.getLinkService()}
-                  eventBus={pdfHighlighterUtilsRef.current?.getEventBus()}
-                  goToPage={pdfHighlighterUtilsRef.current?.goToPage}
-                  isOpen={pdfLeftPanelOpen}
-                  onOpenChange={(open) => useUIStore.getState().setPdfLeftPanelOpen(open)}
-                  width={220}
-                  defaultTab="thumbnails"
-                />
+                {/* Left Panel - Thumbnails, Outline & Annotations */}
+                {pdfLeftPanelOpen && (
+                  <div className="flex flex-col h-full w-[220px] border-r bg-background">
+                    {/* Tab bar */}
+                    <div className="flex border-b px-1 py-1 gap-1">
+                      <button
+                        onClick={() => setLeftPanelTab("thumbnails")}
+                        className={`flex-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                          leftPanelTab === "thumbnails"
+                            ? "bg-muted text-foreground"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        }`}
+                      >
+                        Pages
+                      </button>
+                      <button
+                        onClick={() => setLeftPanelTab("outline")}
+                        className={`flex-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                          leftPanelTab === "outline"
+                            ? "bg-muted text-foreground"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        }`}
+                      >
+                        Outline
+                      </button>
+                      <button
+                        onClick={() => setLeftPanelTab("annotations")}
+                        className={`flex-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                          leftPanelTab === "annotations"
+                            ? "bg-muted text-foreground"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        }`}
+                      >
+                        Notes
+                      </button>
+                    </div>
+
+                    {/* Panel content */}
+                    <div className="flex-1 overflow-hidden">
+                      {leftPanelTab === "annotations" ? (
+                        <AnnotationPanel
+                          annotations={highlights}
+                          onAnnotationClick={(_id, page) => {
+                            goToPage(page);
+                            // Could also scroll to the specific highlight
+                          }}
+                        />
+                      ) : (
+                        <LeftPanel
+                          pdfDocument={pdfDocument}
+                          viewer={pdfHighlighterUtilsRef.current?.getViewer()}
+                          linkService={pdfHighlighterUtilsRef.current?.getLinkService()}
+                          eventBus={pdfHighlighterUtilsRef.current?.getEventBus()}
+                          goToPage={pdfHighlighterUtilsRef.current?.goToPage}
+                          isOpen={true}
+                          onOpenChange={() => {}}
+                          width={220}
+                          defaultTab={leftPanelTab}
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex-1 relative overflow-hidden">
                   <PdfHighlighter

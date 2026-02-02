@@ -15,7 +15,7 @@ pub fn run() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "etal=debug,tauri=info".into()),
+                .unwrap_or_else(|_| "wren=debug,tauri=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -24,8 +24,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
-            tracing::info!("Setting up Etal application");
+            tracing::info!("Setting up Wren application");
 
             // Initialize app state
             let app_state = tauri::async_runtime::block_on(async {
@@ -36,9 +37,9 @@ pub fn run() {
 
             // Build native menu with standard macOS menus
 
-            // App menu (Etal)
+            // App menu (Wren)
             let about_metadata = AboutMetadataBuilder::new()
-                .name(Some("Etal"))
+                .name(Some("Wren"))
                 .version(Some("0.1.0"))
                 .build();
 
@@ -46,7 +47,7 @@ pub fn run() {
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
 
-            let app_menu = SubmenuBuilder::new(app, "Etal")
+            let app_menu = SubmenuBuilder::new(app, "Wren")
                 .about(Some(about_metadata))
                 .separator()
                 .item(&settings_item)
@@ -141,24 +142,18 @@ pub fn run() {
                 }
             });
 
-            tracing::info!("Etal setup complete");
+            tracing::info!("Wren setup complete");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Items (legacy, for backwards compatibility)
-            commands::items::get_items,
-            commands::items::get_item,
-            commands::items::get_pdf_details,
-            commands::items::create_item,
-            commands::items::update_item,
-            commands::items::delete_item,
-            // Entries (new entry/attachment model)
+            // Entries
             commands::entries::get_entries,
             commands::entries::get_entry,
             commands::entries::create_entry,
             commands::entries::update_entry,
             commands::entries::delete_entry,
             commands::entries::get_entry_attachments,
+            commands::entries::get_entries_attachments,
             commands::entries::get_attachment,
             commands::entries::create_attachment,
             commands::entries::delete_attachment,
@@ -166,10 +161,18 @@ pub fn run() {
             commands::entries::remove_entry_tag,
             commands::entries::add_entry_to_collection,
             commands::entries::remove_entry_from_collection,
-            commands::entries::get_entry_types,
+            commands::entries::get_item_types,
             commands::entries::get_attachment_types,
             commands::entries::show_entry_in_finder,
             commands::entries::add_pdf_attachment,
+            commands::entries::duplicate_entry,
+            // Schema introspection
+            commands::schema::get_all_item_types,
+            commands::schema::get_all_creator_types,
+            commands::schema::get_all_fields,
+            commands::schema::get_item_type_info,
+            commands::schema::get_item_type_fields,
+            commands::schema::get_item_type_creator_types,
             // Trash
             commands::entries::get_trashed_entries,
             commands::entries::get_trash_count,
@@ -189,6 +192,8 @@ pub fn run() {
             commands::tags::delete_tag,
             commands::tags::add_tag_to_item,
             commands::tags::remove_tag_from_item,
+            commands::tags::add_tag_to_entries,
+            commands::tags::update_tag,
             // Settings
             commands::settings::get_settings,
             commands::settings::update_setting,
@@ -197,6 +202,8 @@ pub fn run() {
             commands::import::import_pdf,
             commands::import::import_pdfs,
             commands::import::import_folder,
+            commands::import::import_bibtex,
+            commands::import::import_csl_json,
             // Annotations
             commands::annotations::get_annotations,
             commands::annotations::create_annotation,
@@ -206,6 +213,16 @@ pub fn run() {
             commands::annotations::save_annotation_to_pdf,
             commands::annotations::remove_annotation_from_pdf,
             commands::annotations::import_annotations_from_pdf,
+            // Export
+            commands::export::export_to_csl_json,
+            commands::export::export_to_bibtex,
+            commands::export::export_all_to_csl_json,
+            commands::export::export_all_to_bibtex,
+            // Duplicates
+            commands::duplicates::find_duplicates,
+            commands::duplicates::get_duplicate_count,
+            commands::duplicates::merge_entries,
+            commands::duplicates::discard_duplicates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
