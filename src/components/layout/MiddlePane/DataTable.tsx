@@ -2,6 +2,7 @@ import { Fragment, useRef, useEffect, useCallback } from "react";
 import { ChevronDown, ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SortField, SortDirection } from "@/stores/uiStore";
+import { DraggableTableRow } from "@/components/dnd/DraggableTableRow";
 
 export interface Column<TData> {
   id: string;
@@ -28,6 +29,10 @@ interface DataTableProps<TData> {
   hasExpandableRows?: (row: TData) => boolean;
   /** Callback when keyboard navigation selects a row */
   onKeyboardSelect?: (row: TData) => void;
+  /** Enable drag and drop functionality */
+  isDragEnabled?: boolean;
+  /** Get drag data for a row. Receives the row and selected rows if dragging a selected row */
+  getDragData?: (row: TData, selectedRows: TData[]) => Record<string, unknown>;
 }
 
 export function DataTable<TData>({
@@ -46,6 +51,8 @@ export function DataTable<TData>({
   renderSubRow,
   hasExpandableRows,
   onKeyboardSelect,
+  isDragEnabled = false,
+  getDragData,
 }: DataTableProps<TData>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
@@ -217,60 +224,98 @@ export function DataTable<TData>({
             const isExpanded = expandedIds.includes(rowId);
             const canExpand = hasExpandableRows ? hasExpandableRows(row) : !!renderSubRow;
 
+            // Determine which rows to include in drag
+            // If this row is selected, drag all selected rows; otherwise just this row
+            const selectedRows = isSelected
+              ? data.filter((r) => selectedIds.includes(getRowId(r)))
+              : [row];
+
+            const rowClassName = cn(
+              "cursor-pointer transition-colors border-b h-8 select-none",
+              "hover:bg-accent/50",
+              isSelected && "bg-accent"
+            );
+
+            const rowContent = (
+              <>
+                {/* Expand toggle */}
+                {onToggleExpand && (
+                  <td
+                    className="w-8 px-2 text-center"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (canExpand) onToggleExpand(rowId);
+                    }}
+                  >
+                    {canExpand && (
+                      isExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground inline" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground inline" />
+                      )
+                    )}
+                  </td>
+                )}
+                {columns.map((column) => (
+                  <td
+                    key={column.id}
+                    className="py-1.5 px-2 truncate text-sm"
+                    style={{ maxWidth: column.width }}
+                  >
+                    {column.cell(row)}
+                  </td>
+                ))}
+              </>
+            );
+
+            const handleRowRef = (el: HTMLTableRowElement | null) => {
+              if (el) {
+                rowRefs.current.set(rowId, el);
+              } else {
+                rowRefs.current.delete(rowId);
+              }
+            };
+
             return (
               <Fragment key={rowId}>
-                <tr
-                  ref={(el) => {
-                    if (el) {
-                      rowRefs.current.set(rowId, el);
-                    } else {
-                      rowRefs.current.delete(rowId);
-                    }
-                  }}
-                  data-state={isSelected ? "selected" : undefined}
-                  className={cn(
-                    "cursor-pointer transition-colors border-b h-8 select-none",
-                    "hover:bg-accent/50",
-                    isSelected && "bg-accent"
-                  )}
-                  onClick={(e) => onRowClick?.(row, e)}
-                  onDoubleClick={(e) => {
-                    e.preventDefault();
-                    onRowDoubleClick?.(row);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    onRowContextMenu?.(row, e);
-                  }}
-                >
-                  {/* Expand toggle */}
-                  {onToggleExpand && (
-                    <td
-                      className="w-8 px-2 text-center"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (canExpand) onToggleExpand(rowId);
-                      }}
-                    >
-                      {canExpand && (
-                        isExpanded ? (
-                          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground inline" />
-                        ) : (
-                          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground inline" />
-                        )
-                      )}
-                    </td>
-                  )}
-                  {columns.map((column) => (
-                    <td
-                      key={column.id}
-                      className="py-1.5 px-2 truncate text-sm"
-                      style={{ maxWidth: column.width }}
-                    >
-                      {column.cell(row)}
-                    </td>
-                  ))}
-                </tr>
+                {isDragEnabled && getDragData ? (
+                  <DraggableTableRow
+                    dragId={`entry-${rowId}`}
+                    dragData={getDragData(row, selectedRows)}
+                    disabled={false}
+                    className={rowClassName}
+                    dataState={isSelected ? "selected" : undefined}
+                    rowRef={handleRowRef}
+                    onClick={(e) => onRowClick?.(row, e)}
+                    onDoubleClick={(e) => {
+                      e.preventDefault();
+                      onRowDoubleClick?.(row);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      onRowContextMenu?.(row, e);
+                    }}
+                  >
+                    {rowContent}
+                  </DraggableTableRow>
+                ) : (
+                  <tr
+                    ref={handleRowRef}
+                    data-state={isSelected ? "selected" : undefined}
+                    className={rowClassName}
+                    onClick={(e) => onRowClick?.(row, e)}
+                    onDoubleClick={(e) => {
+                      e.preventDefault();
+                      onRowDoubleClick?.(row);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      onRowContextMenu?.(row, e);
+                    }}
+                  >
+                    {rowContent}
+                  </tr>
+                )}
                 {isExpanded && renderSubRow?.(row)}
               </Fragment>
             );

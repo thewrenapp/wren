@@ -34,7 +34,22 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Run incremental migrations for existing databases
+    run_incremental_migrations(pool).await?;
+
     tracing::info!("Database migrations complete");
+    Ok(())
+}
+
+/// Run incremental migrations for schema updates
+async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
+    // Migration: Add is_imported column to tags table (if not exists)
+    // This is safe to run multiple times
+    let _ = sqlx::query("ALTER TABLE tags ADD COLUMN is_imported INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await;
+    // Ignore error if column already exists
+
     Ok(())
 }
 
@@ -199,6 +214,7 @@ CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
     color TEXT,
+    is_imported INTEGER NOT NULL DEFAULT 0,
     date_added TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

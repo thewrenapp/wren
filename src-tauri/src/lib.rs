@@ -186,10 +186,15 @@ pub fn run() {
             commands::collections::delete_collection,
             commands::collections::add_item_to_collection,
             commands::collections::remove_item_from_collection,
+            commands::collections::merge_collections,
+            commands::collections::delete_collection_with_entries,
+            commands::collections::bulk_update_collection_color,
             // Tags
             commands::tags::get_tags,
             commands::tags::create_tag,
             commands::tags::delete_tag,
+            commands::tags::merge_tags,
+            commands::tags::bulk_update_tag_color,
             commands::tags::add_tag_to_item,
             commands::tags::remove_tag_from_item,
             commands::tags::add_tag_to_entries,
@@ -204,6 +209,8 @@ pub fn run() {
             commands::import::import_folder,
             commands::import::import_bibtex,
             commands::import::import_csl_json,
+            commands::import::import_biblatex_with_files,
+            commands::import::preview_biblatex_import,
             // Annotations
             commands::annotations::get_annotations,
             commands::annotations::create_annotation,
@@ -218,6 +225,8 @@ pub fn run() {
             commands::export::export_to_bibtex,
             commands::export::export_all_to_csl_json,
             commands::export::export_all_to_bibtex,
+            commands::export::export_to_biblatex_with_files,
+            commands::export::export_all_to_biblatex_with_files,
             // Duplicates
             commands::duplicates::find_duplicates,
             commands::duplicates::get_duplicate_count,

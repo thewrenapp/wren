@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from '@tauri-apps/api/core';
 
 // =====================================================
 // Core Types
@@ -19,6 +19,7 @@ export interface Tag {
   name: string;
   color?: string;
   itemCount: number;
+  isImported: boolean;
 }
 
 export interface ImportResult {
@@ -159,39 +160,38 @@ export interface CreateAttachmentInput {
 
 export async function getEntries(params?: {
   collectionId?: number;
-  tagId?: number;
+  tagIds?: number[];
+  tagMode?: 'and' | 'or';
   attachmentType?: string;
   searchQuery?: string;
 }): Promise<EntrySummary[]> {
-  return invoke("get_entries", {
+  return invoke('get_entries', {
     collectionId: params?.collectionId ?? null,
-    tagId: params?.tagId ?? null,
+    tagIds: params?.tagIds ?? null,
+    tagMode: params?.tagMode ?? null,
     attachmentType: params?.attachmentType ?? null,
     searchQuery: params?.searchQuery ?? null,
   });
 }
 
 export async function getEntry(id: number, includeDeleted?: boolean): Promise<Entry> {
-  return invoke("get_entry", { id, includeDeleted: includeDeleted ?? false });
+  return invoke('get_entry', { id, includeDeleted: includeDeleted ?? false });
 }
 
 export async function createEntry(input: CreateEntryInput): Promise<Entry> {
-  return invoke("create_entry", { input });
+  return invoke('create_entry', { input });
 }
 
-export async function updateEntry(
-  id: number,
-  input: UpdateEntryInput
-): Promise<Entry> {
-  return invoke("update_entry", { id, input });
+export async function updateEntry(id: number, input: UpdateEntryInput): Promise<Entry> {
+  return invoke('update_entry', { id, input });
 }
 
 export async function deleteEntry(id: number): Promise<void> {
-  return invoke("delete_entry", { id });
+  return invoke('delete_entry', { id });
 }
 
 export async function duplicateEntry(id: number): Promise<Entry> {
-  return invoke("duplicate_entry", { id });
+  return invoke('duplicate_entry', { id });
 }
 
 // =====================================================
@@ -199,33 +199,31 @@ export async function duplicateEntry(id: number): Promise<Entry> {
 // =====================================================
 
 export async function getTrashedEntries(): Promise<EntrySummary[]> {
-  return invoke("get_trashed_entries");
+  return invoke('get_trashed_entries');
 }
 
 export async function getTrashCount(): Promise<number> {
-  return invoke("get_trash_count");
+  return invoke('get_trash_count');
 }
 
 export async function restoreEntry(id: number): Promise<void> {
-  return invoke("restore_entry", { id });
+  return invoke('restore_entry', { id });
 }
 
 export async function permanentDeleteEntry(id: number): Promise<void> {
-  return invoke("permanent_delete_entry", { id });
+  return invoke('permanent_delete_entry', { id });
 }
 
 export async function emptyTrash(): Promise<number> {
-  return invoke("empty_trash");
+  return invoke('empty_trash');
 }
 
 // =====================================================
 // Attachment Commands
 // =====================================================
 
-export async function getEntryAttachments(
-  entryId: number
-): Promise<Attachment[]> {
-  return invoke("get_entry_attachments", { entryId });
+export async function getEntryAttachments(entryId: number): Promise<Attachment[]> {
+  return invoke('get_entry_attachments', { entryId });
 }
 
 /**
@@ -233,30 +231,25 @@ export async function getEntryAttachments(
  * Returns a map of entryId -> attachments[]
  */
 export async function getEntriesAttachments(
-  entryIds: number[]
+  entryIds: number[],
 ): Promise<Record<number, Attachment[]>> {
-  return invoke("get_entries_attachments", { entryIds });
+  return invoke('get_entries_attachments', { entryIds });
 }
 
 export async function getAttachment(id: number): Promise<Attachment> {
-  return invoke("get_attachment", { id });
+  return invoke('get_attachment', { id });
 }
 
-export async function createAttachment(
-  input: CreateAttachmentInput
-): Promise<Attachment> {
-  return invoke("create_attachment", { input });
+export async function createAttachment(input: CreateAttachmentInput): Promise<Attachment> {
+  return invoke('create_attachment', { input });
 }
 
 export async function deleteAttachment(id: number): Promise<void> {
-  return invoke("delete_attachment", { id });
+  return invoke('delete_attachment', { id });
 }
 
-export async function addPdfAttachment(
-  entryId: number,
-  filePath: string
-): Promise<Attachment> {
-  return invoke("add_pdf_attachment", { entryId, filePath });
+export async function addPdfAttachment(entryId: number, filePath: string): Promise<Attachment> {
+  return invoke('add_pdf_attachment', { entryId, filePath });
 }
 
 // =====================================================
@@ -264,7 +257,7 @@ export async function addPdfAttachment(
 // =====================================================
 
 export async function getCollections(): Promise<Collection[]> {
-  return invoke("get_collections");
+  return invoke('get_collections');
 }
 
 export async function createCollection(input: {
@@ -273,32 +266,58 @@ export async function createCollection(input: {
   color?: string;
   icon?: string;
 }): Promise<Collection> {
-  return invoke("create_collection", { input });
+  return invoke('create_collection', { input });
 }
 
 export async function updateCollection(
   id: number,
-  input: { name?: string; description?: string; color?: string; icon?: string }
+  input: { name?: string; description?: string; color?: string; icon?: string },
 ): Promise<void> {
-  return invoke("update_collection", { id, input });
+  return invoke('update_collection', {
+    id,
+    name: input.name,
+    description: input.description,
+    color: input.color,
+    icon: input.icon,
+  });
 }
 
 export async function deleteCollection(id: number): Promise<void> {
-  return invoke("delete_collection", { id });
+  return invoke('delete_collection', { id });
 }
 
-export async function addEntryToCollection(
-  entryId: number,
-  collectionId: number
-): Promise<void> {
-  return invoke("add_entry_to_collection", { entryId, collectionId });
+export async function addEntryToCollection(entryId: number, collectionId: number): Promise<void> {
+  return invoke('add_entry_to_collection', { entryId, collectionId });
 }
 
 export async function removeEntryFromCollection(
   entryId: number,
-  collectionId: number
+  collectionId: number,
 ): Promise<void> {
-  return invoke("remove_entry_from_collection", { entryId, collectionId });
+  return invoke('remove_entry_from_collection', { entryId, collectionId });
+}
+
+export async function mergeCollections(
+  targetId: number,
+  sourceIds: number[],
+  newName?: string,
+  newColor?: string,
+): Promise<number> {
+  return invoke('merge_collections', { targetId, sourceIds, newName, newColor });
+}
+
+export async function deleteCollectionWithEntries(
+  id: number,
+  deleteEntries: boolean,
+): Promise<number> {
+  return invoke('delete_collection_with_entries', { id, deleteEntries });
+}
+
+export async function bulkUpdateCollectionColor(
+  collectionIds: number[],
+  color?: string,
+): Promise<number> {
+  return invoke('bulk_update_collection_color', { collectionIds, color });
 }
 
 // =====================================================
@@ -306,44 +325,44 @@ export async function removeEntryFromCollection(
 // =====================================================
 
 export async function getTags(): Promise<Tag[]> {
-  return invoke("get_tags");
+  return invoke('get_tags');
 }
 
 export async function createTag(name: string, color?: string): Promise<Tag> {
-  return invoke("create_tag", { name, color });
+  return invoke('create_tag', { name, color });
 }
 
 export async function deleteTag(id: number): Promise<void> {
-  return invoke("delete_tag", { id });
+  return invoke('delete_tag', { id });
 }
 
-export async function addEntryTag(
-  entryId: number,
-  tagName: string
-): Promise<Tag> {
-  return invoke("add_tag_to_item", { entryId, tagName });
+export async function addEntryTag(entryId: number, tagName: string): Promise<Tag> {
+  return invoke('add_tag_to_item', { entryId, tagName });
 }
 
-export async function removeEntryTag(
-  entryId: number,
-  tagId: number
-): Promise<void> {
-  return invoke("remove_entry_tag", { entryId, tagId });
+export async function removeEntryTag(entryId: number, tagId: number): Promise<void> {
+  return invoke('remove_entry_tag', { entryId, tagId });
 }
 
-export async function addTagToEntries(
-  tagName: string,
-  entryIds: number[]
-): Promise<Tag> {
-  return invoke("add_tag_to_entries", { tagName, entryIds });
+export async function addTagToEntries(tagName: string, entryIds: number[]): Promise<Tag> {
+  return invoke('add_tag_to_entries', { tagName, entryIds });
 }
 
-export async function updateTag(
-  id: number,
-  name?: string,
-  color?: string
-): Promise<Tag> {
-  return invoke("update_tag", { id, name, color });
+export async function updateTag(id: number, name?: string, color?: string): Promise<Tag> {
+  return invoke('update_tag', { id, name, color });
+}
+
+export async function mergeTags(
+  targetId: number,
+  sourceIds: number[],
+  newName?: string,
+  newColor?: string
+): Promise<number> {
+  return invoke('merge_tags', { targetId, sourceIds, newName, newColor });
+}
+
+export async function bulkUpdateTagColor(tagIds: number[], color?: string): Promise<number> {
+  return invoke('bulk_update_tag_color', { tagIds, color });
 }
 
 // =====================================================
@@ -351,15 +370,15 @@ export async function updateTag(
 // =====================================================
 
 export async function importPdf(filePath: string): Promise<ImportResult> {
-  return invoke("import_pdf", { filePath });
+  return invoke('import_pdf', { filePath });
 }
 
 export async function importPdfs(filePaths: string[]): Promise<ImportResult[]> {
-  return invoke("import_pdfs", { filePaths });
+  return invoke('import_pdfs', { filePaths });
 }
 
 export async function importFolder(folderPath: string): Promise<ImportResult[]> {
-  return invoke("import_folder", { folderPath });
+  return invoke('import_folder', { folderPath });
 }
 
 export interface BibtexImportResult {
@@ -369,7 +388,7 @@ export interface BibtexImportResult {
 }
 
 export async function importBibtex(content: string): Promise<BibtexImportResult> {
-  return invoke("import_bibtex", { content });
+  return invoke('import_bibtex', { content });
 }
 
 export interface CslJsonImportResult {
@@ -379,7 +398,64 @@ export interface CslJsonImportResult {
 }
 
 export async function importCslJson(content: string): Promise<CslJsonImportResult> {
-  return invoke("import_csl_json", { content });
+  return invoke('import_csl_json', { content });
+}
+
+export interface BiblatexImportResult {
+  imported: number;
+  skipped: number;
+  filesImported: number;
+  tagsCreated: number;
+  errors: string[];
+}
+
+export async function importBiblatexWithFiles(
+  biblatexPath: string,
+  filesBasePath?: string,
+  selectedKeys?: string[],
+  importTags?: boolean,
+): Promise<BiblatexImportResult> {
+  return invoke('import_biblatex_with_files', {
+    biblatexPath,
+    filesBasePath: filesBasePath ?? null,
+    selectedKeys: selectedKeys ?? null,
+    importTags: importTags ?? null,
+  });
+}
+
+// BibLaTeX Preview (parse without importing)
+export interface BiblatexPreviewFile {
+  title: string;
+  path: string;
+  mimetype: string;
+  attachmentType: string;
+  exists: boolean;
+}
+
+export interface BiblatexPreviewEntry {
+  bibtexKey: string;
+  title: string;
+  entryType: string;
+  itemType: string;
+  creators: string[];
+  year: string | null;
+  tags: string[];
+  files: BiblatexPreviewFile[];
+  isDuplicate: boolean;
+}
+
+export interface BiblatexPreviewResult {
+  entries: BiblatexPreviewEntry[];
+  totalEntries: number;
+  totalFiles: number;
+  duplicateCount: number;
+  uniqueTags: string[];
+}
+
+export async function previewBiblatexImport(
+  biblatexPath: string,
+): Promise<BiblatexPreviewResult> {
+  return invoke('preview_biblatex_import', { biblatexPath });
 }
 
 // =====================================================
@@ -387,15 +463,15 @@ export async function importCslJson(content: string): Promise<CslJsonImportResul
 // =====================================================
 
 export async function getSettings(): Promise<Setting[]> {
-  return invoke("get_settings");
+  return invoke('get_settings');
 }
 
 export async function updateSetting(key: string, value: string): Promise<void> {
-  return invoke("update_setting", { key, value });
+  return invoke('update_setting', { key, value });
 }
 
 export async function getLibraryPath(): Promise<string> {
-  return invoke("get_library_path");
+  return invoke('get_library_path');
 }
 
 // =====================================================
@@ -403,11 +479,11 @@ export async function getLibraryPath(): Promise<string> {
 // =====================================================
 
 export async function getEntryTypes(): Promise<EntryType[]> {
-  return invoke("get_entry_types");
+  return invoke('get_entry_types');
 }
 
 export async function getAttachmentTypes(): Promise<AttachmentType[]> {
-  return invoke("get_attachment_types");
+  return invoke('get_attachment_types');
 }
 
 // =====================================================
@@ -415,7 +491,7 @@ export async function getAttachmentTypes(): Promise<AttachmentType[]> {
 // =====================================================
 
 export async function showEntryInFinder(entryId: number): Promise<void> {
-  return invoke("show_entry_in_finder", { entryId });
+  return invoke('show_entry_in_finder', { entryId });
 }
 
 // =====================================================
@@ -457,24 +533,19 @@ export interface UpdateAnnotationInput {
 // =====================================================
 
 export async function getAnnotations(attachmentId: number): Promise<Annotation[]> {
-  return invoke("get_annotations", { attachmentId });
+  return invoke('get_annotations', { attachmentId });
 }
 
-export async function createAnnotation(
-  input: CreateAnnotationInput
-): Promise<Annotation> {
-  return invoke("create_annotation", { input });
+export async function createAnnotation(input: CreateAnnotationInput): Promise<Annotation> {
+  return invoke('create_annotation', { input });
 }
 
-export async function updateAnnotation(
-  id: number,
-  input: UpdateAnnotationInput
-): Promise<void> {
-  return invoke("update_annotation", { id, input });
+export async function updateAnnotation(id: number, input: UpdateAnnotationInput): Promise<void> {
+  return invoke('update_annotation', { id, input });
 }
 
 export async function deleteAnnotation(id: number): Promise<void> {
-  return invoke("delete_annotation", { id });
+  return invoke('delete_annotation', { id });
 }
 
 // =====================================================
@@ -496,9 +567,9 @@ export interface PdfAnnotationData {
 export async function saveAnnotationToPdf(
   attachmentId: number,
   annotationKey: string,
-  annotationData: PdfAnnotationData
+  annotationData: PdfAnnotationData,
 ): Promise<void> {
-  return invoke("save_annotation_to_pdf", {
+  return invoke('save_annotation_to_pdf', {
     attachmentId,
     annotationKey,
     annotationData,
@@ -507,15 +578,13 @@ export async function saveAnnotationToPdf(
 
 export async function removeAnnotationFromPdf(
   attachmentId: number,
-  annotationKey: string
+  annotationKey: string,
 ): Promise<boolean> {
-  return invoke("remove_annotation_from_pdf", { attachmentId, annotationKey });
+  return invoke('remove_annotation_from_pdf', { attachmentId, annotationKey });
 }
 
-export async function importAnnotationsFromPdf(
-  attachmentId: number
-): Promise<Annotation[]> {
-  return invoke("import_annotations_from_pdf", { attachmentId });
+export async function importAnnotationsFromPdf(attachmentId: number): Promise<Annotation[]> {
+  return invoke('import_annotations_from_pdf', { attachmentId });
 }
 
 // =====================================================
@@ -523,19 +592,65 @@ export async function importAnnotationsFromPdf(
 // =====================================================
 
 export async function exportToCslJson(entryIds: number[]): Promise<string> {
-  return invoke("export_to_csl_json", { entryIds });
+  return invoke('export_to_csl_json', { entryIds });
 }
 
 export async function exportToBibtex(entryIds: number[]): Promise<string> {
-  return invoke("export_to_bibtex", { entryIds });
+  return invoke('export_to_bibtex', { entryIds });
 }
 
 export async function exportAllToCslJson(): Promise<string> {
-  return invoke("export_all_to_csl_json");
+  return invoke('export_all_to_csl_json');
 }
 
 export async function exportAllToBibtex(): Promise<string> {
-  return invoke("export_all_to_bibtex");
+  return invoke('export_all_to_bibtex');
+}
+
+export interface ExportOptions {
+  includePdfs: boolean;
+  includeNotes: boolean;
+  includeWeblinks: boolean;
+  includeAnnotations: boolean;
+}
+
+export interface BiblatexExportResult {
+  entriesExported: number;
+  filesExported: number;
+  notesExported: number;
+  outputPath: string;
+}
+
+export async function exportToBiblatexWithFiles(
+  entryIds: number[],
+  outputDir: string,
+  options: ExportOptions,
+): Promise<BiblatexExportResult> {
+  return invoke('export_to_biblatex_with_files', {
+    entryIds,
+    outputDir,
+    options: {
+      include_pdfs: options.includePdfs,
+      include_notes: options.includeNotes,
+      include_weblinks: options.includeWeblinks,
+      include_annotations: options.includeAnnotations,
+    },
+  });
+}
+
+export async function exportAllToBiblatexWithFiles(
+  outputDir: string,
+  options: ExportOptions,
+): Promise<BiblatexExportResult> {
+  return invoke('export_all_to_biblatex_with_files', {
+    outputDir,
+    options: {
+      include_pdfs: options.includePdfs,
+      include_notes: options.includeNotes,
+      include_weblinks: options.includeWeblinks,
+      include_annotations: options.includeAnnotations,
+    },
+  });
 }
 
 // =====================================================
@@ -560,23 +675,17 @@ export interface DuplicateGroup {
 }
 
 export async function findDuplicates(): Promise<DuplicateGroup[]> {
-  return invoke("find_duplicates");
+  return invoke('find_duplicates');
 }
 
 export async function getDuplicateCount(): Promise<number> {
-  return invoke("get_duplicate_count");
+  return invoke('get_duplicate_count');
 }
 
-export async function mergeEntries(
-  targetId: number,
-  sourceIds: number[]
-): Promise<void> {
-  return invoke("merge_entries", { targetId, sourceIds });
+export async function mergeEntries(targetId: number, sourceIds: number[]): Promise<void> {
+  return invoke('merge_entries', { targetId, sourceIds });
 }
 
-export async function discardDuplicates(
-  keepId: number,
-  discardIds: number[]
-): Promise<void> {
-  return invoke("discard_duplicates", { keepId, discardIds });
+export async function discardDuplicates(keepId: number, discardIds: number[]): Promise<void> {
+  return invoke('discard_duplicates', { keepId, discardIds });
 }

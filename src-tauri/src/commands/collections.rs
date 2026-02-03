@@ -186,3 +186,131 @@ pub async fn remove_item_from_collection(
 
     Ok(())
 }
+
+/// Merge multiple collections into a target collection
+/// - Moves all entries from source collections to target
+/// - Optionally renames the target collection
+/// - Optionally changes the target collection's color
+/// - Deletes the source collections
+#[tauri::command]
+pub async fn merge_collections(
+    state: State<'_, AppState>,
+    target_id: i64,
+    source_ids: Vec<i64>,
+    new_name: Option<String>,
+    new_color: Option<String>,
+) -> Result<u32, String> {
+    // Move entries from source collections to target (avoiding duplicates)
+    for source_id in &source_ids {
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO collection_entries (collection_id, entry_id, order_index)
+            SELECT ?, entry_id, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM collection_entries WHERE collection_id = ?)
+            FROM collection_entries
+            WHERE collection_id = ?
+            "#
+        )
+        .bind(target_id)
+        .bind(target_id)
+        .bind(source_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    // Update target collection name if provided
+    if let Some(name) = new_name {
+        sqlx::query("UPDATE collections SET name = ?, date_modified = datetime('now') WHERE id = ?")
+            .bind(&name)
+            .bind(target_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Update target collection color if provided
+    if let Some(color) = new_color {
+        sqlx::query("UPDATE collections SET color = ?, date_modified = datetime('now') WHERE id = ?")
+            .bind(&color)
+            .bind(target_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Delete source collections
+    let merged_count = source_ids.len() as u32;
+    for source_id in source_ids {
+        sqlx::query("DELETE FROM collections WHERE id = ?")
+            .bind(source_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(merged_count)
+}
+
+/// Delete a collection and optionally move its entries to trash
+#[tauri::command]
+pub async fn delete_collection_with_entries(
+    state: State<'_, AppState>,
+    id: i64,
+    delete_entries: bool,
+) -> Result<u32, String> {
+    let mut deleted_entries = 0u32;
+
+    if delete_entries {
+        // Get all entries in this collection
+        let entry_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT entry_id FROM collection_entries WHERE collection_id = ?"
+        )
+        .bind(id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        // Move entries to trash (soft delete)
+        for entry_id in &entry_ids {
+            sqlx::query(
+                "UPDATE entries SET is_deleted = 1, date_modified = datetime('now') WHERE id = ?"
+            )
+            .bind(entry_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        deleted_entries = entry_ids.len() as u32;
+    }
+
+    // Delete the collection (cascade will remove collection_entries)
+    sqlx::query("DELETE FROM collections WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(deleted_entries)
+}
+
+/// Bulk update color for multiple collections
+#[tauri::command]
+pub async fn bulk_update_collection_color(
+    state: State<'_, AppState>,
+    collection_ids: Vec<i64>,
+    color: Option<String>,
+) -> Result<u32, String> {
+    let mut updated = 0u32;
+
+    for id in collection_ids {
+        sqlx::query("UPDATE collections SET color = ?, date_modified = datetime('now') WHERE id = ?")
+            .bind(&color)
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+        updated += 1;
+    }
+
+    Ok(updated)
+}

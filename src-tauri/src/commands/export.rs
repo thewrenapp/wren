@@ -2,6 +2,7 @@ use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashMap;
+use std::path::Path;
 use tauri::State;
 
 // =====================================================
@@ -506,4 +507,465 @@ fn escape_bibtex(s: &str) -> String {
      .replace('}', r"\}")
      .replace('~', r"\textasciitilde{}")
      .replace('^', r"\textasciicircum{}")
+}
+
+// =====================================================
+// BIBLATEX EXPORT WITH FILES
+// =====================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ExportOptions {
+    pub include_pdfs: bool,
+    pub include_notes: bool,
+    pub include_weblinks: bool,
+    pub include_annotations: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BiblatexExportResult {
+    pub entries_exported: usize,
+    pub files_exported: usize,
+    pub notes_exported: usize,
+    pub output_path: String,
+}
+
+fn get_mimetype_for_attachment(attachment_type: &str, filename: &str) -> &'static str {
+    match attachment_type {
+        "pdf" => "application/pdf",
+        "note" => "text/markdown",
+        "weblink" => "text/html",
+        "snapshot" => "text/html",
+        "image" => {
+            let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+            match ext.as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                "svg" => "image/svg+xml",
+                _ => "application/octet-stream",
+            }
+        }
+        _ => "application/octet-stream",
+    }
+}
+
+/// Export entries to BibLaTeX format with files
+#[tauri::command]
+pub async fn export_to_biblatex_with_files(
+    state: State<'_, AppState>,
+    entry_ids: Vec<i64>,
+    output_dir: String,
+    options: ExportOptions,
+) -> Result<BiblatexExportResult, String> {
+    let output_path = Path::new(&output_dir);
+    let files_dir = output_path.join("files");
+
+    // Create output directories
+    std::fs::create_dir_all(&files_dir).map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+    let mut biblatex_entries = Vec::new();
+    let mut files_exported = 0usize;
+    let mut notes_exported = 0usize;
+
+    for entry_id in &entry_ids {
+        // Get entry basic info
+        let entry_row = sqlx::query(
+            r#"
+            SELECT
+                e.id, e.key, it.name as item_type, e.title, e.date, e.url,
+                e.access_date, e.date_added, e.date_modified
+            FROM entries e
+            JOIN item_types it ON e.item_type_id = it.id
+            WHERE e.id = ? AND e.is_deleted = 0
+            "#
+        )
+        .bind(entry_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let entry_row = match entry_row {
+            Some(row) => row,
+            None => continue,
+        };
+
+        let key: String = entry_row.get("key");
+        let item_type: String = entry_row.get("item_type");
+        let title: String = entry_row.get("title");
+        let date: Option<String> = entry_row.get("date");
+        let url: Option<String> = entry_row.get("url");
+
+        // Get fields
+        let field_rows: Vec<(String, String)> = sqlx::query_as(
+            r#"
+            SELECT f.name as field_name, ef.value
+            FROM entry_fields ef
+            JOIN fields f ON ef.field_id = f.id
+            WHERE ef.entry_id = ?
+            "#
+        )
+        .bind(entry_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let mut fields: HashMap<String, String> = HashMap::new();
+        for (name, value) in field_rows {
+            fields.insert(name, value);
+        }
+
+        // Get creators
+        let creator_rows: Vec<(String, Option<String>, Option<String>, Option<String>, i32)> = sqlx::query_as(
+            r#"
+            SELECT ct.name as creator_type, ec.first_name, ec.last_name, ec.name, ec.sort_order
+            FROM entry_creators ec
+            JOIN creator_types ct ON ec.creator_type_id = ct.id
+            WHERE ec.entry_id = ?
+            ORDER BY ec.sort_order
+            "#
+        )
+        .bind(entry_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        // Format creators
+        let mut authors = Vec::new();
+        let mut editors = Vec::new();
+
+        for (creator_type, first_name, last_name, name, _) in creator_rows {
+            let formatted = if let Some(literal) = name {
+                format!("{{{}}}", literal)
+            } else {
+                match (last_name, first_name) {
+                    (Some(ln), Some(fn_)) => format!("{}, {}", ln, fn_),
+                    (Some(ln), None) => ln,
+                    (None, Some(fn_)) => fn_,
+                    (None, None) => continue,
+                }
+            };
+
+            if creator_type == "editor" {
+                editors.push(formatted);
+            } else {
+                authors.push(formatted);
+            }
+        }
+
+        // Get tags for keywords
+        let tags: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT t.name
+            FROM tags t
+            JOIN entry_tags et ON t.id = et.tag_id
+            WHERE et.entry_id = ?
+            ORDER BY t.name
+            "#
+        )
+        .bind(entry_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        // Get attachments for file field
+        let attachments: Vec<(i64, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+            r#"
+            SELECT a.id, a.attachment_type, a.title, a.path, a.url
+            FROM attachments a
+            WHERE a.entry_id = ? AND a.is_deleted = 0
+            "#
+        )
+        .bind(entry_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        // Determine BibLaTeX entry type
+        let biblatex_type = match item_type.as_str() {
+            "journalArticle" => "article",
+            "book" => "book",
+            "bookSection" => "incollection",
+            "conferencePaper" => "inproceedings",
+            "thesis" => "thesis",
+            "report" => "report",
+            "preprint" => "unpublished",
+            "webpage" => "online",
+            "computerProgram" => "software",
+            "dataset" => "dataset",
+            _ => "misc",
+        };
+
+        // Build BibLaTeX entry
+        let mut biblatex = format!("@{}{{{},\n", biblatex_type, key);
+
+        // Title
+        biblatex.push_str(&format!("  title = {{{}}},\n", escape_bibtex(&title)));
+
+        // Authors
+        if !authors.is_empty() {
+            biblatex.push_str(&format!("  author = {{{}}},\n", authors.join(" and ")));
+        }
+
+        // Editors
+        if !editors.is_empty() {
+            biblatex.push_str(&format!("  editor = {{{}}},\n", editors.join(" and ")));
+        }
+
+        // Date (BibLaTeX uses 'date' instead of 'year')
+        if let Some(d) = &date {
+            biblatex.push_str(&format!("  date = {{{}}},\n", d));
+        }
+
+        // Journal title (BibLaTeX uses 'journaltitle')
+        if let Some(journal) = fields.get("publicationTitle") {
+            let field_name = match biblatex_type {
+                "article" => "journaltitle",
+                "incollection" | "inproceedings" => "booktitle",
+                _ => "journaltitle",
+            };
+            biblatex.push_str(&format!("  {} = {{{}}},\n", field_name, escape_bibtex(journal)));
+        }
+
+        // Volume
+        if let Some(volume) = fields.get("volume") {
+            biblatex.push_str(&format!("  volume = {{{}}},\n", volume));
+        }
+
+        // Number/Issue
+        if let Some(issue) = fields.get("issue") {
+            biblatex.push_str(&format!("  number = {{{}}},\n", issue));
+        }
+
+        // Pages
+        if let Some(pages) = fields.get("pages") {
+            biblatex.push_str(&format!("  pages = {{{}}},\n", pages.replace("-", "--")));
+        }
+
+        // Publisher
+        if let Some(publisher) = fields.get("publisher") {
+            biblatex.push_str(&format!("  publisher = {{{}}},\n", escape_bibtex(publisher)));
+        }
+
+        // Location/Place (BibLaTeX uses 'location')
+        if let Some(place) = fields.get("place") {
+            biblatex.push_str(&format!("  location = {{{}}},\n", escape_bibtex(place)));
+        }
+
+        // DOI
+        if let Some(doi) = fields.get("DOI") {
+            biblatex.push_str(&format!("  doi = {{{}}},\n", doi));
+        }
+
+        // ISBN
+        if let Some(isbn) = fields.get("ISBN") {
+            biblatex.push_str(&format!("  isbn = {{{}}},\n", isbn));
+        }
+
+        // ISSN
+        if let Some(issn) = fields.get("ISSN") {
+            biblatex.push_str(&format!("  issn = {{{}}},\n", issn));
+        }
+
+        // URL (if include_weblinks or always include the main URL)
+        if let Some(u) = &url {
+            biblatex.push_str(&format!("  url = {{{}}},\n", u));
+        }
+
+        // Abstract
+        if let Some(abstract_) = fields.get("abstractNote") {
+            biblatex.push_str(&format!("  abstract = {{{}}},\n", escape_bibtex(abstract_)));
+        }
+
+        // Language
+        if let Some(language) = fields.get("language") {
+            biblatex.push_str(&format!("  langid = {{{}}},\n", escape_bibtex(language)));
+        }
+
+        // Keywords from tags
+        if !tags.is_empty() {
+            biblatex.push_str(&format!("  keywords = {{{}}},\n", tags.join(", ")));
+        }
+
+        // Process attachments and build file field
+        let mut file_parts = Vec::new();
+        let entry_files_dir = files_dir.join(&key);
+
+        for (att_id, att_type, att_title, att_path, att_url) in &attachments {
+            match att_type.as_str() {
+                "pdf" if options.include_pdfs => {
+                    if let Some(src_path) = att_path {
+                        let src = Path::new(src_path);
+                        if src.exists() {
+                            // Create entry directory if needed
+                            std::fs::create_dir_all(&entry_files_dir)
+                                .map_err(|e| format!("Failed to create files directory: {}", e))?;
+
+                            let filename = src.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("document.pdf");
+                            let dest = entry_files_dir.join(filename);
+
+                            // Copy the file
+                            std::fs::copy(src, &dest)
+                                .map_err(|e| format!("Failed to copy PDF: {}", e))?;
+
+                            files_exported += 1;
+
+                            // Add to file field
+                            let rel_path = format!("files/{}/{}", key, filename);
+                            file_parts.push(format!("{}:{}:application/pdf", att_title, rel_path));
+                        }
+                    }
+                }
+                "note" if options.include_notes => {
+                    // Export note content to a markdown file
+                    let note_content: Option<String> = sqlx::query_scalar(
+                        "SELECT content FROM attachments WHERE id = ?"
+                    )
+                    .bind(att_id)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                    if let Some(content) = note_content {
+                        std::fs::create_dir_all(&entry_files_dir)
+                            .map_err(|e| format!("Failed to create files directory: {}", e))?;
+
+                        let note_filename = format!("{}.md", att_title.replace("/", "_").replace("\\", "_"));
+                        let note_path = entry_files_dir.join(&note_filename);
+
+                        std::fs::write(&note_path, &content)
+                            .map_err(|e| format!("Failed to write note: {}", e))?;
+
+                        notes_exported += 1;
+
+                        let rel_path = format!("files/{}/{}", key, note_filename);
+                        file_parts.push(format!("{}:{}:text/markdown", att_title, rel_path));
+                    }
+                }
+                "weblink" if options.include_weblinks => {
+                    // Include weblinks in the file field with their URLs
+                    if let Some(link_url) = att_url {
+                        file_parts.push(format!("{}:{}:text/html", att_title, link_url));
+                    }
+                }
+                "snapshot" if options.include_pdfs => {
+                    // Treat snapshots like PDFs if they have a path
+                    if let Some(src_path) = att_path {
+                        let src = Path::new(src_path);
+                        if src.exists() {
+                            std::fs::create_dir_all(&entry_files_dir)
+                                .map_err(|e| format!("Failed to create files directory: {}", e))?;
+
+                            let filename = src.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("snapshot.html");
+                            let dest = entry_files_dir.join(filename);
+
+                            std::fs::copy(src, &dest)
+                                .map_err(|e| format!("Failed to copy snapshot: {}", e))?;
+
+                            files_exported += 1;
+
+                            let rel_path = format!("files/{}/{}", key, filename);
+                            let mimetype = get_mimetype_for_attachment("snapshot", filename);
+                            file_parts.push(format!("{}:{}:{}", att_title, rel_path, mimetype));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Handle annotations if requested
+        if options.include_annotations {
+            let annotations: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
+                r#"
+                SELECT a.id, a.annotation_type, a.text, a.comment
+                FROM annotations a
+                JOIN attachments att ON a.attachment_id = att.id
+                WHERE att.entry_id = ? AND att.is_deleted = 0
+                "#
+            )
+            .bind(entry_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            if !annotations.is_empty() {
+                std::fs::create_dir_all(&entry_files_dir)
+                    .map_err(|e| format!("Failed to create files directory: {}", e))?;
+
+                // Export annotations as a JSON file
+                let annotations_data: Vec<serde_json::Value> = annotations
+                    .iter()
+                    .map(|(id, ann_type, text, comment)| {
+                        serde_json::json!({
+                            "id": id,
+                            "type": ann_type,
+                            "text": text,
+                            "comment": comment,
+                        })
+                    })
+                    .collect();
+
+                let annotations_json = serde_json::to_string_pretty(&annotations_data)
+                    .map_err(|e| format!("Failed to serialize annotations: {}", e))?;
+
+                let annotations_filename = format!("{}_annotations.json", key);
+                let annotations_path = entry_files_dir.join(&annotations_filename);
+
+                std::fs::write(&annotations_path, &annotations_json)
+                    .map_err(|e| format!("Failed to write annotations: {}", e))?;
+
+                let rel_path = format!("files/{}/{}", key, annotations_filename);
+                file_parts.push(format!("Annotations:{}:application/json", rel_path));
+            }
+        }
+
+        // Add file field if we have any files
+        if !file_parts.is_empty() {
+            biblatex.push_str(&format!("  file = {{{}}},\n", file_parts.join(";")));
+        }
+
+        // Extra/Note field
+        if let Some(extra) = fields.get("extra") {
+            biblatex.push_str(&format!("  note = {{{}}},\n", escape_bibtex(extra)));
+        }
+
+        // Close entry
+        biblatex.push_str("}\n");
+
+        biblatex_entries.push(biblatex);
+    }
+
+    // Write the BibLaTeX file
+    let bib_path = output_path.join("export.bib");
+    std::fs::write(&bib_path, biblatex_entries.join("\n"))
+        .map_err(|e| format!("Failed to write BibLaTeX file: {}", e))?;
+
+    Ok(BiblatexExportResult {
+        entries_exported: entry_ids.len(),
+        files_exported,
+        notes_exported,
+        output_path: output_dir,
+    })
+}
+
+/// Export all entries to BibLaTeX with files
+#[tauri::command]
+pub async fn export_all_to_biblatex_with_files(
+    state: State<'_, AppState>,
+    output_dir: String,
+    options: ExportOptions,
+) -> Result<BiblatexExportResult, String> {
+    let entry_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM entries WHERE is_deleted = 0"
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    export_to_biblatex_with_files(state, entry_ids, output_dir, options).await
 }

@@ -7,6 +7,7 @@ import {
   SortDesc,
   File,
   FolderOpen,
+  Library,
   RotateCcw,
   Trash2,
   Check,
@@ -15,6 +16,7 @@ import {
   CheckSquare,
   Square,
   XSquare,
+  Tag,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { open as openInBrowser } from '@tauri-apps/plugin-shell';
@@ -51,7 +53,12 @@ import {
   emptyTrash,
   getTrashCount,
   permanentDeleteEntry,
+  previewBiblatexImport,
+  importBiblatexWithFiles,
+  type BiblatexPreviewResult,
 } from '@/services/tauri';
+import { ImportPreviewDialog } from '@/components/dialogs/ImportPreviewDialog';
+import { toast } from '@/stores/toastStore';
 import { EntryTable } from './EntryTable';
 import { EntryCardView } from './EntryCardView';
 import { ColumnConfigDropdown } from './ColumnConfigDropdown';
@@ -79,6 +86,7 @@ export function MiddlePane() {
   } = useUIStore();
   const {
     entries,
+    allEntries,
     selectedEntryIds,
     selectEntry,
     clearSelection,
@@ -90,6 +98,11 @@ export function MiddlePane() {
     trashedEntries,
     setTrashedEntries,
     setTrashCount,
+    tags,
+    collections,
+    activeTagIds,
+    activeCollectionId,
+    activeFilter: libraryFilter,
   } = useLibraryStore();
   const { openTab } = useTabStore();
   const { importFiles, importFolder } = useImport();
@@ -97,9 +110,25 @@ export function MiddlePane() {
 
   const viewMode = viewModeByFilter[activeFilter];
 
+  const activeTags = activeTagIds.length > 0
+    ? tags.filter((tag) => activeTagIds.includes(tag.id))
+    : [];
+  const activeCollection = activeCollectionId
+    ? collections.find((collection) => collection.id === activeCollectionId)
+    : null;
+  const isTagView = libraryFilter.type === 'tag';
+  const isEmptyTagMode = isTagView && activeTagIds.length === 0;
+  const isCollectionView = Boolean(activeCollectionId);
+
   // Trash state
   const [showEmptyTrashDialog, setShowEmptyTrashDialog] = useState(false);
   const [isTrashLoading, setIsTrashLoading] = useState(false);
+
+  // BibLaTeX import preview state
+  const [showImportPreview, setShowImportPreview] = useState(false);
+  const [importPreviewData, setImportPreviewData] = useState<BiblatexPreviewResult | null>(null);
+  const [importFolderPath, setImportFolderPath] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
 
   // State for fetched attachments (keyed by entry ID)
   const [attachmentsMap, setAttachmentsMap] = useState<Record<number, Attachment[]>>({});
@@ -224,6 +253,67 @@ export function MiddlePane() {
 
     if (selected && typeof selected === 'string') {
       await importFolder(selected);
+    }
+  };
+
+  const handleImportBiblatex = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: 'Select Zotero BibLaTeX Export Folder',
+    });
+
+    if (selected && typeof selected === 'string') {
+      try {
+        // Get preview data first
+        const preview = await previewBiblatexImport(selected);
+        setImportPreviewData(preview);
+        setImportFolderPath(selected);
+        setShowImportPreview(true);
+      } catch (err) {
+        console.error('Failed to preview BibLaTeX:', err);
+        toast.error('Failed to preview BibLaTeX folder');
+      }
+    }
+  };
+
+  const handleConfirmImport = async (selectedKeys: string[], importTags: boolean) => {
+    if (!importFolderPath) return;
+
+    setIsImporting(true);
+    try {
+      const result = await importBiblatexWithFiles(
+        importFolderPath,
+        importFolderPath,
+        selectedKeys,
+        importTags
+      );
+
+      let message = `Imported ${result.imported} ${result.imported !== 1 ? 'entries' : 'entry'}`;
+      if (result.filesImported > 0) {
+        message += ` with ${result.filesImported} file${result.filesImported !== 1 ? 's' : ''}`;
+      }
+      if (result.tagsCreated > 0) {
+        message += ` and ${result.tagsCreated} tag${result.tagsCreated !== 1 ? 's' : ''}`;
+      }
+      toast.success(message);
+
+      if (result.skipped > 0) {
+        toast.info(`${result.skipped} entries skipped`);
+      }
+
+      // Refresh library
+      await refresh();
+
+      // Close dialog
+      setShowImportPreview(false);
+      setImportPreviewData(null);
+      setImportFolderPath(null);
+    } catch (err) {
+      console.error('Failed to import BibLaTeX:', err);
+      toast.error('Failed to import BibLaTeX entries');
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -376,6 +466,19 @@ export function MiddlePane() {
   };
 
   const getFilterTitle = () => {
+    if (isTagView) {
+      if (activeTags.length === 0) {
+        return 'Tags';
+      }
+      if (activeTags.length === 1) {
+        return activeTags[0]?.name ?? 'Tag';
+      }
+      return `${activeTags.length} Tags`;
+    }
+    if (isCollectionView) {
+      return activeCollection?.name ?? 'Collection';
+    }
+
     switch (activeFilter) {
       case 'pdfs':
         return 'PDFs';
@@ -596,6 +699,11 @@ export function MiddlePane() {
                   <FolderOpen className='h-4 w-4 mr-2' />
                   Import Folder...
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleImportBiblatex}>
+                  <Library className='h-4 w-4 mr-2' />
+                  Import from Zotero...
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -645,7 +753,23 @@ export function MiddlePane() {
                 <p className='text-sm font-medium'>No untagged items</p>
                 <p className='text-xs'>All your entries have tags</p>
               </>
-            ) : entries.length === 0 ? (
+            ) : isEmptyTagMode ? (
+              <>
+                <Tag className='h-8 w-8 mx-auto mb-2 opacity-50' />
+                <p className='text-sm font-medium'>Select a tag</p>
+                <p className='text-xs'>Choose one or more tags from the sidebar to filter entries</p>
+              </>
+            ) : isTagView ? (
+              <>
+                <p className='text-sm font-medium'>No entries with selected tags</p>
+                <p className='text-xs'>Add these tags to entries to see them here</p>
+              </>
+            ) : isCollectionView ? (
+              <>
+                <p className='text-sm font-medium'>No entries in this collection</p>
+                <p className='text-xs'>Add entries to this collection to see them here</p>
+              </>
+            ) : allEntries.length === 0 ? (
               <>
                 <p className='text-sm font-medium'>Your library is empty</p>
                 <p className='text-xs'>Import PDFs to start building your collection</p>
@@ -657,7 +781,7 @@ export function MiddlePane() {
               </>
             )}
           </div>
-          {!isTrashView && !searchQuery && entries.length === 0 && (
+          {!isTrashView && !searchQuery && allEntries.length === 0 && (
             <div className='flex gap-2'>
               <Button variant='outline' size='sm' onClick={handleImportFiles}>
                 <File className='h-4 w-4 mr-2' />
@@ -762,6 +886,15 @@ export function MiddlePane() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* BibLaTeX Import Preview Dialog */}
+      <ImportPreviewDialog
+        open={showImportPreview}
+        onOpenChange={setShowImportPreview}
+        previewData={importPreviewData}
+        onImport={handleConfirmImport}
+        isImporting={isImporting}
+      />
     </div>
   );
 }

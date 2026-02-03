@@ -261,6 +261,8 @@ pub struct Tag {
     pub color: Option<String>,
     #[serde(rename = "itemCount")]
     pub item_count: i64,
+    #[serde(rename = "isImported")]
+    pub is_imported: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

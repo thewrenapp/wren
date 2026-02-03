@@ -10,12 +10,13 @@ import { TabContent } from "./TabBar/TabContent";
 import { TitleBar } from "./TitleBar";
 import { CommandPalette } from "@/components/search/CommandPalette";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
+import { DragDropProvider } from "@/components/dnd/DragDropProvider";
 import { useUIStore, type LibraryLayout } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useLibrarySync } from "@/hooks/useLibrarySync";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 export function AppLayout() {
@@ -23,6 +24,13 @@ export function AppLayout() {
   const { tabs, openTab, updateTab } = useTabStore();
   const { showWelcomeOnStartup } = useSettingsStore();
   const hasInitialized = useRef(false);
+
+  // Ref for expand collections callback (set by LibrarySidebar)
+  const expandCollectionsRef = useRef<(() => void) | null>(null);
+
+  const handleExpandCollections = useCallback(() => {
+    expandCollectionsRef.current?.();
+  }, []);
 
   useKeyboardShortcuts();
   useLibrarySync();
@@ -90,38 +98,40 @@ export function AppLayout() {
 
         {/* Content below title bar */}
         <div className="flex-1 flex min-h-0">
-          <ResizablePanelGroup direction="horizontal">
-            {/* Library sidebar */}
-            <ResizablePanel
-              defaultSize={sidebarPercent}
-              minSize={12}
-              maxSize={25}
-              onResize={(size) => {
-                const newWidth = (size / 100) * totalWidth;
-                setSidebarWidth(newWidth);
-              }}
-              className="bg-sidebar"
-            >
-              <LibrarySidebar />
-            </ResizablePanel>
+          <DragDropProvider onExpandCollections={handleExpandCollections}>
+            <ResizablePanelGroup direction="horizontal">
+              {/* Library sidebar */}
+              <ResizablePanel
+                defaultSize={sidebarPercent}
+                minSize={12}
+                maxSize={25}
+                onResize={(size) => {
+                  const newWidth = (size / 100) * totalWidth;
+                  setSidebarWidth(newWidth);
+                }}
+                className="bg-sidebar"
+              >
+                <LibrarySidebar expandCollectionsRef={expandCollectionsRef} />
+              </ResizablePanel>
 
-            <ResizableHandle className="w-[1px] bg-border hover:bg-primary/50 transition-colors" />
+              <ResizableHandle className="w-[1px] bg-border hover:bg-primary/50 transition-colors" />
 
-            {/* Main content area - tabs + content */}
-            <ResizablePanel defaultSize={100 - sidebarPercent} minSize={50}>
-              <div className="flex flex-col h-full">
-                {/* Tab bar */}
-                <div className="border-b border-border bg-background">
-                  <TabBar />
+              {/* Main content area - tabs + content */}
+              <ResizablePanel defaultSize={100 - sidebarPercent} minSize={50}>
+                <div className="flex flex-col h-full">
+                  {/* Tab bar */}
+                  <div className="border-b border-border bg-background">
+                    <TabBar />
+                  </div>
+
+                  {/* Tab content */}
+                  <div className="flex-1 min-h-0">
+                    <TabContent />
+                  </div>
                 </div>
-
-                {/* Tab content */}
-                <div className="flex-1 min-h-0">
-                  <TabContent />
-                </div>
-              </div>
-            </ResizablePanel>
-          </ResizablePanelGroup>
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </DragDropProvider>
         </div>
       </div>
 

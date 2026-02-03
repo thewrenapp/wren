@@ -1043,3 +1043,834 @@ pub async fn import_csl_json(
         errors,
     })
 }
+
+// =====================================================
+// BibLaTeX Import with Files (Zotero format)
+// =====================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiblatexImportResult {
+    pub imported: usize,
+    pub skipped: usize,
+    #[serde(rename = "filesImported")]
+    pub files_imported: usize,
+    #[serde(rename = "tagsCreated")]
+    pub tags_created: usize,
+    pub errors: Vec<String>,
+}
+
+// =====================================================
+// BibLaTeX Preview (parse without importing)
+// =====================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiblatexPreviewFile {
+    pub title: String,
+    pub path: String,
+    pub mimetype: String,
+    #[serde(rename = "attachmentType")]
+    pub attachment_type: String,
+    pub exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiblatexPreviewEntry {
+    #[serde(rename = "bibtexKey")]
+    pub bibtex_key: String,
+    pub title: String,
+    #[serde(rename = "entryType")]
+    pub entry_type: String,
+    #[serde(rename = "itemType")]
+    pub item_type: String,
+    pub creators: Vec<String>,
+    pub year: Option<String>,
+    pub tags: Vec<String>,
+    pub files: Vec<BiblatexPreviewFile>,
+    #[serde(rename = "isDuplicate")]
+    pub is_duplicate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiblatexPreviewResult {
+    pub entries: Vec<BiblatexPreviewEntry>,
+    #[serde(rename = "totalEntries")]
+    pub total_entries: usize,
+    #[serde(rename = "totalFiles")]
+    pub total_files: usize,
+    #[serde(rename = "duplicateCount")]
+    pub duplicate_count: usize,
+    #[serde(rename = "uniqueTags")]
+    pub unique_tags: Vec<String>,
+}
+
+/// Preview BibLaTeX import without actually importing
+/// Returns parsed entries with file info and duplicate detection
+#[tauri::command]
+pub async fn preview_biblatex_import(
+    state: State<'_, AppState>,
+    biblatex_path: String,
+) -> Result<BiblatexPreviewResult, String> {
+    let input_path = PathBuf::from(&biblatex_path);
+
+    if !input_path.exists() {
+        return Err(format!("Path not found: {}", biblatex_path));
+    }
+
+    // If input is a directory, find the .bib file inside it
+    let bib_path = if input_path.is_dir() {
+        let bib_files: Vec<PathBuf> = fs::read_dir(&input_path)
+            .map_err(|e| format!("Failed to read directory: {}", e))?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .map(|ext| ext.to_string_lossy().to_lowercase() == "bib")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        match bib_files.len() {
+            0 => return Err("No .bib file found in the selected folder".to_string()),
+            1 => bib_files.into_iter().next().unwrap(),
+            _ => {
+                let folder_name = input_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+
+                bib_files.iter()
+                    .find(|p| {
+                        p.file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s == "export" || s == folder_name)
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+                    .or_else(|| bib_files.into_iter().next())
+                    .ok_or_else(|| "Could not select .bib file".to_string())?
+            }
+        }
+    } else {
+        input_path.clone()
+    };
+
+    // Determine files base path
+    let base_path = bib_path.parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "Could not determine base path".to_string())?;
+
+    // Read the BibLaTeX file
+    let content = fs::read_to_string(&bib_path)
+        .map_err(|e| format!("Failed to read BibLaTeX file: {}", e))?;
+
+    let mut entries = Vec::new();
+    let mut all_tags = std::collections::HashSet::new();
+    let mut total_files = 0;
+    let mut duplicate_count = 0;
+
+    // Split content into entries
+    let raw_entries: Vec<&str> = content.split("\n@")
+        .enumerate()
+        .map(|(i, s)| if i == 0 && s.starts_with('@') { s } else if i > 0 { &s[..] } else { s })
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+
+    for (idx, entry_str) in raw_entries.iter().enumerate() {
+        let entry_content = if idx == 0 {
+            entry_str.to_string()
+        } else {
+            format!("@{}", entry_str)
+        };
+
+        let parsed = match parse_bibtex_entry(&entry_content) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let (entry_type, bibtex_key, fields) = parsed;
+
+        // Get title
+        let title = fields.get("title")
+            .cloned()
+            .unwrap_or_else(|| "Untitled".to_string())
+            .replace("\\textbackslash", "\\")
+            .replace("\\{", "{")
+            .replace("\\}", "}")
+            .replace("\\$", "$");
+
+        // Map to item type
+        let item_type = biblatex_type_to_item_type(&entry_type);
+
+        // Get year
+        let year = fields.get("year").or_else(|| fields.get("date")).cloned();
+
+        // Parse creators
+        let mut creators = Vec::new();
+        if let Some(author) = fields.get("author") {
+            for name in author.split(" and ") {
+                let name = name.trim();
+                if !name.is_empty() {
+                    // Simple name formatting - last name first if comma present
+                    let formatted = if name.contains(',') {
+                        name.split(',').next().unwrap_or(name).trim().to_string()
+                    } else {
+                        name.split_whitespace().last().unwrap_or(name).to_string()
+                    };
+                    creators.push(formatted);
+                }
+            }
+        }
+
+        // Parse tags/keywords
+        let mut entry_tags = Vec::new();
+        if let Some(keywords) = fields.get("keywords") {
+            for keyword in keywords.split(',') {
+                let tag = keyword.trim().to_string();
+                if !tag.is_empty() {
+                    all_tags.insert(tag.clone());
+                    entry_tags.push(tag);
+                }
+            }
+        }
+
+        // Parse files
+        let mut files = Vec::new();
+        if let Some(file_field) = fields.get("file") {
+            let parsed_files = parse_biblatex_file_field(file_field);
+            for (file_title, file_path, mimetype) in parsed_files {
+                let attachment_type = get_attachment_type_from_mimetype(&mimetype, &file_path);
+
+                // Check if file exists
+                let full_path = base_path.join("files").join(&file_path);
+                let exists = full_path.exists();
+
+                files.push(BiblatexPreviewFile {
+                    title: file_title,
+                    path: file_path,
+                    mimetype,
+                    attachment_type: attachment_type.to_string(),
+                    exists,
+                });
+                total_files += 1;
+            }
+        }
+
+        // Check for duplicate by title
+        let is_duplicate: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM entries WHERE title = ? AND is_deleted = 0"
+        )
+        .bind(&title)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+        if is_duplicate {
+            duplicate_count += 1;
+        }
+
+        entries.push(BiblatexPreviewEntry {
+            bibtex_key,
+            title,
+            entry_type,
+            item_type: item_type.to_string(),
+            creators,
+            year,
+            tags: entry_tags,
+            files,
+            is_duplicate,
+        });
+    }
+
+    let mut unique_tags: Vec<String> = all_tags.into_iter().collect();
+    unique_tags.sort();
+
+    Ok(BiblatexPreviewResult {
+        total_entries: entries.len(),
+        total_files,
+        duplicate_count,
+        unique_tags,
+        entries,
+    })
+}
+
+/// Parse file field from BibLaTeX/Zotero format
+/// Format: {title}:{path}:{mimetype};{title2}:{path2}:{mimetype2}
+fn parse_biblatex_file_field(file_field: &str) -> Vec<(String, String, String)> {
+    let mut files = Vec::new();
+
+    // Split by semicolon for multiple files
+    for file_entry in file_field.split(';') {
+        let file_entry = file_entry.trim();
+        if file_entry.is_empty() {
+            continue;
+        }
+
+        // Split by colon - format is title:path:mimetype
+        let parts: Vec<&str> = file_entry.splitn(3, ':').collect();
+        if parts.len() >= 2 {
+            let title = parts[0].trim().to_string();
+            let path = parts[1].trim().to_string();
+            let mimetype = parts.get(2).map(|s| s.trim().to_string()).unwrap_or_default();
+
+            if !path.is_empty() {
+                files.push((title, path, mimetype));
+            }
+        }
+    }
+
+    files
+}
+
+/// Determine attachment type from mimetype or file extension
+fn get_attachment_type_from_mimetype(mimetype: &str, path: &str) -> &'static str {
+    let mimetype_lower = mimetype.to_lowercase();
+    let path_lower = path.to_lowercase();
+
+    if mimetype_lower.contains("pdf") || path_lower.ends_with(".pdf") {
+        "pdf"
+    } else if mimetype_lower.contains("html") || path_lower.ends_with(".html") || path_lower.ends_with(".htm") {
+        "snapshot"
+    } else if mimetype_lower.contains("image") || path_lower.ends_with(".png") || path_lower.ends_with(".jpg") || path_lower.ends_with(".jpeg") {
+        "image"
+    } else if mimetype_lower.contains("text") || path_lower.ends_with(".md") || path_lower.ends_with(".txt") {
+        "note"
+    } else {
+        "generic"
+    }
+}
+
+/// Map BibLaTeX entry type to Wren item type (extended from bibtex)
+/// Handles standard BibTeX, BibLaTeX, and Zotero-specific types
+fn biblatex_type_to_item_type(entry_type: &str) -> &'static str {
+    // Normalize to lowercase for matching
+    let entry_type_lower = entry_type.to_lowercase();
+    match entry_type_lower.as_str() {
+        // Journal/Article types
+        "article" | "periodical" => "journalArticle",
+
+        // Book types
+        "book" | "mvbook" | "collection" | "mvcollection" | "reference" | "mvreference" => "book",
+
+        // Book section types
+        "inbook" | "incollection" | "inreference" | "bookinbook" | "suppbook" => "bookSection",
+
+        // Conference/Proceedings
+        "inproceedings" | "conference" | "proceedings" | "mvproceedings" => "conferencePaper",
+
+        // Thesis types
+        "phdthesis" | "mastersthesis" | "thesis" => "thesis",
+
+        // Report types
+        "techreport" | "report" => "report",
+
+        // Web/Online types
+        "online" | "electronic" | "www" => "webpage",
+
+        // Software
+        "software" | "misc" if entry_type_lower.contains("software") => "computerProgram",
+
+        // Dataset
+        "dataset" | "data" => "dataset",
+
+        // Patent
+        "patent" => "patent",
+
+        // Media types
+        "video" | "movie" | "film" => "film",
+        "audio" | "music" => "audioRecording",
+
+        // News/Magazine
+        "newspaper" | "news" => "newspaperArticle",
+        "magazine" => "magazineArticle",
+
+        // Legal
+        "legislation" | "legal" => "statute",
+        "jurisdiction" | "case" => "case",
+
+        // Letter/Communication
+        "letter" => "letter",
+
+        // Preprint
+        "preprint" | "unpublished" => "preprint",
+
+        // Manual/Documentation
+        "manual" | "booklet" => "document",
+
+        // Misc - default
+        "misc" | "other" => "document",
+
+        // Fallback - log unknown types for debugging
+        _ => {
+            eprintln!("Unknown BibLaTeX entry type: '{}', defaulting to 'document'", entry_type);
+            "document"
+        }
+    }
+}
+
+/// Import BibLaTeX with files (Zotero export format)
+///
+/// The `biblatex_path` can be either:
+/// - A direct path to a .bib file
+/// - A folder path containing a .bib file (will auto-detect)
+///
+/// Optional parameters:
+/// - `selected_keys`: If provided, only import entries with these bibtex keys
+/// - `import_tags`: Whether to import tags (default true)
+#[tauri::command]
+pub async fn import_biblatex_with_files(
+    state: State<'_, AppState>,
+    biblatex_path: String,
+    files_base_path: Option<String>,
+    selected_keys: Option<Vec<String>>,
+    import_tags: Option<bool>,
+) -> Result<BiblatexImportResult, String> {
+    let selected_keys_set: Option<std::collections::HashSet<String>> = selected_keys
+        .map(|keys| keys.into_iter().collect());
+    let should_import_tags = import_tags.unwrap_or(true);
+    let input_path = PathBuf::from(&biblatex_path);
+
+    if !input_path.exists() {
+        return Err(format!("Path not found: {}", biblatex_path));
+    }
+
+    // If input is a directory, find the .bib file inside it
+    let bib_path = if input_path.is_dir() {
+        // Look for .bib files in the directory
+        let bib_files: Vec<PathBuf> = fs::read_dir(&input_path)
+            .map_err(|e| format!("Failed to read directory: {}", e))?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .map(|ext| ext.to_string_lossy().to_lowercase() == "bib")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        match bib_files.len() {
+            0 => return Err("No .bib file found in the selected folder".to_string()),
+            1 => bib_files.into_iter().next().unwrap(),
+            _ => {
+                // If multiple .bib files, prefer one named "export.bib" or the one matching folder name
+                let folder_name = input_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+
+                bib_files.iter()
+                    .find(|p| {
+                        p.file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s == "export" || s == folder_name)
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+                    .or_else(|| bib_files.into_iter().next())
+                    .ok_or_else(|| "Could not select .bib file".to_string())?
+            }
+        }
+    } else {
+        input_path.clone()
+    };
+
+    // Read the BibLaTeX file
+    let content = fs::read_to_string(&bib_path)
+        .map_err(|e| format!("Failed to read BibLaTeX file: {}", e))?;
+
+    // Determine files base path (directory containing .bib file or provided path)
+    let base_path = files_base_path
+        .map(PathBuf::from)
+        .or_else(|| bib_path.parent().map(|p| p.to_path_buf()))
+        .ok_or_else(|| "Could not determine base path for files".to_string())?;
+
+    let mut imported = 0;
+    let mut skipped = 0;
+    let mut files_imported = 0;
+    let mut tags_created = 0;
+    let mut errors = Vec::new();
+
+    // Get library path
+    let library_path = state.library_path.read().await;
+
+    // Split content into entries (each starts with @)
+    let entries: Vec<&str> = content.split("\n@")
+        .enumerate()
+        .map(|(i, s)| if i == 0 && s.starts_with('@') { s } else if i > 0 { &s[..] } else { s })
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+
+    for (idx, entry_str) in entries.iter().enumerate() {
+        let entry_content = if idx == 0 {
+            entry_str.to_string()
+        } else {
+            format!("@{}", entry_str)
+        };
+
+        let parsed = match parse_bibtex_entry(&entry_content) {
+            Some(p) => p,
+            None => {
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let (entry_type, bibtex_key, fields) = parsed;
+
+        // If selected_keys is provided, skip entries not in the set
+        if let Some(ref keys_set) = selected_keys_set {
+            if !keys_set.contains(&bibtex_key) {
+                skipped += 1;
+                continue;
+            }
+        }
+
+        // Get title
+        let title = fields.get("title")
+            .cloned()
+            .unwrap_or_else(|| "Untitled".to_string())
+            // Clean up LaTeX escapes
+            .replace("\\textbackslash", "\\")
+            .replace("\\{", "{")
+            .replace("\\}", "}")
+            .replace("\\$", "$");
+
+        // Check for duplicate by title (simple dedup)
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM entries WHERE title = ? AND is_deleted = 0"
+        )
+        .bind(&title)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if existing.is_some() {
+            skipped += 1;
+            continue;
+        }
+
+        // Map to item type
+        let item_type = biblatex_type_to_item_type(&entry_type);
+
+        // Get item type ID
+        let item_type_id: i64 = match sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM item_types WHERE name = ?"
+        )
+        .bind(item_type)
+        .fetch_optional(&state.db)
+        .await
+        {
+            Ok(Some(id)) => id,
+            _ => {
+                errors.push(format!("Unknown item type: {}", item_type));
+                continue;
+            }
+        };
+
+        // Generate key (use BibTeX key if clean, otherwise UUID)
+        let entry_key = if bibtex_key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            bibtex_key.clone()
+        } else {
+            Uuid::new_v4().to_string()
+        };
+
+        // Extract date (BibLaTeX uses 'date' field, fallback to 'year')
+        let date = fields.get("date")
+            .or_else(|| fields.get("year"))
+            .cloned();
+        let url = fields.get("url").cloned();
+
+        // Insert entry
+        let entry_result = match sqlx::query(
+            r#"
+            INSERT INTO entries (key, item_type_id, title, date, url)
+            VALUES (?, ?, ?, ?, ?)
+            RETURNING id
+            "#
+        )
+        .bind(&entry_key)
+        .bind(item_type_id)
+        .bind(&title)
+        .bind(&date)
+        .bind(&url)
+        .fetch_one(&state.db)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                errors.push(format!("Failed to insert entry '{}': {}", title, e));
+                continue;
+            }
+        };
+
+        let entry_id: i64 = entry_result.get("id");
+
+        // Insert authors
+        if let Some(authors_str) = fields.get("author") {
+            let author_creator_type_id: i64 = sqlx::query_scalar(
+                "SELECT id FROM creator_types WHERE name = 'author'"
+            )
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(1);
+
+            // Parse authors (split by " and ")
+            let authors: Vec<&str> = authors_str.split(" and ")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            for (i, author) in authors.iter().enumerate() {
+                // Try to parse "Last, First" format
+                let (first_name, last_name) = if author.contains(',') {
+                    let parts: Vec<&str> = author.splitn(2, ',').collect();
+                    (parts.get(1).map(|s| s.trim().to_string()), parts.first().map(|s| s.trim().to_string()))
+                } else {
+                    // "First Last" format
+                    let parts: Vec<&str> = author.rsplitn(2, ' ').collect();
+                    if parts.len() == 2 {
+                        (Some(parts[1].to_string()), Some(parts[0].to_string()))
+                    } else {
+                        (None, Some(author.to_string()))
+                    }
+                };
+
+                let _ = sqlx::query(
+                    r#"
+                    INSERT INTO entry_creators (entry_id, creator_type_id, first_name, last_name, sort_order)
+                    VALUES (?, ?, ?, ?, ?)
+                    "#
+                )
+                .bind(entry_id)
+                .bind(author_creator_type_id)
+                .bind(&first_name)
+                .bind(&last_name)
+                .bind(i as i32)
+                .execute(&state.db)
+                .await;
+            }
+        }
+
+        // Insert additional fields (BibLaTeX field names)
+        let field_mappings = [
+            ("journaltitle", "publicationTitle"),
+            ("journal", "publicationTitle"),
+            ("booktitle", "bookTitle"),
+            ("publisher", "publisher"),
+            ("volume", "volume"),
+            ("number", "issue"),
+            ("issue", "issue"),
+            ("pages", "pages"),
+            ("doi", "DOI"),
+            ("isbn", "ISBN"),
+            ("issn", "ISSN"),
+            ("abstract", "abstractNote"),
+            ("note", "extra"),
+            ("eprint", "archiveID"),
+            ("eprinttype", "archive"),
+            ("location", "place"),
+            ("edition", "edition"),
+            ("series", "series"),
+            ("shorttitle", "shortTitle"),
+        ];
+
+        for (bibtex_field, wren_field) in field_mappings {
+            if let Some(value) = fields.get(bibtex_field) {
+                // Get field ID
+                if let Ok(Some(field_id)) = sqlx::query_scalar::<_, i64>(
+                    "SELECT id FROM fields WHERE name = ?"
+                )
+                .bind(wren_field)
+                .fetch_optional(&state.db)
+                .await
+                {
+                    let _ = sqlx::query(
+                        "INSERT OR REPLACE INTO entry_fields (entry_id, field_id, value) VALUES (?, ?, ?)"
+                    )
+                    .bind(entry_id)
+                    .bind(field_id)
+                    .bind(value)
+                    .execute(&state.db)
+                    .await;
+                }
+            }
+        }
+
+        // Handle keywords field - create tags (if enabled)
+        if should_import_tags {
+            if let Some(keywords_str) = fields.get("keywords") {
+                let keywords: Vec<&str> = keywords_str.split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                for keyword in keywords {
+                    // Get or create tag (marking as imported)
+                    let tag_id: i64 = match sqlx::query_scalar::<_, i64>(
+                        "SELECT id FROM tags WHERE name = ? COLLATE NOCASE"
+                    )
+                    .bind(keyword)
+                    .fetch_optional(&state.db)
+                    .await
+                    {
+                        Ok(Some(id)) => {
+                            // Mark existing tag as imported if it wasn't already
+                            let _ = sqlx::query(
+                                "UPDATE tags SET is_imported = 1 WHERE id = ? AND is_imported = 0"
+                            )
+                            .bind(id)
+                            .execute(&state.db)
+                            .await;
+                            id
+                        }
+                        Ok(None) => {
+                            // Create new tag (mark as imported)
+                            let result = sqlx::query(
+                                "INSERT INTO tags (name, is_imported) VALUES (?, 1) RETURNING id"
+                            )
+                            .bind(keyword)
+                            .fetch_one(&state.db)
+                            .await;
+
+                            match result {
+                                Ok(row) => {
+                                    tags_created += 1;
+                                    row.get("id")
+                                }
+                                Err(_) => continue,
+                            }
+                        }
+                        Err(_) => continue,
+                    };
+
+                    // Link tag to entry
+                    let _ = sqlx::query(
+                        "INSERT OR IGNORE INTO entry_tags (entry_id, tag_id) VALUES (?, ?)"
+                    )
+                    .bind(entry_id)
+                    .bind(tag_id)
+                    .execute(&state.db)
+                    .await;
+                }
+            }
+        }
+
+        // Handle file field - import associated files
+        if let Some(file_field) = fields.get("file") {
+            let files = parse_biblatex_file_field(file_field);
+
+            for (file_title, file_path, mimetype) in files {
+                // Resolve file path relative to base path
+                let source_file = base_path.join(&file_path);
+
+                if !source_file.exists() {
+                    errors.push(format!("File not found: {} (for entry '{}')", file_path, title));
+                    continue;
+                }
+
+                // Determine attachment type
+                let attachment_type = get_attachment_type_from_mimetype(&mimetype, &file_path);
+
+                // Get attachment type ID
+                let attachment_type_id: i64 = match sqlx::query_scalar::<_, i64>(
+                    "SELECT id FROM attachment_types WHERE name = ?"
+                )
+                .bind(attachment_type)
+                .fetch_optional(&state.db)
+                .await
+                {
+                    Ok(Some(id)) => id,
+                    _ => continue,
+                };
+
+                // Create destination directory
+                let dest_subdir = if attachment_type == "pdf" { "pdfs" } else { "attachments" };
+                let dest_dir = library_path.join("files").join(dest_subdir).join(&entry_key);
+
+                if let Err(e) = fs::create_dir_all(&dest_dir) {
+                    errors.push(format!("Failed to create directory: {}", e));
+                    continue;
+                }
+
+                // Get original filename
+                let file_name = source_file.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("attachment_{}", Uuid::new_v4()));
+
+                let dest_path = dest_dir.join(&file_name);
+
+                // Copy file
+                if let Err(e) = fs::copy(&source_file, &dest_path) {
+                    errors.push(format!("Failed to copy file {}: {}", file_path, e));
+                    continue;
+                }
+
+                // Calculate file hash and size
+                let file_content = match fs::read(&dest_path) {
+                    Ok(content) => content,
+                    Err(e) => {
+                        errors.push(format!("Failed to read copied file: {}", e));
+                        continue;
+                    }
+                };
+
+                let mut hasher = Sha256::new();
+                hasher.update(&file_content);
+                let file_hash = hex::encode(hasher.finalize());
+                let file_size = file_content.len() as i64;
+
+                // Get page count for PDFs
+                let page_count: Option<i32> = if attachment_type == "pdf" {
+                    pdf::extract_metadata(&dest_path).ok().map(|m| m.page_count)
+                } else {
+                    None
+                };
+
+                // Generate attachment key
+                let attachment_key = Uuid::new_v4().to_string();
+                let dest_path_str = dest_path.to_string_lossy().to_string();
+
+                // Insert attachment
+                let attachment_title = if file_title.is_empty() {
+                    file_name.clone()
+                } else {
+                    file_title
+                };
+
+                let _ = sqlx::query(
+                    r#"
+                    INSERT INTO attachments (
+                        key, entry_id, attachment_type_id, title,
+                        file_path, file_hash, file_size, page_count
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    "#
+                )
+                .bind(&attachment_key)
+                .bind(entry_id)
+                .bind(attachment_type_id)
+                .bind(&attachment_title)
+                .bind(&dest_path_str)
+                .bind(&file_hash)
+                .bind(file_size)
+                .bind(page_count)
+                .execute(&state.db)
+                .await;
+
+                files_imported += 1;
+            }
+        }
+
+        imported += 1;
+    }
+
+    tracing::info!(
+        "BibLaTeX import complete: {} entries, {} files, {} tags, {} skipped",
+        imported, files_imported, tags_created, skipped
+    );
+
+    Ok(BiblatexImportResult {
+        imported,
+        skipped,
+        files_imported,
+        tags_created,
+        errors,
+    })
+}

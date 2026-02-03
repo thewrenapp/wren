@@ -75,8 +75,17 @@ interface UIState {
   // New Collection dialog
   newCollectionDialogOpen: boolean;
 
+  // Tag Management dialog
+  tagManagementDialogOpen: boolean;
+
+  // Collection Management dialog
+  collectionManagementDialogOpen: boolean;
+
   // Active filters
   activeFilter: 'all' | 'pdfs' | 'notes' | 'recent' | 'untagged' | 'duplicates' | 'trash';
+
+  // Tag display settings
+  hideImportedTags: boolean;
 
   // Delete confirmation
   deleteConfirmation: {
@@ -99,11 +108,17 @@ interface UIState {
   toggleCommandPalette: () => void;
   setSettingsOpen: (open: boolean) => void;
   setNewCollectionDialogOpen: (open: boolean) => void;
+  setTagManagementDialogOpen: (open: boolean) => void;
+  setCollectionManagementDialogOpen: (open: boolean) => void;
   setInfoPaneOpen: (open: boolean) => void;
   toggleInfoPane: () => void;
   setPdfLeftPanelOpen: (open: boolean) => void;
   togglePdfLeftPanel: () => void;
   setActiveFilter: (filter: UIState['activeFilter']) => void;
+
+  // Tag display actions
+  setHideImportedTags: (hide: boolean) => void;
+  toggleHideImportedTags: () => void;
 
   // Column actions
   toggleColumnVisibility: (columnId: ColumnId) => void;
@@ -144,7 +159,10 @@ export const useUIStore = create<UIState>()(
       commandPaletteOpen: false,
       settingsOpen: false,
       newCollectionDialogOpen: false,
+      tagManagementDialogOpen: false,
+      collectionManagementDialogOpen: false,
       activeFilter: 'all',
+      hideImportedTags: true,
       deleteConfirmation: {
         open: false,
         entryIds: [],
@@ -203,6 +221,10 @@ export const useUIStore = create<UIState>()(
 
       setNewCollectionDialogOpen: (open) => set({ newCollectionDialogOpen: open }),
 
+      setTagManagementDialogOpen: (open) => set({ tagManagementDialogOpen: open }),
+
+      setCollectionManagementDialogOpen: (open) => set({ collectionManagementDialogOpen: open }),
+
       setInfoPaneOpen: (open) => set({ infoPaneOpen: open }),
 
       toggleInfoPane: () => set((state) => ({ infoPaneOpen: !state.infoPaneOpen })),
@@ -212,6 +234,10 @@ export const useUIStore = create<UIState>()(
       togglePdfLeftPanel: () => set((state) => ({ pdfLeftPanelOpen: !state.pdfLeftPanelOpen })),
 
       setActiveFilter: (filter) => set({ activeFilter: filter }),
+
+      // Tag display actions
+      setHideImportedTags: (hide) => set({ hideImportedTags: hide }),
+      toggleHideImportedTags: () => set((state) => ({ hideImportedTags: !state.hideImportedTags })),
 
       // Column actions
       toggleColumnVisibility: (columnId) =>

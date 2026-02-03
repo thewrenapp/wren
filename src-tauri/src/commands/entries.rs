@@ -83,6 +83,7 @@ struct TagRow {
     id: i64,
     name: String,
     color: Option<String>,
+    is_imported: bool,
 }
 
 // =====================================================
@@ -94,10 +95,22 @@ struct TagRow {
 pub async fn get_entries(
     state: State<'_, AppState>,
     collection_id: Option<i64>,
-    tag_id: Option<i64>,
+    tag_ids: Option<Vec<i64>>,
+    tag_mode: Option<String>,
     attachment_type: Option<String>,
     search_query: Option<String>,
+    collectionId: Option<i64>,
+    tagIds: Option<Vec<i64>>,
+    tagMode: Option<String>,
+    attachmentType: Option<String>,
+    searchQuery: Option<String>,
 ) -> Result<Vec<EntrySummary>, String> {
+    let collection_id = collection_id.or(collectionId);
+    let tag_ids = tag_ids.or(tagIds);
+    let tag_mode = tag_mode.or(tagMode).unwrap_or_else(|| "or".to_string());
+    let attachment_type = attachment_type.or(attachmentType);
+    let search_query = search_query.or(searchQuery);
+
     let base_query = r#"
         SELECT
             e.id, e.key, it.name as item_type, it.display_name as item_type_display,
@@ -128,16 +141,62 @@ pub async fn get_entries(
             .fetch_all(&state.db)
             .await
             .map_err(|e| e.to_string())?
-    } else if let Some(t_id) = tag_id {
-        let query = format!(
-            "{} AND e.id IN (SELECT entry_id FROM entry_tags WHERE tag_id = ?) ORDER BY e.date_added DESC",
-            base_query
-        );
-        sqlx::query_as::<_, EntrySummaryRow>(&query)
-            .bind(t_id)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| e.to_string())?
+    } else if let Some(ref t_ids) = tag_ids {
+        if t_ids.is_empty() {
+            // No tags selected, return all entries
+            let query = format!("{} ORDER BY e.date_added DESC", base_query);
+            sqlx::query_as::<_, EntrySummaryRow>(&query)
+                .fetch_all(&state.db)
+                .await
+                .map_err(|e| e.to_string())?
+        } else if t_ids.len() == 1 {
+            // Single tag - use simple query
+            let query = format!(
+                "{} AND e.id IN (SELECT entry_id FROM entry_tags WHERE tag_id = ?) ORDER BY e.date_added DESC",
+                base_query
+            );
+            sqlx::query_as::<_, EntrySummaryRow>(&query)
+                .bind(t_ids[0])
+                .fetch_all(&state.db)
+                .await
+                .map_err(|e| e.to_string())?
+        } else {
+            // Multiple tags - use AND or OR mode
+            let placeholders: Vec<String> = t_ids.iter().map(|_| "?".to_string()).collect();
+            let in_clause = placeholders.join(", ");
+
+            let query = if tag_mode == "and" {
+                // AND mode: entry must have ALL selected tags
+                format!(
+                    "{} AND e.id IN (
+                        SELECT entry_id FROM entry_tags
+                        WHERE tag_id IN ({})
+                        GROUP BY entry_id
+                        HAVING COUNT(DISTINCT tag_id) = ?
+                    ) ORDER BY e.date_added DESC",
+                    base_query, in_clause
+                )
+            } else {
+                // OR mode: entry must have ANY of the selected tags
+                format!(
+                    "{} AND e.id IN (SELECT entry_id FROM entry_tags WHERE tag_id IN ({})) ORDER BY e.date_added DESC",
+                    base_query, in_clause
+                )
+            };
+
+            let mut query_builder = sqlx::query_as::<_, EntrySummaryRow>(&query);
+            for id in t_ids {
+                query_builder = query_builder.bind(id);
+            }
+            if tag_mode == "and" {
+                query_builder = query_builder.bind(t_ids.len() as i64);
+            }
+
+            query_builder
+                .fetch_all(&state.db)
+                .await
+                .map_err(|e| e.to_string())?
+        }
     } else if let Some(att_type) = attachment_type {
         let query = format!(
             "{} AND e.id IN (SELECT a.entry_id FROM attachments a JOIN attachment_types at ON a.attachment_type_id = at.id WHERE at.name = ?) ORDER BY e.date_added DESC",
@@ -313,13 +372,12 @@ pub async fn create_entry(
     let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
 
     // Get item type ID
-    let item_type_id: i64 =
-        sqlx::query_scalar("SELECT id FROM item_types WHERE name = ?")
-            .bind(&input.item_type)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Invalid item type: {}", input.item_type))?;
+    let item_type_id: i64 = sqlx::query_scalar("SELECT id FROM item_types WHERE name = ?")
+        .bind(&input.item_type)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Invalid item type: {}", input.item_type))?;
 
     // Insert core entry
     let result = sqlx::query(
@@ -482,13 +540,11 @@ pub async fn update_entry(
 /// Delete an entry (soft delete)
 #[tauri::command]
 pub async fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    sqlx::query(
-        "UPDATE entries SET is_deleted = 1, date_modified = datetime('now') WHERE id = ?",
-    )
-    .bind(id)
-    .execute(&state.db)
-    .await
-    .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE entries SET is_deleted = 1, date_modified = datetime('now') WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -876,8 +932,7 @@ pub async fn add_pdf_attachment(
         .map_err(|e| format!("Entry not found: {}", e))?;
 
     // Read file and calculate hash
-    let file_content =
-        fs::read(&source_path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let file_content = fs::read(&source_path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let mut hasher = Sha256::new();
     hasher.update(&file_content);
@@ -1041,13 +1096,15 @@ pub async fn get_item_types(
 
     Ok(types
         .into_iter()
-        .map(|(id, name, display_name, csl_type, icon)| crate::db::models::ItemType {
-            id,
-            name,
-            display_name,
-            csl_type,
-            icon,
-        })
+        .map(
+            |(id, name, display_name, csl_type, icon)| crate::db::models::ItemType {
+                id,
+                name,
+                display_name,
+                csl_type,
+                icon,
+            },
+        )
         .collect())
 }
 
@@ -1065,12 +1122,14 @@ pub async fn get_attachment_types(
 
     Ok(types
         .into_iter()
-        .map(|(id, name, display_name, icon)| crate::db::models::AttachmentType {
-            id,
-            name,
-            display_name,
-            icon,
-        })
+        .map(
+            |(id, name, display_name, icon)| crate::db::models::AttachmentType {
+                id,
+                name,
+                display_name,
+                icon,
+            },
+        )
         .collect())
 }
 
@@ -1186,7 +1245,7 @@ async fn get_entry_creators(
 async fn get_entry_tags(state: &State<'_, AppState>, entry_id: i64) -> Result<Vec<Tag>, String> {
     let tags: Vec<TagRow> = sqlx::query_as::<_, TagRow>(
         r#"
-        SELECT t.id, t.name, t.color
+        SELECT t.id, t.name, t.color, t.is_imported
         FROM tags t
         JOIN entry_tags et ON t.id = et.tag_id
         WHERE et.entry_id = ?
@@ -1204,6 +1263,7 @@ async fn get_entry_tags(state: &State<'_, AppState>, entry_id: i64) -> Result<Ve
             name: t.name,
             color: t.color,
             item_count: 0,
+            is_imported: t.is_imported,
         })
         .collect())
 }
@@ -1339,6 +1399,7 @@ struct BatchTagRow {
     tag_id: i64,
     tag_name: String,
     tag_color: Option<String>,
+    tag_is_imported: bool,
 }
 
 /// Row type for batch creator query
@@ -1367,7 +1428,7 @@ async fn batch_get_entry_tags(
     let placeholders: Vec<String> = entry_ids.iter().map(|_| "?".to_string()).collect();
     let query = format!(
         r#"
-        SELECT et.entry_id, t.id as tag_id, t.name as tag_name, t.color as tag_color
+        SELECT et.entry_id, t.id as tag_id, t.name as tag_name, t.color as tag_color, t.is_imported as tag_is_imported
         FROM entry_tags et
         JOIN tags t ON et.tag_id = t.id
         WHERE et.entry_id IN ({})
@@ -1393,6 +1454,7 @@ async fn batch_get_entry_tags(
             name: row.tag_name,
             color: row.tag_color,
             item_count: 0,
+            is_imported: row.tag_is_imported,
         });
     }
 
@@ -1519,10 +1581,7 @@ pub async fn get_entries_attachments(
 
 /// Duplicate an entry (copies metadata, creators, fields, tags, and collections)
 #[tauri::command]
-pub async fn duplicate_entry(
-    state: State<'_, AppState>,
-    id: i64,
-) -> Result<Entry, String> {
+pub async fn duplicate_entry(state: State<'_, AppState>, id: i64) -> Result<Entry, String> {
     let key = Uuid::new_v4().to_string();
 
     // Start transaction

@@ -206,6 +206,7 @@ export interface Tag {
   name: string;
   color?: string;
   itemCount: number;
+  isImported: boolean;
 }
 
 export interface Collection {

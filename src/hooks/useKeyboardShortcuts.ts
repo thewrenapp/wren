@@ -10,7 +10,8 @@ import { toast } from "@/stores/toastStore";
 const BULK_DELETE_THRESHOLD = 3;
 
 export function useKeyboardShortcuts() {
-  const { toggleCommandPalette, setViewMode, viewMode, showDeleteConfirmation } = useUIStore();
+  const { toggleCommandPalette, setViewMode, viewModeByFilter, activeFilter, showDeleteConfirmation } = useUIStore();
+  const viewMode = viewModeByFilter[activeFilter];
   const { closeTab, activeTabId, tabs, setActiveTab, openTab } = useTabStore();
   const { selectedEntryIds, entries, selectEntry, clearSelection, refreshLibrary } =
     useLibraryStore();

@@ -1,4 +1,4 @@
-import { create } from "zustand";
+import { create } from 'zustand';
 import type {
   Entry,
   EntrySummary,
@@ -7,30 +7,26 @@ import type {
   Collection,
   ItemType,
   AttachmentType,
-} from "@/types/schema";
+} from '@/types/schema';
 
 // Re-export types for convenience
-export type {
-  Entry,
-  EntrySummary,
-  Attachment,
-  Tag,
-  Collection,
-  ItemType,
-  AttachmentType,
-};
+export type { Entry, EntrySummary, Attachment, Tag, Collection, ItemType, AttachmentType };
 
 // Filter types for the sidebar
 export type LibraryFilter =
-  | { type: "all" }
-  | { type: "pdf" }
-  | { type: "note" }
-  | { type: "collection"; id: number }
-  | { type: "tag"; id: number };
+  | { type: 'all' }
+  | { type: 'pdf' }
+  | { type: 'note' }
+  | { type: 'collection'; id: number }
+  | { type: 'tag'; ids: number[] };
+
+// Tag filter mode
+export type TagFilterMode = 'and' | 'or';
 
 interface LibraryState {
   // Data
   entries: EntrySummary[];
+  allEntries: EntrySummary[];
   currentEntry: Entry | null;
   itemTypes: ItemType[];
   attachmentTypes: AttachmentType[];
@@ -43,7 +39,8 @@ interface LibraryState {
   // Filters
   activeFilter: LibraryFilter;
   activeCollectionId: number | null;
-  activeTagId: number | null;
+  activeTagIds: number[];
+  tagFilterMode: TagFilterMode;
   searchQuery: string;
 
   // Expanded entries (for tree view)
@@ -65,6 +62,7 @@ interface LibraryState {
 
   // Entry Actions
   setEntries: (entries: EntrySummary[]) => void;
+  setAllEntries: (entries: EntrySummary[]) => void;
   addEntry: (entry: EntrySummary) => void;
   updateEntry: (id: number, updates: Partial<EntrySummary>) => void;
   removeEntry: (id: number) => void;
@@ -95,7 +93,10 @@ interface LibraryState {
   // Filter Actions
   setFilter: (filter: LibraryFilter) => void;
   setActiveCollection: (id: number | null) => void;
-  setActiveTag: (id: number | null) => void;
+  toggleActiveTag: (id: number) => void;
+  setActiveTags: (ids: number[]) => void;
+  setTagFilterMode: (mode: TagFilterMode) => void;
+  clearActiveTags: () => void;
   setSearchQuery: (query: string) => void;
 
   // Loading Actions
@@ -121,16 +122,18 @@ interface LibraryState {
 export const useLibraryStore = create<LibraryState>()((set) => ({
   // Initial state
   entries: [],
+  allEntries: [],
   currentEntry: null,
   itemTypes: [],
   attachmentTypes: [],
   collections: [],
   tags: [],
   selectedEntryIds: [],
-  activeFilter: { type: "all" },
+  activeFilter: { type: 'all' },
   activeCollectionId: null,
-  activeTagId: null,
-  searchQuery: "",
+  activeTagIds: [],
+  tagFilterMode: 'or',
+  searchQuery: '',
   expandedEntryIds: [],
   isLoading: false,
   error: null,
@@ -141,22 +144,26 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
 
   // Entry actions
   setEntries: (entries) => set({ entries }),
+  setAllEntries: (entries) => set({ allEntries: entries }),
 
   addEntry: (entry) =>
     set((state) => ({
       entries: [entry, ...state.entries],
+      allEntries: [entry, ...state.allEntries],
     })),
 
   updateEntry: (id, updates) =>
     set((state) => ({
-      entries: state.entries.map((entry) =>
-        entry.id === id ? { ...entry, ...updates } : entry
+      entries: state.entries.map((entry) => (entry.id === id ? { ...entry, ...updates } : entry)),
+      allEntries: state.allEntries.map((entry) =>
+        entry.id === id ? { ...entry, ...updates } : entry,
       ),
     })),
 
   removeEntry: (id) =>
     set((state) => ({
       entries: state.entries.filter((entry) => entry.id !== id),
+      allEntries: state.allEntries.filter((entry) => entry.id !== id),
       selectedEntryIds: state.selectedEntryIds.filter((i) => i !== id),
       expandedEntryIds: state.expandedEntryIds.filter((i) => i !== id),
     })),
@@ -177,20 +184,16 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
 
   updateCollection: (id, updates) =>
     set((state) => ({
-      collections: state.collections.map((col) =>
-        col.id === id ? { ...col, ...updates } : col
-      ),
+      collections: state.collections.map((col) => (col.id === id ? { ...col, ...updates } : col)),
     })),
 
   removeCollection: (id) =>
     set((state) => ({
       collections: state.collections.filter((col) => col.id !== id),
-      activeCollectionId:
-        state.activeCollectionId === id ? null : state.activeCollectionId,
+      activeCollectionId: state.activeCollectionId === id ? null : state.activeCollectionId,
       activeFilter:
-        state.activeFilter.type === "collection" &&
-        state.activeFilter.id === id
-          ? { type: "all" }
+        state.activeFilter.type === 'collection' && state.activeFilter.id === id
+          ? { type: 'all' }
           : state.activeFilter,
     })),
 
@@ -204,20 +207,23 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
 
   updateTag: (id, updates) =>
     set((state) => ({
-      tags: state.tags.map((tag) =>
-        tag.id === id ? { ...tag, ...updates } : tag
-      ),
+      tags: state.tags.map((tag) => (tag.id === id ? { ...tag, ...updates } : tag)),
     })),
 
   removeTag: (id) =>
-    set((state) => ({
-      tags: state.tags.filter((tag) => tag.id !== id),
-      activeTagId: state.activeTagId === id ? null : state.activeTagId,
-      activeFilter:
-        state.activeFilter.type === "tag" && state.activeFilter.id === id
-          ? { type: "all" }
-          : state.activeFilter,
-    })),
+    set((state) => {
+      const newActiveTagIds = state.activeTagIds.filter((tagId) => tagId !== id);
+      return {
+        tags: state.tags.filter((tag) => tag.id !== id),
+        activeTagIds: newActiveTagIds,
+        activeFilter:
+          state.activeFilter.type === 'tag' && state.activeFilter.ids.includes(id)
+            ? newActiveTagIds.length > 0
+              ? { type: 'tag', ids: newActiveTagIds }
+              : { type: 'all' }
+            : state.activeFilter,
+      };
+    }),
 
   // Selection actions
   selectEntry: (id, multi = false) => {
@@ -249,22 +255,46 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   setFilter: (filter) =>
     set({
       activeFilter: filter,
-      activeCollectionId: filter.type === "collection" ? filter.id : null,
-      activeTagId: filter.type === "tag" ? filter.id : null,
+      activeCollectionId: filter.type === 'collection' ? filter.id : null,
+      activeTagIds: filter.type === 'tag' ? filter.ids : [],
     }),
 
   setActiveCollection: (id) =>
     set({
       activeCollectionId: id,
-      activeTagId: null,
-      activeFilter: id ? { type: "collection", id } : { type: "all" },
+      activeTagIds: [],
+      activeFilter: id ? { type: 'collection', id } : { type: 'all' },
     }),
 
-  setActiveTag: (id) =>
+  toggleActiveTag: (id) =>
+    set((state) => {
+      const isSelected = state.activeTagIds.includes(id);
+      const newIds = isSelected
+        ? state.activeTagIds.filter((tagId) => tagId !== id)
+        : [...state.activeTagIds, id];
+      return {
+        activeTagIds: newIds,
+        activeCollectionId: null,
+        // Stay in tag mode even when empty (user explicitly chose tag filtering)
+        activeFilter: { type: 'tag', ids: newIds },
+      };
+    }),
+
+  setActiveTags: (ids) =>
     set({
-      activeTagId: id,
+      activeTagIds: ids,
       activeCollectionId: null,
-      activeFilter: id ? { type: "tag", id } : { type: "all" },
+      // Stay in tag mode even with empty selection
+      activeFilter: { type: 'tag', ids },
+    }),
+
+  setTagFilterMode: (mode) => set({ tagFilterMode: mode }),
+
+  clearActiveTags: () =>
+    set({
+      activeTagIds: [],
+      // Go back to showing all items (exit tag mode)
+      activeFilter: { type: 'all' },
     }),
 
   setSearchQuery: (query) => set({ searchQuery: query }),
@@ -278,8 +308,7 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
     set((state) => ({ attachmentVersion: state.attachmentVersion + 1 })),
 
   // Entry cache invalidation (for info panel refetch)
-  invalidateEntry: () =>
-    set((state) => ({ entryVersion: state.entryVersion + 1 })),
+  invalidateEntry: () => set((state) => ({ entryVersion: state.entryVersion + 1 })),
 
   // Trash actions
   setTrashCount: (count) => set({ trashCount: count }),

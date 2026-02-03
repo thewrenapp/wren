@@ -8,6 +8,7 @@ import { TrashContextMenuContent } from './TrashContextMenu';
 import { DataTable, type Column } from './DataTable';
 import { deleteAttachment } from '@/services/tauri';
 import { toast } from '@/stores/toastStore';
+import type { EntryDragData } from '@/components/dnd/DragDropProvider';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,7 +51,7 @@ export function EntryTable({
 }: EntryTableProps) {
   const { columns: columnConfig, activeFilter } = useUIStore();
   const visibleColumns = columnConfig.filter((col) => col.visible);
-  const { invalidateAttachments } = useLibraryStore();
+  const { invalidateAttachments, refreshLibrary } = useLibraryStore();
 
   // Entry context menu state
   const [contextMenuEntry, setContextMenuEntry] = useState<EntrySummary | null>(null);
@@ -85,14 +86,6 @@ export function EntryTable({
     setContextMenuPosition({ x: event.clientX, y: event.clientY });
   };
 
-  const closeEntryContextMenu = useCallback(() => {
-    setContextMenuEntry(null);
-  }, []);
-
-  const closeAttachmentContextMenu = useCallback(() => {
-    setContextMenuAttachment(null);
-  }, []);
-
   const closeContextMenu = useCallback(() => {
     setContextMenuEntry(null);
     setContextMenuAttachment(null);
@@ -105,6 +98,7 @@ export function EntryTable({
     try {
       await deleteAttachment(Number(attachment.id));
       invalidateAttachments();
+      await refreshLibrary();
       toast.success('Attachment deleted');
     } catch (err) {
       console.error('Failed to delete attachment:', err);
@@ -127,7 +121,26 @@ export function EntryTable({
           return {
             ...baseColumn,
             cell: (entry: EntrySummary) => (
-              <span className='font-medium truncate'>{entry.title}</span>
+              <div className='flex items-center gap-2 min-w-0'>
+                {entry.tags.length > 0 && (
+                  <div className='flex items-center gap-0.5 flex-shrink-0'>
+                    {entry.tags.slice(0, 3).map((tag) => (
+                      <span
+                        key={tag.id}
+                        className='w-2 h-2 rounded-full'
+                        style={{ backgroundColor: tag.color || '#6b7280' }}
+                        title={tag.name}
+                      />
+                    ))}
+                    {entry.tags.length > 3 && (
+                      <span className='text-xs text-muted-foreground ml-0.5'>
+                        +{entry.tags.length - 3}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <span className='font-medium truncate'>{entry.title}</span>
+              </div>
             ),
           };
 
@@ -197,13 +210,18 @@ export function EntryTable({
             ...baseColumn,
             sortable: false,
             cell: (entry: EntrySummary) => (
-              <div className='flex items-center gap-1 overflow-hidden'>
+              <div className='flex items-center gap-1.5 overflow-hidden'>
                 {entry.tags.slice(0, 2).map((tag) => (
                   <span
                     key={tag.id}
-                    className='px-1 py-0.5 text-xs bg-muted rounded truncate max-w-[60px]'
+                    className='flex items-center gap-1 px-1.5 py-0.5 text-xs bg-muted rounded truncate max-w-[80px]'
+                    title={tag.name}
                   >
-                    {tag.name}
+                    <span
+                      className='w-2 h-2 rounded-full flex-shrink-0'
+                      style={{ backgroundColor: tag.color || '#6b7280' }}
+                    />
+                    <span className='truncate'>{tag.name}</span>
                   </span>
                 ))}
                 {entry.tags.length > 2 && (
@@ -276,6 +294,12 @@ export function EntryTable({
         hasExpandableRows={(entry) => entry.attachmentCount > 0}
         renderSubRow={renderSubRow}
         onKeyboardSelect={onKeyboardSelect ? (entry) => onKeyboardSelect(entry.id) : undefined}
+        isDragEnabled={activeFilter !== 'trash'}
+        getDragData={(_entry, selectedEntries) => ({
+          type: 'entries',
+          entryIds: selectedEntries.map((e) => e.id),
+          entries: selectedEntries,
+        } satisfies EntryDragData)}
       />
 
       {/* Trash Context Menu - separate DropdownMenu to avoid conditional rendering issues */}

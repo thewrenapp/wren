@@ -228,6 +228,8 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
       // Refresh global tags list for sidebar
       const allTags = await getTags();
       setTags(allTags);
+      // Refresh entries list to update tag dots
+      await refreshLibrary();
       setNewTagName("");
       setIsAddingTag(false);
     } catch (err) {
@@ -245,6 +247,8 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
       // Refresh global tags for sidebar count
       const allTags = await getTags();
       setTags(allTags);
+      // Refresh entries list to update tag dots
+      await refreshLibrary();
     } catch (err) {
       console.error("Failed to remove tag:", err);
     }

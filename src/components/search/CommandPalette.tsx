@@ -26,6 +26,7 @@ import {
   Copy,
   CopyPlus,
   Library,
+  Settings2,
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
@@ -37,13 +38,21 @@ import {
   exportToCslJson,
   exportAllToBibtex,
   exportAllToCslJson,
+  exportToBiblatexWithFiles,
+  exportAllToBiblatexWithFiles,
+  importBiblatexWithFiles,
+  previewBiblatexImport,
   deleteEntry,
   duplicateEntry,
   addEntryToCollection,
   addEntryTag,
   importBibtex,
   importCslJson,
+  type ExportOptions,
+  type BiblatexPreviewResult,
 } from "@/services/tauri";
+import { ExportOptionsDialog } from "@/components/dialogs/ExportOptionsDialog";
+import { ImportPreviewDialog } from "@/components/dialogs/ImportPreviewDialog";
 import { toast } from "@/stores/toastStore";
 import { cn } from "@/lib/utils";
 
@@ -75,6 +84,8 @@ export function CommandPalette() {
     setSettingsOpen,
     toggleInfoPane,
     setNewCollectionDialogOpen,
+    setTagManagementDialogOpen,
+    setCollectionManagementDialogOpen,
     showDeleteConfirmation,
   } = useUIStore();
 
@@ -96,6 +107,15 @@ export function CommandPalette() {
   const [searchMode, setSearchMode] = useState<SearchMode>("quick");
   const [subMenu, setSubMenu] = useState<"collection" | "tag" | null>(null);
   const [newTagName, setNewTagName] = useState("");
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportMode, setExportMode] = useState<"selected" | "all">("all");
+
+  // Import preview state
+  const [showImportPreview, setShowImportPreview] = useState(false);
+  const [importPreviewData, setImportPreviewData] = useState<BiblatexPreviewResult | null>(null);
+  const [importFolderPath, setImportFolderPath] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
 
   // Filter entries based on search
   const filteredEntries = search.trim()
@@ -206,6 +226,70 @@ export function CommandPalette() {
     } catch (err) {
       console.error("Import CSL JSON error:", err);
       toast.error("Failed to import CSL JSON file");
+    }
+  };
+
+  const handleImportBiblatexWithFiles = async () => {
+    setCommandPaletteOpen(false);
+    setSearch("");
+
+    try {
+      // Select the Zotero export folder (contains .bib file and files/ directory)
+      const selected = await open({
+        directory: true,
+        title: "Select Zotero Export Folder",
+      });
+
+      if (selected && typeof selected === "string") {
+        // Get preview data first
+        const preview = await previewBiblatexImport(selected);
+        setImportPreviewData(preview);
+        setImportFolderPath(selected);
+        setShowImportPreview(true);
+      }
+    } catch (err) {
+      console.error("Import BibLaTeX error:", err);
+      toast.error("Failed to preview BibLaTeX folder");
+    }
+  };
+
+  const handleConfirmBiblatexImport = async (selectedKeys: string[], importTags: boolean) => {
+    if (!importFolderPath) return;
+
+    setIsImporting(true);
+    try {
+      const result = await importBiblatexWithFiles(
+        importFolderPath,
+        importFolderPath,
+        selectedKeys,
+        importTags
+      );
+
+      let message = `Imported ${result.imported} ${result.imported !== 1 ? "entries" : "entry"}`;
+      if (result.filesImported > 0) {
+        message += ` with ${result.filesImported} file${result.filesImported !== 1 ? "s" : ""}`;
+      }
+      if (result.tagsCreated > 0) {
+        message += ` and ${result.tagsCreated} tag${result.tagsCreated !== 1 ? "s" : ""}`;
+      }
+      toast.success(message);
+
+      if (result.skipped > 0) {
+        toast.info(`${result.skipped} entries skipped`);
+      }
+
+      // Refresh library
+      await refreshLibrary();
+
+      // Close dialog
+      setShowImportPreview(false);
+      setImportPreviewData(null);
+      setImportFolderPath(null);
+    } catch (err) {
+      console.error("Failed to import BibLaTeX:", err);
+      toast.error("Failed to import BibLaTeX entries");
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -320,6 +404,36 @@ export function CommandPalette() {
       toast.error("Failed to copy");
     }
     setCommandPaletteOpen(false);
+  };
+
+  const handleExportBiblatexWithFiles = async (options: ExportOptions) => {
+    try {
+      setIsExporting(true);
+      const outputDir = await open({
+        directory: true,
+        title: "Select Export Folder",
+      });
+      if (outputDir) {
+        const result = exportMode === "selected"
+          ? await exportToBiblatexWithFiles(selectedEntryIds, outputDir, options)
+          : await exportAllToBiblatexWithFiles(outputDir, options);
+        toast.success(
+          `Exported ${result.entriesExported} entries, ${result.filesExported} files, ${result.notesExported} notes`
+        );
+        setShowExportDialog(false);
+      }
+    } catch (err) {
+      console.error("Export BibLaTeX error:", err);
+      toast.error("Failed to export to BibLaTeX");
+    } finally {
+      setIsExporting(false);
+    }
+    setCommandPaletteOpen(false);
+  };
+
+  const openExportDialog = (mode: "selected" | "all") => {
+    setExportMode(mode);
+    setShowExportDialog(true);
   };
 
   // Actual delete operation
@@ -784,6 +898,18 @@ export function CommandPalette() {
                           <span className="block text-sm font-medium">Copy as CSL JSON</span>
                         </div>
                       </Command.Item>
+                      <Command.Item
+                        onSelect={() => openExportDialog("selected")}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                          <FolderOpen className="h-4 w-4 text-purple-500" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="block text-sm font-medium">Export Selected as BibLaTeX with Files</span>
+                          <span className="text-xs text-muted-foreground">{selectedEntryIds.length} entries with attachments</span>
+                        </div>
+                      </Command.Item>
                     </>
                   )}
                   <Command.Item
@@ -808,6 +934,18 @@ export function CommandPalette() {
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Export All as CSL JSON</span>
                       <span className="text-xs text-muted-foreground">Entire library</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    onSelect={() => openExportDialog("all")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                      <FolderOpen className="h-4 w-4 text-purple-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Export All as BibLaTeX with Files</span>
+                      <span className="text-xs text-muted-foreground">Entire library with attachments</span>
                     </div>
                   </Command.Item>
                 </Command.Group>
@@ -887,6 +1025,19 @@ export function CommandPalette() {
                   </Command.Item>
 
                   <Command.Item
+                    onSelect={handleImportBiblatexWithFiles}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                      <FolderOpen className="h-4 w-4 text-purple-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Import BibLaTeX with Files</span>
+                      <span className="text-xs text-muted-foreground">Import from Zotero export folder with PDFs</span>
+                    </div>
+                  </Command.Item>
+
+                  <Command.Item
                     onSelect={() =>
                       handleSelect(() => setNewCollectionDialogOpen(true))
                     }
@@ -898,6 +1049,74 @@ export function CommandPalette() {
                     <div className="flex-1">
                       <span className="block text-sm font-medium">New Collection</span>
                       <span className="text-xs text-muted-foreground">Organize entries into a collection</span>
+                    </div>
+                  </Command.Item>
+                </Command.Group>
+
+                {/* Tags commands */}
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Tags
+                  </div>
+                  <Command.Item
+                    onSelect={() =>
+                      handleSelect(() => setTagManagementDialogOpen(true))
+                    }
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <Settings2 className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Manage Tags</span>
+                      <span className="text-xs text-muted-foreground">Create, merge, delete, and edit tag colors</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    onSelect={() => setSubMenu("tag")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <Plus className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Create Tag</span>
+                      <span className="text-xs text-muted-foreground">Create a new tag{selectedEntryIds.length > 0 ? " and add to selection" : ""}</span>
+                    </div>
+                  </Command.Item>
+                </Command.Group>
+
+                {/* Collections commands */}
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Collections
+                  </div>
+                  <Command.Item
+                    onSelect={() =>
+                      handleSelect(() => setCollectionManagementDialogOpen(true))
+                    }
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-violet-500/10">
+                      <Settings2 className="h-4 w-4 text-violet-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Manage Collections</span>
+                      <span className="text-xs text-muted-foreground">Merge, delete, and edit collection colors</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    onSelect={() =>
+                      handleSelect(() => setNewCollectionDialogOpen(true))
+                    }
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-violet-500/10">
+                      <Plus className="h-4 w-4 text-violet-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Create Collection</span>
+                      <span className="text-xs text-muted-foreground">Create a new collection to organize entries</span>
                     </div>
                   </Command.Item>
                 </Command.Group>
@@ -1003,6 +1222,22 @@ export function CommandPalette() {
           </div>
         </Command>
       </div>
+
+      <ExportOptionsDialog
+        open={showExportDialog}
+        onClose={() => setShowExportDialog(false)}
+        onExport={handleExportBiblatexWithFiles}
+        entryCount={exportMode === "selected" ? selectedEntryIds.length : entries.length}
+        isExporting={isExporting}
+      />
+
+      <ImportPreviewDialog
+        open={showImportPreview}
+        onOpenChange={setShowImportPreview}
+        previewData={importPreviewData}
+        onImport={handleConfirmBiblatexImport}
+        isImporting={isImporting}
+      />
     </div>
   );
 }

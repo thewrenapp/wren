@@ -147,9 +147,14 @@ export function EntryCardView({
                   {entry.tags.slice(0, 3).map((tag) => (
                     <span
                       key={tag.id}
-                      className='px-1.5 py-0.5 text-xs bg-muted rounded truncate max-w-full'
+                      className='flex items-center gap-1 px-1.5 py-0.5 text-xs bg-muted rounded truncate max-w-full'
+                      title={tag.name}
                     >
-                      {tag.name}
+                      <span
+                        className='w-2 h-2 rounded-full flex-shrink-0'
+                        style={{ backgroundColor: tag.color || '#6b7280' }}
+                      />
+                      <span className='truncate'>{tag.name}</span>
                     </span>
                   ))}
                   {entry.tags.length > 3 && (
