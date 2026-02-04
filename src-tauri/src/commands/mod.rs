@@ -4,6 +4,7 @@ pub mod duplicates;
 pub mod entries;
 pub mod export;
 pub mod import;
+pub mod saved_searches;
 pub mod schema;
 pub mod settings;
 pub mod tags;

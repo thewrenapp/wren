@@ -7,10 +7,11 @@ import type {
   Collection,
   ItemType,
   AttachmentType,
+  SavedSearch,
 } from '@/types/schema';
 
 // Re-export types for convenience
-export type { Entry, EntrySummary, Attachment, Tag, Collection, ItemType, AttachmentType };
+export type { Entry, EntrySummary, Attachment, Tag, Collection, ItemType, AttachmentType, SavedSearch };
 
 // Filter types for the sidebar
 export type LibraryFilter =
@@ -22,7 +23,7 @@ export type LibraryFilter =
 
 // Tag filter mode
 export type TagFilterMode = 'and' | 'or';
-export type LibrarySearchScope = 'title_creator_year' | 'fields_tags' | 'everything';
+export type LibrarySearchScope = 'title_creator_year' | 'fields_tags';
 
 interface LibraryState {
   // Data
@@ -32,6 +33,8 @@ interface LibraryState {
   attachmentTypes: AttachmentType[];
   collections: Collection[];
   tags: Tag[];
+  savedSearches: SavedSearch[];
+  activeSavedSearchId: number | null;
   entryCounts: {
     total: number;
     pdf: number;
@@ -100,6 +103,13 @@ interface LibraryState {
   updateTag: (id: number, updates: Partial<Tag>) => void;
   removeTag: (id: number) => void;
 
+  // Saved Search Actions
+  setSavedSearches: (searches: SavedSearch[]) => void;
+  addSavedSearch: (search: SavedSearch) => void;
+  updateSavedSearch: (id: number, updates: Partial<SavedSearch>) => void;
+  removeSavedSearch: (id: number) => void;
+  setActiveSavedSearch: (id: number | null) => void;
+
   // Selection Actions
   selectEntry: (id: number, multi?: boolean) => void;
   selectEntries: (ids: number[]) => void;
@@ -153,6 +163,8 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
   attachmentTypes: [],
   collections: [],
   tags: [],
+  savedSearches: [],
+  activeSavedSearchId: null,
   entryCounts: {
     total: 0,
     pdf: 0,
@@ -281,6 +293,34 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
               : { type: 'all' }
             : state.activeFilter,
       };
+    }),
+
+  // Saved Search actions
+  setSavedSearches: (searches) => set({ savedSearches: searches }),
+
+  addSavedSearch: (search) =>
+    set((state) => ({
+      savedSearches: [...state.savedSearches, search],
+    })),
+
+  updateSavedSearch: (id, updates) =>
+    set((state) => ({
+      savedSearches: state.savedSearches.map((s) => (s.id === id ? { ...s, ...updates } : s)),
+    })),
+
+  removeSavedSearch: (id) =>
+    set((state) => ({
+      savedSearches: state.savedSearches.filter((s) => s.id !== id),
+      activeSavedSearchId: state.activeSavedSearchId === id ? null : state.activeSavedSearchId,
+    })),
+
+  setActiveSavedSearch: (id) =>
+    set({
+      activeSavedSearchId: id,
+      // Clear other filters when activating a saved search
+      activeCollectionId: null,
+      activeTagIds: [],
+      activeFilter: { type: 'all' },
     }),
 
   // Selection actions

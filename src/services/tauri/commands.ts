@@ -773,3 +773,65 @@ export async function mergeEntries(targetId: number, sourceIds: number[]): Promi
 export async function discardDuplicates(keepId: number, discardIds: number[]): Promise<void> {
   return invoke('discard_duplicates', { keepId, discardIds });
 }
+
+// =====================================================
+// Saved Searches (Smart Filters)
+// =====================================================
+
+export interface SavedSearchCriterion {
+  field: string;
+  operator: string;
+  value: string | null;
+}
+
+export interface SavedSearch {
+  id: number;
+  name: string;
+  matchMode: 'all' | 'any';
+  criteria: SavedSearchCriterion[];
+  scope: 'all' | 'collection';
+  collectionId?: number;
+  sortOrder: number;
+  dateAdded: string;
+  dateModified: string;
+}
+
+export interface CreateSavedSearchInput {
+  name: string;
+  matchMode: 'all' | 'any';
+  criteria: SavedSearchCriterion[];
+  scope: 'all' | 'collection';
+  collectionId?: number;
+}
+
+export interface UpdateSavedSearchInput {
+  name?: string;
+  matchMode?: 'all' | 'any';
+  criteria?: SavedSearchCriterion[];
+  scope?: 'all' | 'collection';
+  collectionId?: number;
+}
+
+export async function getSavedSearches(): Promise<SavedSearch[]> {
+  return invoke('get_saved_searches');
+}
+
+export async function getSavedSearch(id: number): Promise<SavedSearch> {
+  return invoke('get_saved_search', { id });
+}
+
+export async function createSavedSearch(input: CreateSavedSearchInput): Promise<SavedSearch> {
+  return invoke('create_saved_search', { input });
+}
+
+export async function updateSavedSearch(id: number, input: UpdateSavedSearchInput): Promise<SavedSearch> {
+  return invoke('update_saved_search', { id, input });
+}
+
+export async function deleteSavedSearch(id: number): Promise<void> {
+  return invoke('delete_saved_search', { id });
+}
+
+export async function reorderSavedSearches(ids: number[]): Promise<void> {
+  return invoke('reorder_saved_searches', { ids });
+}

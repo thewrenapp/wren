@@ -82,6 +82,9 @@ interface UIState {
   // Collection Management dialog
   collectionManagementDialogOpen: boolean;
 
+  // Advanced Search dialog
+  advancedSearchOpen: boolean;
+
   // Active filters
   activeFilter: 'all' | 'pdfs' | 'notes' | 'recent' | 'untagged' | 'duplicates' | 'trash';
 
@@ -112,6 +115,7 @@ interface UIState {
   setNewCollectionDialogOpen: (open: boolean) => void;
   setTagManagementDialogOpen: (open: boolean) => void;
   setCollectionManagementDialogOpen: (open: boolean) => void;
+  setAdvancedSearchOpen: (open: boolean) => void;
   setInfoPaneOpen: (open: boolean) => void;
   toggleInfoPane: () => void;
   setPdfLeftPanelOpen: (open: boolean) => void;
@@ -164,6 +168,7 @@ export const useUIStore = create<UIState>()(
       newCollectionDialogOpen: false,
       tagManagementDialogOpen: false,
       collectionManagementDialogOpen: false,
+      advancedSearchOpen: false,
       activeFilter: 'all',
       hideImportedTags: true,
       deleteConfirmation: {
@@ -228,6 +233,8 @@ export const useUIStore = create<UIState>()(
       setTagManagementDialogOpen: (open) => set({ tagManagementDialogOpen: open }),
 
       setCollectionManagementDialogOpen: (open) => set({ collectionManagementDialogOpen: open }),
+
+      setAdvancedSearchOpen: (open) => set({ advancedSearchOpen: open }),
 
       setInfoPaneOpen: (open) => set({ infoPaneOpen: open }),
 

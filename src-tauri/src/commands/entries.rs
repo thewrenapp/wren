@@ -1,9 +1,9 @@
 use crate::db::models::{
     Attachment, CreateAttachmentInput, CreateEntryInput, Creator, CreatorInput, Entry,
-    EntrySummary, Tag, UpdateEntryInput,
+    EntrySummary, SavedSearch, SavedSearchCriterion, Tag, UpdateEntryInput,
 };
 use crate::state::AppState;
-use sqlx::{FromRow, Row, Sqlite, QueryBuilder};
+use sqlx::{FromRow, Row, Sqlite, SqlitePool, QueryBuilder};
 use std::collections::HashMap;
 use tauri::State;
 use uuid::Uuid;
@@ -12,6 +12,50 @@ use serde::Deserialize;
 // =====================================================
 // ROW TYPES (for sqlx queries)
 // =====================================================
+
+#[derive(Debug, FromRow)]
+struct SavedSearchRow {
+    id: i64,
+    name: String,
+    match_mode: String,
+    criteria_json: String,
+    scope: String,
+    collection_id: Option<i64>,
+    sort_order: i32,
+    date_added: String,
+    date_modified: String,
+}
+
+/// Load all saved searches from the database (internal helper)
+async fn load_saved_searches(pool: &SqlitePool) -> Vec<SavedSearch> {
+    let rows: Vec<SavedSearchRow> = sqlx::query_as(
+        r#"
+        SELECT id, name, match_mode, criteria_json, scope, collection_id, sort_order, date_added, date_modified
+        FROM saved_searches
+        ORDER BY sort_order, name
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    rows.into_iter()
+        .filter_map(|row| {
+            let criteria: Vec<SavedSearchCriterion> = serde_json::from_str(&row.criteria_json).ok()?;
+            Some(SavedSearch {
+                id: row.id,
+                name: row.name,
+                match_mode: row.match_mode,
+                criteria,
+                scope: row.scope,
+                collection_id: row.collection_id,
+                sort_order: row.sort_order,
+                date_added: row.date_added,
+                date_modified: row.date_modified,
+            })
+        })
+        .collect()
+}
 
 #[derive(Debug, FromRow)]
 struct EntryRow {
@@ -128,6 +172,7 @@ fn apply_entry_filters(
     search_scope: Option<&str>,
     advanced_search: Option<&AdvancedSearch>,
     filter_type: Option<&str>,
+    saved_searches: &[SavedSearch],
 ) {
     if let Some(coll_id) = collection_id {
         qb.push(" AND e.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
@@ -175,7 +220,7 @@ fn apply_entry_filters(
                     qb.push(joiner);
                 }
                 first = false;
-                apply_advanced_criterion(qb, criterion);
+                apply_advanced_criterion(qb, criterion, saved_searches);
             }
             qb.push(")");
         }
@@ -196,17 +241,7 @@ fn apply_entry_filters(
         qb.push(")");
 
         if scope == "fields_tags" {
-            qb.push(
-                " OR EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e.id AND f.name != 'abstractNote' AND ef.value LIKE ",
-            );
-            qb.push_bind(pattern.clone());
-            qb.push(")");
-            qb.push(
-                " OR EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e.id AND t.name LIKE ",
-            );
-            qb.push_bind(pattern);
-            qb.push(")");
-        } else if scope == "everything" {
+            // Search all fields including abstractNote
             qb.push(
                 " OR EXISTS(SELECT 1 FROM entry_fields ef WHERE ef.entry_id = e.id AND ef.value LIKE ",
             );
@@ -233,7 +268,7 @@ fn apply_entry_filters(
     }
 }
 
-fn apply_advanced_criterion(qb: &mut QueryBuilder<Sqlite>, criterion: &AdvancedCriterion) {
+fn apply_advanced_criterion(qb: &mut QueryBuilder<Sqlite>, criterion: &AdvancedCriterion, saved_searches: &[SavedSearch]) {
     let field = criterion.field.as_str();
     let operator = criterion.operator.as_str();
     let value = criterion.value.clone().unwrap_or_default();
@@ -263,6 +298,7 @@ fn apply_advanced_criterion(qb: &mut QueryBuilder<Sqlite>, criterion: &AdvancedC
         "item_type" => apply_text_column(qb, "it.display_name", op_kind, pattern.clone(), has_value),
         "date_added" => apply_date_column(qb, "e.date_added", op_kind, pattern.clone(), has_value),
         "collection" => apply_collection_match(qb, op_kind, &value, has_value),
+        "saved_search" => apply_saved_search_match(qb, op_kind, &value, saved_searches),
         _ => apply_text_column(qb, "e.title", op_kind, pattern, has_value),
     }
 }
@@ -497,6 +533,621 @@ fn apply_collection_match(
     }
 }
 
+/// Match entries against a saved search (Smart Filter)
+fn apply_saved_search_match(
+    qb: &mut QueryBuilder<Sqlite>,
+    op_kind: &str,
+    raw_value: &str,
+    saved_searches: &[SavedSearch],
+) {
+    let search_id: Option<i64> = raw_value.parse().ok();
+
+    let Some(id) = search_id else {
+        qb.push("1=0");
+        return;
+    };
+
+    let Some(saved_search) = saved_searches.iter().find(|s| s.id == id) else {
+        qb.push("1=0");
+        return;
+    };
+
+    if saved_search.criteria.is_empty() {
+        // Empty criteria - if "is" match nothing, if "is_not" match everything
+        if op_kind == "neq" {
+            qb.push("1=1");
+        } else {
+            qb.push("1=0");
+        }
+        return;
+    }
+
+    let in_or_not = if op_kind == "neq" { "NOT IN" } else { "IN" };
+
+    qb.push("e.id ");
+    qb.push(in_or_not);
+    qb.push(" (SELECT e2.id FROM entries e2 JOIN item_types it2 ON e2.item_type_id = it2.id WHERE e2.is_deleted = 0 AND (");
+
+    let joiner = if saved_search.match_mode == "any" { " OR " } else { " AND " };
+
+    let mut first = true;
+    for criterion in &saved_search.criteria {
+        if !first {
+            qb.push(joiner);
+        }
+        first = false;
+        apply_subquery_criterion(qb, criterion, saved_searches, id);
+    }
+
+    qb.push(")");
+
+    // Handle collection scope
+    if saved_search.scope == "collection" {
+        if let Some(coll_id) = saved_search.collection_id {
+            qb.push(" AND e2.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+            qb.push_bind(coll_id);
+            qb.push(")");
+        }
+    }
+
+    qb.push(")");
+}
+
+/// Apply a criterion within a saved search subquery (uses e2/it2 aliases)
+fn apply_subquery_criterion(
+    qb: &mut QueryBuilder<Sqlite>,
+    criterion: &SavedSearchCriterion,
+    saved_searches: &[SavedSearch],
+    exclude_search_id: i64,
+) {
+    let field = criterion.field.as_str();
+    let operator = criterion.operator.as_str();
+    let value = criterion.value.clone().unwrap_or_default();
+    let has_value = !value.is_empty();
+
+    let (op_kind, pattern) = match operator {
+        "contains" => ("like", format!("%{}%", value)),
+        "does_not_contain" => ("not_like", format!("%{}%", value)),
+        "is" => ("eq", value.clone()),
+        "is_not" => ("neq", value.clone()),
+        "begins_with" => ("like", format!("{}%", value)),
+        "ends_with" => ("like", format!("%{}", value)),
+        "is_before" => ("before", value.clone()),
+        "is_after" => ("after", value.clone()),
+        "is_empty" => ("empty", value.clone()),
+        "is_not_empty" => ("not_empty", value.clone()),
+        _ => ("like", format!("%{}%", value)),
+    };
+
+    match field {
+        "title" => apply_subquery_text(qb, "e2.title", op_kind, &pattern, has_value),
+        "creator" => apply_subquery_text(qb, "COALESCE(e2.creators_sort, '')", op_kind, &pattern, has_value),
+        "year" => apply_subquery_text(qb, "SUBSTR(COALESCE(e2.date, ''), 1, 4)", op_kind, &pattern, has_value),
+        "publication_title" => apply_subquery_field(qb, "publicationTitle", op_kind, &pattern, has_value),
+        "abstract" => apply_subquery_field(qb, "abstractNote", op_kind, &pattern, has_value),
+        "tags" => apply_subquery_tag(qb, op_kind, &pattern, has_value),
+        "item_type" => apply_subquery_text(qb, "it2.display_name", op_kind, &pattern, has_value),
+        "date_added" => apply_subquery_date(qb, "e2.date_added", op_kind, &pattern, has_value),
+        "collection" => apply_subquery_collection(qb, op_kind, &value, has_value),
+        "saved_search" => {
+            // Prevent infinite self-reference
+            if let Ok(ref_id) = value.parse::<i64>() {
+                if ref_id == exclude_search_id {
+                    qb.push("1=0");
+                    return;
+                }
+                // Find and apply the referenced saved search (one level of nesting)
+                if let Some(ref_search) = saved_searches.iter().find(|s| s.id == ref_id) {
+                    apply_nested_saved_search(qb, op_kind, ref_search, saved_searches, exclude_search_id);
+                    return;
+                }
+            }
+            qb.push("1=0");
+        }
+        _ => apply_subquery_text(qb, "e2.title", op_kind, &pattern, has_value),
+    }
+}
+
+/// Apply a nested saved search reference (uses e3/it3 aliases to avoid conflicts)
+fn apply_nested_saved_search(
+    qb: &mut QueryBuilder<Sqlite>,
+    op_kind: &str,
+    saved_search: &SavedSearch,
+    saved_searches: &[SavedSearch],
+    exclude_search_id: i64,
+) {
+    if saved_search.criteria.is_empty() {
+        if op_kind == "neq" {
+            qb.push("1=1");
+        } else {
+            qb.push("1=0");
+        }
+        return;
+    }
+
+    let in_or_not = if op_kind == "neq" { "NOT IN" } else { "IN" };
+
+    qb.push("e2.id ");
+    qb.push(in_or_not);
+    qb.push(" (SELECT e3.id FROM entries e3 JOIN item_types it3 ON e3.item_type_id = it3.id WHERE e3.is_deleted = 0 AND (");
+
+    let joiner = if saved_search.match_mode == "any" { " OR " } else { " AND " };
+
+    let mut first = true;
+    for criterion in &saved_search.criteria {
+        if !first {
+            qb.push(joiner);
+        }
+        first = false;
+        // Use e3/it3 for nested level - simplified handling (no deeper recursion)
+        apply_nested_criterion(qb, criterion, saved_searches, exclude_search_id, saved_search.id);
+    }
+
+    qb.push(")");
+
+    if saved_search.scope == "collection" {
+        if let Some(coll_id) = saved_search.collection_id {
+            qb.push(" AND e3.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+            qb.push_bind(coll_id);
+            qb.push(")");
+        }
+    }
+
+    qb.push(")");
+}
+
+/// Apply criterion at nested level (e3/it3 aliases, no further saved_search recursion)
+fn apply_nested_criterion(
+    qb: &mut QueryBuilder<Sqlite>,
+    criterion: &SavedSearchCriterion,
+    _saved_searches: &[SavedSearch],
+    exclude_search_id: i64,
+    current_search_id: i64,
+) {
+    let field = criterion.field.as_str();
+    let operator = criterion.operator.as_str();
+    let value = criterion.value.clone().unwrap_or_default();
+    let has_value = !value.is_empty();
+
+    let (op_kind, pattern) = match operator {
+        "contains" => ("like", format!("%{}%", value)),
+        "does_not_contain" => ("not_like", format!("%{}%", value)),
+        "is" => ("eq", value.clone()),
+        "is_not" => ("neq", value.clone()),
+        "begins_with" => ("like", format!("{}%", value)),
+        "ends_with" => ("like", format!("%{}", value)),
+        "is_before" => ("before", value.clone()),
+        "is_after" => ("after", value.clone()),
+        "is_empty" => ("empty", value.clone()),
+        "is_not_empty" => ("not_empty", value.clone()),
+        _ => ("like", format!("%{}%", value)),
+    };
+
+    match field {
+        "title" => apply_nested_text(qb, "e3.title", op_kind, &pattern, has_value),
+        "creator" => apply_nested_text(qb, "COALESCE(e3.creators_sort, '')", op_kind, &pattern, has_value),
+        "year" => apply_nested_text(qb, "SUBSTR(COALESCE(e3.date, ''), 1, 4)", op_kind, &pattern, has_value),
+        "publication_title" => apply_nested_field(qb, "publicationTitle", op_kind, &pattern, has_value),
+        "abstract" => apply_nested_field(qb, "abstractNote", op_kind, &pattern, has_value),
+        "tags" => apply_nested_tag(qb, op_kind, &pattern, has_value),
+        "item_type" => apply_nested_text(qb, "it3.display_name", op_kind, &pattern, has_value),
+        "date_added" => apply_nested_date(qb, "e3.date_added", op_kind, &pattern, has_value),
+        "collection" => apply_nested_collection(qb, op_kind, &value, has_value),
+        "saved_search" => {
+            // Prevent deeper recursion - no saved_search references at this level
+            if let Ok(ref_id) = value.parse::<i64>() {
+                if ref_id == exclude_search_id || ref_id == current_search_id {
+                    qb.push("1=0");
+                    return;
+                }
+            }
+            // Don't allow deeper nesting - would be too complex
+            qb.push("1=0");
+        }
+        _ => apply_nested_text(qb, "e3.title", op_kind, &pattern, has_value),
+    }
+}
+
+// =====================================================
+// SUBQUERY HELPERS (e2 alias)
+// =====================================================
+
+fn apply_subquery_text(qb: &mut QueryBuilder<Sqlite>, column: &str, op_kind: &str, pattern: &str, has_value: bool) {
+    match op_kind {
+        "eq" => {
+            qb.push(column);
+            qb.push(" = ");
+            qb.push_bind(pattern.to_string());
+        }
+        "neq" => {
+            qb.push(column);
+            qb.push(" != ");
+            qb.push_bind(pattern.to_string());
+        }
+        "not_like" => {
+            qb.push(column);
+            qb.push(" NOT LIKE ");
+            qb.push_bind(pattern.to_string());
+        }
+        "empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') = ''");
+        }
+        "not_empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') != ''");
+        }
+        _ => {
+            if has_value {
+                qb.push(column);
+                qb.push(" LIKE ");
+                qb.push_bind(pattern.to_string());
+            } else {
+                qb.push("1=1");
+            }
+        }
+    }
+}
+
+fn apply_subquery_field(qb: &mut QueryBuilder<Sqlite>, field_name: &str, op_kind: &str, pattern: &str, has_value: bool) {
+    match op_kind {
+        "empty" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e2.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND COALESCE(ef.value, '') != '')");
+        }
+        "not_empty" => {
+            qb.push("EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e2.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND COALESCE(ef.value, '') != '')");
+        }
+        "not_like" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e2.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND ef.value LIKE ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        "eq" => {
+            qb.push("EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e2.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND ef.value = ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        "neq" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e2.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND ef.value = ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        _ => {
+            if has_value {
+                qb.push("EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e2.id AND f.name = ");
+                qb.push_bind(field_name.to_string());
+                qb.push(" AND ef.value LIKE ");
+                qb.push_bind(pattern.to_string());
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+    }
+}
+
+fn apply_subquery_tag(qb: &mut QueryBuilder<Sqlite>, op_kind: &str, pattern: &str, has_value: bool) {
+    match op_kind {
+        "empty" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_tags et WHERE et.entry_id = e2.id)");
+        }
+        "not_empty" => {
+            qb.push("EXISTS(SELECT 1 FROM entry_tags et WHERE et.entry_id = e2.id)");
+        }
+        "not_like" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e2.id AND t.name LIKE ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        "eq" => {
+            qb.push("EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e2.id AND t.name = ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        "neq" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e2.id AND t.name = ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        _ => {
+            if has_value {
+                qb.push("EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e2.id AND t.name LIKE ");
+                qb.push_bind(pattern.to_string());
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+    }
+}
+
+fn apply_subquery_date(qb: &mut QueryBuilder<Sqlite>, column: &str, op_kind: &str, pattern: &str, has_value: bool) {
+    match op_kind {
+        "before" => {
+            if has_value {
+                qb.push("DATE(");
+                qb.push(column);
+                qb.push(") < DATE(");
+                qb.push_bind(pattern.to_string());
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        "after" => {
+            if has_value {
+                qb.push("DATE(");
+                qb.push(column);
+                qb.push(") > DATE(");
+                qb.push_bind(pattern.to_string());
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        "empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') = ''");
+        }
+        "not_empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') != ''");
+        }
+        _ => apply_subquery_text(qb, column, op_kind, pattern, has_value),
+    }
+}
+
+fn apply_subquery_collection(qb: &mut QueryBuilder<Sqlite>, op_kind: &str, raw_value: &str, has_value: bool) {
+    if !has_value {
+        qb.push("1=1");
+        return;
+    }
+    let id: Option<i64> = raw_value.parse().ok();
+    match op_kind {
+        "eq" => {
+            if let Some(collection_id) = id {
+                qb.push("e2.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=0");
+            }
+        }
+        "neq" => {
+            if let Some(collection_id) = id {
+                qb.push("e2.id NOT IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        _ => {
+            if let Some(collection_id) = id {
+                qb.push("e2.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=0");
+            }
+        }
+    }
+}
+
+// =====================================================
+// NESTED HELPERS (e3 alias)
+// =====================================================
+
+fn apply_nested_text(qb: &mut QueryBuilder<Sqlite>, column: &str, op_kind: &str, pattern: &str, has_value: bool) {
+    match op_kind {
+        "eq" => {
+            qb.push(column);
+            qb.push(" = ");
+            qb.push_bind(pattern.to_string());
+        }
+        "neq" => {
+            qb.push(column);
+            qb.push(" != ");
+            qb.push_bind(pattern.to_string());
+        }
+        "not_like" => {
+            qb.push(column);
+            qb.push(" NOT LIKE ");
+            qb.push_bind(pattern.to_string());
+        }
+        "empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') = ''");
+        }
+        "not_empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') != ''");
+        }
+        _ => {
+            if has_value {
+                qb.push(column);
+                qb.push(" LIKE ");
+                qb.push_bind(pattern.to_string());
+            } else {
+                qb.push("1=1");
+            }
+        }
+    }
+}
+
+fn apply_nested_field(qb: &mut QueryBuilder<Sqlite>, field_name: &str, op_kind: &str, pattern: &str, has_value: bool) {
+    match op_kind {
+        "empty" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e3.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND COALESCE(ef.value, '') != '')");
+        }
+        "not_empty" => {
+            qb.push("EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e3.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND COALESCE(ef.value, '') != '')");
+        }
+        "not_like" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e3.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND ef.value LIKE ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        "eq" => {
+            qb.push("EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e3.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND ef.value = ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        "neq" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e3.id AND f.name = ");
+            qb.push_bind(field_name.to_string());
+            qb.push(" AND ef.value = ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        _ => {
+            if has_value {
+                qb.push("EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e3.id AND f.name = ");
+                qb.push_bind(field_name.to_string());
+                qb.push(" AND ef.value LIKE ");
+                qb.push_bind(pattern.to_string());
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+    }
+}
+
+fn apply_nested_tag(qb: &mut QueryBuilder<Sqlite>, op_kind: &str, pattern: &str, has_value: bool) {
+    match op_kind {
+        "empty" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_tags et WHERE et.entry_id = e3.id)");
+        }
+        "not_empty" => {
+            qb.push("EXISTS(SELECT 1 FROM entry_tags et WHERE et.entry_id = e3.id)");
+        }
+        "not_like" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e3.id AND t.name LIKE ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        "eq" => {
+            qb.push("EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e3.id AND t.name = ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        "neq" => {
+            qb.push("NOT EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e3.id AND t.name = ");
+            qb.push_bind(pattern.to_string());
+            qb.push(")");
+        }
+        _ => {
+            if has_value {
+                qb.push("EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e3.id AND t.name LIKE ");
+                qb.push_bind(pattern.to_string());
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+    }
+}
+
+fn apply_nested_date(qb: &mut QueryBuilder<Sqlite>, column: &str, op_kind: &str, pattern: &str, has_value: bool) {
+    match op_kind {
+        "before" => {
+            if has_value {
+                qb.push("DATE(");
+                qb.push(column);
+                qb.push(") < DATE(");
+                qb.push_bind(pattern.to_string());
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        "after" => {
+            if has_value {
+                qb.push("DATE(");
+                qb.push(column);
+                qb.push(") > DATE(");
+                qb.push_bind(pattern.to_string());
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        "empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') = ''");
+        }
+        "not_empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') != ''");
+        }
+        _ => apply_nested_text(qb, column, op_kind, pattern, has_value),
+    }
+}
+
+fn apply_nested_collection(qb: &mut QueryBuilder<Sqlite>, op_kind: &str, raw_value: &str, has_value: bool) {
+    if !has_value {
+        qb.push("1=1");
+        return;
+    }
+    let id: Option<i64> = raw_value.parse().ok();
+    match op_kind {
+        "eq" => {
+            if let Some(collection_id) = id {
+                qb.push("e3.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=0");
+            }
+        }
+        "neq" => {
+            if let Some(collection_id) = id {
+                qb.push("e3.id NOT IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        _ => {
+            if let Some(collection_id) = id {
+                qb.push("e3.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=0");
+            }
+        }
+    }
+}
+
 // =====================================================
 // GET ENTRIES (List View)
 // =====================================================
@@ -542,6 +1193,9 @@ pub async fn get_entries(
         }
     }
 
+    // Load saved searches for Smart Filter support in advanced search
+    let saved_searches = load_saved_searches(&state.db).await;
+
     let mut qb = QueryBuilder::<Sqlite>::new(
         r#"
         SELECT
@@ -577,6 +1231,7 @@ pub async fn get_entries(
         search_scope.as_deref(),
         advanced_search.as_ref(),
         filter_type_str,
+        &saved_searches,
     );
 
     qb.push(" ORDER BY e.date_added DESC");
@@ -691,8 +1346,11 @@ pub async fn get_entries_paged(
         }
     }
 
+    // Load saved searches for Smart Filter support in advanced search
+    let saved_searches = load_saved_searches(&state.db).await;
+
     let mut count_qb = QueryBuilder::<Sqlite>::new(
-        "SELECT COUNT(*) FROM entries e WHERE e.is_deleted = 0",
+        "SELECT COUNT(*) FROM entries e JOIN item_types it ON e.item_type_id = it.id WHERE e.is_deleted = 0",
     );
     apply_entry_filters(
         &mut count_qb,
@@ -704,6 +1362,7 @@ pub async fn get_entries_paged(
         search_scope.as_deref(),
         advanced_search.as_ref(),
         filter_type_str,
+        &saved_searches,
     );
 
     let total: i64 = count_qb
@@ -747,6 +1406,7 @@ pub async fn get_entries_paged(
         search_scope.as_deref(),
         advanced_search.as_ref(),
         filter_type_str,
+        &saved_searches,
     );
 
     let sort_dir = if sort_direction.to_lowercase() == "asc" { "ASC" } else { "DESC" };

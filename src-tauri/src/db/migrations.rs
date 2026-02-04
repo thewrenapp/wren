@@ -150,6 +150,29 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add saved_searches table for Smart Filters
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS saved_searches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            match_mode TEXT NOT NULL DEFAULT 'all',
+            criteria_json TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'all',
+            collection_id INTEGER REFERENCES collections(id) ON DELETE SET NULL,
+            sort_order INTEGER DEFAULT 0,
+            date_added TEXT NOT NULL DEFAULT (datetime('now')),
+            date_modified TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_saved_searches_sort ON saved_searches(sort_order)")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 

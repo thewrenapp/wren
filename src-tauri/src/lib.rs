@@ -236,6 +236,13 @@ pub fn run() {
             commands::duplicates::get_duplicate_count,
             commands::duplicates::merge_entries,
             commands::duplicates::discard_duplicates,
+            // Saved Searches (Smart Filters)
+            commands::saved_searches::get_saved_searches,
+            commands::saved_searches::get_saved_search,
+            commands::saved_searches::create_saved_search,
+            commands::saved_searches::update_saved_search,
+            commands::saved_searches::delete_saved_search,
+            commands::saved_searches::reorder_saved_searches,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

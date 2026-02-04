@@ -20,6 +20,7 @@ import {
   Search,
   X,
   Check,
+  BookmarkX,
 } from 'lucide-react';
 import { useState, useEffect, useMemo, type MutableRefObject } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -58,6 +59,8 @@ import {
   deleteTag,
   getTags,
   getDuplicateCount,
+  getSavedSearches,
+  deleteSavedSearch,
   type ExportOptions,
 } from '@/services/tauri';
 import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
@@ -258,6 +261,11 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
     refreshLibrary,
     invalidateEntry,
     activeFilter: libraryActiveFilter,
+    savedSearches,
+    setSavedSearches,
+    removeSavedSearch,
+    activeSavedSearchId,
+    setActiveSavedSearch,
   } = useLibraryStore();
   const { tabs, updateTab, setActiveTab } = useTabStore();
   const { isDragging } = useDragDropContext();
@@ -313,6 +321,10 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
   const [deleteTagConfirm, setDeleteTagConfirm] = useState<{ id: number; name: string } | null>(
     null,
   );
+  const [deleteSavedSearchConfirm, setDeleteSavedSearchConfirm] = useState<{
+    id: number;
+    name: string;
+  } | null>(null);
   const [tagSearchQuery, setTagSearchQuery] = useState('');
   const visibleTags = useMemo(() => {
     return tags
@@ -329,12 +341,19 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
     getDuplicateCount().then(setDuplicateCount).catch(console.error);
   }, [entryCounts.total, entryVersion]); // Refresh when entries change or are modified
 
+  // Fetch saved searches
+  useEffect(() => {
+    getSavedSearches().then(setSavedSearches).catch(console.error);
+  }, [setSavedSearches]);
+
   // Update library tab title when filter changes
   const handleFilterChange = (filter: typeof activeFilter) => {
     setActiveFilter(filter);
     // Clear tag/collection filters when switching to a basic filter
     clearActiveTags();
     setActiveCollection(null);
+    // Clear saved search when switching to other filters
+    setActiveSavedSearch(null);
     // Clear selection when switching views so info panel doesn't show stale data
     clearSelection();
     // Find and update the library tab title, and switch to it
@@ -342,6 +361,40 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
     if (libraryTab) {
       updateTab(libraryTab.id, { title: getFilterTitle(filter) });
       setActiveTab(libraryTab.id);
+    }
+  };
+
+  // Handle saved search selection
+  const handleSavedSearchSelect = (searchId: number, searchName: string) => {
+    setActiveSavedSearch(searchId);
+    setActiveFilter('all');
+    clearActiveTags();
+    setActiveCollection(null);
+    clearSelection();
+    // Update tab title to saved search name
+    const libraryTab = tabs.find((t) => t.type === 'library');
+    if (libraryTab) {
+      updateTab(libraryTab.id, { title: searchName });
+      setActiveTab(libraryTab.id);
+    }
+  };
+
+  // Handle saved search deletion
+  const handleDeleteSavedSearch = async (id: number, name: string) => {
+    try {
+      await deleteSavedSearch(id);
+      removeSavedSearch(id);
+      if (activeSavedSearchId === id) {
+        setActiveSavedSearch(null);
+        const libraryTab = tabs.find((t) => t.type === 'library');
+        if (libraryTab) {
+          updateTab(libraryTab.id, { title: 'Library' });
+        }
+      }
+      toast.success(`Deleted saved search "${name}"`);
+    } catch (err) {
+      console.error('Failed to delete saved search:', err);
+      toast.error('Failed to delete saved search');
     }
   };
 
@@ -1052,7 +1105,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
                   icon={<Clock className='h-4 w-4' />}
                   label='Recently Added'
                   count={recentCount}
-                  active={activeFilter === 'recent'}
+                  active={activeFilter === 'recent' && !activeSavedSearchId}
                   onClick={() => handleFilterChange('recent')}
                   allowContextMenu
                 />
@@ -1097,7 +1150,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
                   icon={<Tag className='h-4 w-4' />}
                   label='Untagged'
                   count={entryCounts.untagged}
-                  active={activeFilter === 'untagged'}
+                  active={activeFilter === 'untagged' && !activeSavedSearchId}
                   onClick={() => handleFilterChange('untagged')}
                   allowContextMenu
                 />
@@ -1139,9 +1192,34 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             icon={<CopyIcon className='h-4 w-4' />}
             label='Duplicates'
             count={duplicateCount}
-            active={activeFilter === 'duplicates'}
+            active={activeFilter === 'duplicates' && !activeSavedSearchId}
             onClick={() => handleFilterChange('duplicates')}
           />
+          {/* User-created saved searches */}
+          {savedSearches.map((search) => (
+            <ContextMenu key={search.id}>
+              <ContextMenuTrigger asChild>
+                <div className='w-full overflow-hidden'>
+                  <SidebarItem
+                    icon={<Search className='h-4 w-4 text-blue-500' />}
+                    label={search.name}
+                    active={activeSavedSearchId === search.id}
+                    onClick={() => handleSavedSearchSelect(search.id, search.name)}
+                    allowContextMenu
+                  />
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent className='w-48'>
+                <ContextMenuItem
+                  onClick={() => setDeleteSavedSearchConfirm({ id: search.id, name: search.name })}
+                  className='text-destructive focus:text-destructive'
+                >
+                  <BookmarkX className='h-4 w-4 mr-2' />
+                  Delete Saved Search
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          ))}
         </CollapsibleSection>
 
         {/* Collections */}
@@ -1766,6 +1844,37 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             </Button>
             <Button variant='destructive' onClick={handleDeleteTag}>
               Delete Tag
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Saved Search Confirmation Dialog */}
+      <Dialog
+        open={deleteSavedSearchConfirm !== null}
+        onOpenChange={(open) => !open && setDeleteSavedSearchConfirm(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Saved Search?</DialogTitle>
+            <DialogDescription>
+              This will permanently delete the saved search "{deleteSavedSearchConfirm?.name}".
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant='outline' onClick={() => setDeleteSavedSearchConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant='destructive'
+              onClick={() => {
+                if (deleteSavedSearchConfirm) {
+                  handleDeleteSavedSearch(deleteSavedSearchConfirm.id, deleteSavedSearchConfirm.name);
+                  setDeleteSavedSearchConfirm(null);
+                }
+              }}
+            >
+              Delete
             </Button>
           </DialogFooter>
         </DialogContent>

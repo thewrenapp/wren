@@ -34,6 +34,8 @@ export function useLibrarySync() {
     hasMore,
     pageOffset,
     isLoadingMore,
+    activeSavedSearchId,
+    savedSearches,
   } = useLibraryStore();
   const {
     activeFilter: uiFilter,
@@ -54,18 +56,40 @@ export function useLibrarySync() {
       // Check if we're in tag mode with no tags selected - show empty
       const isEmptyTagMode = activeFilter.type === 'tag' && activeTagIds.length === 0;
 
+      // Build advanced search params if a saved search is active
+      let advancedSearch: { matchMode: 'all' | 'any'; criteria: Array<{ field: string; operator: string; value: string | null }> } | undefined;
+      let savedSearchCollectionId: number | undefined;
+
+      if (activeSavedSearchId) {
+        const savedSearch = savedSearches.find((s) => s.id === activeSavedSearchId);
+        if (savedSearch) {
+          advancedSearch = {
+            matchMode: savedSearch.matchMode,
+            criteria: savedSearch.criteria.map((c) => ({
+              field: c.field,
+              operator: c.operator,
+              value: c.value,
+            })),
+          };
+          if (savedSearch.scope === 'collection' && savedSearch.collectionId) {
+            savedSearchCollectionId = savedSearch.collectionId;
+          }
+        }
+      }
+
       resetPaging();
       // Load entries (first page), counts, collections, tags, and trash count in parallel
       const [page, counts, collections, tags, trashCount] = await Promise.all([
         isEmptyTagMode
           ? Promise.resolve({ entries: [], total: 0 }) // Empty entries for tag mode with no selection
           : tauri.getEntriesPaged({
-              collectionId: activeCollectionId ? Number(activeCollectionId) : undefined,
-              tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
-              tagMode: activeTagIds.length > 1 ? tagFilterMode : undefined,
-              searchQuery: searchQuery || undefined,
-              searchScope,
-              filterType: uiFilter || undefined,
+              collectionId: savedSearchCollectionId || (activeCollectionId ? Number(activeCollectionId) : undefined),
+              tagIds: !activeSavedSearchId && activeTagIds.length > 0 ? activeTagIds : undefined,
+              tagMode: !activeSavedSearchId && activeTagIds.length > 1 ? tagFilterMode : undefined,
+              searchQuery: !activeSavedSearchId ? (searchQuery || undefined) : undefined,
+              searchScope: !activeSavedSearchId ? searchScope : undefined,
+              filterType: !activeSavedSearchId ? (uiFilter || undefined) : undefined,
+              advancedSearch,
               sortField,
               sortDirection,
               secondarySortField: secondarySortField || undefined,
@@ -128,6 +152,8 @@ export function useLibrarySync() {
     sortDirection,
     secondarySortField,
     secondarySortDirection,
+    activeSavedSearchId,
+    savedSearches,
   ]);
 
   const loadMoreInFlight = useRef(false);
@@ -137,13 +163,35 @@ export function useLibrarySync() {
     loadMoreInFlight.current = true;
     setLoadingMore(true);
     try {
+      // Build advanced search params if a saved search is active
+      let advancedSearch: { matchMode: 'all' | 'any'; criteria: Array<{ field: string; operator: string; value: string | null }> } | undefined;
+      let savedSearchCollectionId: number | undefined;
+
+      if (activeSavedSearchId) {
+        const savedSearch = savedSearches.find((s) => s.id === activeSavedSearchId);
+        if (savedSearch) {
+          advancedSearch = {
+            matchMode: savedSearch.matchMode,
+            criteria: savedSearch.criteria.map((c) => ({
+              field: c.field,
+              operator: c.operator,
+              value: c.value,
+            })),
+          };
+          if (savedSearch.scope === 'collection' && savedSearch.collectionId) {
+            savedSearchCollectionId = savedSearch.collectionId;
+          }
+        }
+      }
+
       const page = await tauri.getEntriesPaged({
-        collectionId: activeCollectionId ? Number(activeCollectionId) : undefined,
-        tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
-        tagMode: activeTagIds.length > 1 ? tagFilterMode : undefined,
-        searchQuery: searchQuery || undefined,
-        searchScope,
-        filterType: uiFilter || undefined,
+        collectionId: savedSearchCollectionId || (activeCollectionId ? Number(activeCollectionId) : undefined),
+        tagIds: !activeSavedSearchId && activeTagIds.length > 0 ? activeTagIds : undefined,
+        tagMode: !activeSavedSearchId && activeTagIds.length > 1 ? tagFilterMode : undefined,
+        searchQuery: !activeSavedSearchId ? (searchQuery || undefined) : undefined,
+        searchScope: !activeSavedSearchId ? searchScope : undefined,
+        filterType: !activeSavedSearchId ? (uiFilter || undefined) : undefined,
+        advancedSearch,
         sortField,
         sortDirection,
         secondarySortField: secondarySortField || undefined,
@@ -181,6 +229,8 @@ export function useLibrarySync() {
     setHasMore,
     setPageOffset,
     setLoadingMore,
+    activeSavedSearchId,
+    savedSearches,
   ]);
 
   // Store refresh function in Zustand store (replaces global mutable state)
@@ -206,7 +256,7 @@ export function useLibrarySync() {
     if (isMounted.current) {
       loadLibrary();
     }
-  }, [activeCollectionId, activeTagIds, tagFilterMode, uiFilter, searchQuery, searchScope, sortField, sortDirection, secondarySortField, secondarySortDirection, loadLibrary]);
+  }, [activeCollectionId, activeTagIds, tagFilterMode, uiFilter, searchQuery, searchScope, sortField, sortDirection, secondarySortField, secondarySortDirection, activeSavedSearchId, loadLibrary]);
 
   return { refresh: loadLibrary, loadMore };
 }

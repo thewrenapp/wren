@@ -16,7 +16,6 @@ import {
   Tag,
   Sparkles,
   Zap,
-  BookOpen,
   Download,
   Upload,
   Trash2,
@@ -43,14 +42,13 @@ import {
   CircleSlash,
   GitMerge,
   Loader2,
-  X,
+  BookOpen,
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useImport } from "@/hooks/useLibrarySync";
-import { Input } from "@/components/ui/input";
 import {
   exportToBibtex,
   exportToCslJson,
@@ -104,55 +102,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
-type SearchMode = "quick" | "full" | "semantic";
-type QuickSearchScope = "title_creator_year" | "fields_tags" | "everything";
-type AdvancedMatchMode = "all" | "any";
-type AdvancedCriterion = {
-  id: string;
-  field: string;
-  operator: string;
-  value: string;
-};
-type AdvancedScope = "all" | "collection";
+type SearchMode = "quick" | "semantic";
+type QuickSearchScope = "title_creator_year" | "fields_tags";
 
 const searchModeConfig = {
   quick: { icon: Zap, label: "Quick", description: "Title search", hasScope: true },
-  full: { icon: BookOpen, label: "Advanced", description: "Advanced search" },
   semantic: { icon: Sparkles, label: "AI", description: "Semantic" },
 };
-
-const advancedFields = [
-  { value: "title", label: "Title" },
-  { value: "creator", label: "Creator" },
-  { value: "year", label: "Year" },
-  { value: "publication_title", label: "Publication Title" },
-  { value: "abstract", label: "Abstract" },
-  { value: "tags", label: "Tags" },
-  { value: "collection", label: "Collection" },
-  { value: "item_type", label: "Item Type" },
-  { value: "date_added", label: "Date Added" },
-];
-
-const advancedOperators = [
-  { value: "contains", label: "contains", requiresValue: true },
-  { value: "does_not_contain", label: "does not contain", requiresValue: true },
-  { value: "is", label: "is", requiresValue: true },
-  { value: "is_not", label: "is not", requiresValue: true },
-  { value: "begins_with", label: "begins with", requiresValue: true },
-  { value: "ends_with", label: "ends with", requiresValue: true },
-  { value: "is_before", label: "is before", requiresValue: true },
-  { value: "is_after", label: "is after", requiresValue: true },
-  { value: "is_empty", label: "is empty", requiresValue: false },
-  { value: "is_not_empty", label: "is not empty", requiresValue: false },
-];
 
 // Keyboard shortcut badge component
 function ShortcutBadge({ keys }: { keys: string[] }) {
@@ -178,6 +135,7 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
     setCollectionManagementDialogOpen,
     showDeleteConfirmation,
     setCommandPaletteMode,
+    setAdvancedSearchOpen,
   } = useUIStore();
 
   // Threshold for showing confirmation dialog
@@ -208,18 +166,6 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
   const [search, setSearch] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("quick");
   const [quickScope, setQuickScope] = useState<QuickSearchScope>("title_creator_year");
-  const [advancedMatch, setAdvancedMatch] = useState<AdvancedMatchMode>("all");
-  const [advancedScope, setAdvancedScope] = useState<AdvancedScope>("collection");
-  const [advancedCollectionId, setAdvancedCollectionId] = useState<string>("");
-  const [advancedCriteria, setAdvancedCriteria] = useState<AdvancedCriterion[]>([
-    {
-      id: "advanced-0",
-      field: "title",
-      operator: "contains",
-      value: "",
-    },
-  ]);
-  const advancedCounterRef = useRef(1);
   const [subMenu, setSubMenu] = useState<
     | "collection"
     | "tag"
@@ -268,24 +214,7 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
     if (searchTimeoutRef.current) {
       window.clearTimeout(searchTimeoutRef.current);
     }
-    const isAdvanced = searchMode === "full";
-    if (!isAdvanced && !search.trim()) {
-      setSearchResults([]);
-      setIsSearching(false);
-      setSearchTotal(0);
-      setSearchOffset(0);
-      setHasMoreResults(false);
-      return;
-    }
-
-    const filteredAdvancedCriteria = advancedCriteria.filter((criterion) => {
-      const operator = advancedOperators.find((op) => op.value === criterion.operator);
-      if (!operator) return false;
-      if (!operator.requiresValue) return true;
-      return criterion.value.trim().length > 0;
-    });
-
-    if (isAdvanced && filteredAdvancedCriteria.length === 0) {
+    if (!search.trim()) {
       setSearchResults([]);
       setIsSearching(false);
       setSearchTotal(0);
@@ -297,24 +226,9 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
     setIsSearching(true);
     searchTimeoutRef.current = window.setTimeout(async () => {
       try {
-        const scope = searchMode === "full" ? undefined : quickScope;
-        const advancedSearch = isAdvanced
-          ? {
-              matchMode: advancedMatch,
-              criteria: filteredAdvancedCriteria.map((criterion) => ({
-                field: criterion.field,
-                operator: criterion.operator,
-                value: criterion.value.trim() || null,
-              })),
-            }
-          : undefined;
         const result = await getEntriesPaged({
-          searchQuery: isAdvanced ? undefined : search.trim(),
-          searchScope: scope,
-          advancedSearch,
-          collectionId: isAdvanced && advancedScope === "collection" && advancedCollectionId
-            ? Number(advancedCollectionId)
-            : undefined,
+          searchQuery: search.trim(),
+          searchScope: quickScope,
           limit: 20,
           offset: 0,
         });
@@ -332,29 +246,24 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
         setIsSearching(false);
       }
     }, 150);
-  }, [search, searchMode, quickScope, advancedMatch, advancedCriteria, advancedScope, advancedCollectionId]);
+  }, [search, searchMode, quickScope]);
 
   useEffect(() => {
     if (!commandPaletteOpen) return;
     if (openMode === "advanced") {
-      setSearchMode("full");
-      setAdvancedScope(activeCollectionId ? "collection" : "all");
-      if (activeCollectionId) {
-        setAdvancedCollectionId(activeCollectionId.toString());
-      }
+      // Open advanced search dialog instead
+      setAdvancedSearchOpen(true);
+      setCommandPaletteOpen(false);
+      return;
     }
     if (openMode === "ai") {
       setSearchMode("semantic");
+    } else {
+      // Always reset to quick mode with first scope option when opening
+      setSearchMode("quick");
+      setQuickScope("title_creator_year");
     }
-  }, [commandPaletteOpen, openMode, activeCollectionId]);
-
-  useEffect(() => {
-    if (!commandPaletteOpen) return;
-    if (searchMode !== "full") return;
-    if (advancedScope === "collection" && !advancedCollectionId && activeCollectionId) {
-      setAdvancedCollectionId(activeCollectionId.toString());
-    }
-  }, [commandPaletteOpen, searchMode, advancedScope, advancedCollectionId, activeCollectionId]);
+  }, [commandPaletteOpen, openMode, setAdvancedSearchOpen, setCommandPaletteOpen]);
 
   useEffect(() => {
     if (commandPaletteOpen) return;
@@ -365,31 +274,9 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
     if (isLoadingMoreResults || !hasMoreResults) return;
     setIsLoadingMoreResults(true);
     try {
-      const isAdvanced = searchMode === "full";
-      const scope = isAdvanced ? undefined : quickScope;
-      const filteredAdvancedCriteria = advancedCriteria.filter((criterion) => {
-        const operator = advancedOperators.find((op) => op.value === criterion.operator);
-        if (!operator) return false;
-        if (!operator.requiresValue) return true;
-        return criterion.value.trim().length > 0;
-      });
-      const advancedSearch = isAdvanced
-        ? {
-            matchMode: advancedMatch,
-            criteria: filteredAdvancedCriteria.map((criterion) => ({
-              field: criterion.field,
-              operator: criterion.operator,
-              value: criterion.value.trim() || null,
-            })),
-          }
-        : undefined;
       const result = await getEntriesPaged({
-        searchQuery: isAdvanced ? undefined : search.trim(),
-        searchScope: scope,
-        advancedSearch,
-        collectionId: isAdvanced && advancedScope === "collection" && advancedCollectionId
-          ? Number(advancedCollectionId)
-          : undefined,
+        searchQuery: search.trim(),
+        searchScope: quickScope,
         limit: 20,
         offset: searchOffset,
       });
@@ -403,7 +290,7 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
     } finally {
       setIsLoadingMoreResults(false);
     }
-  }, [search, searchMode, quickScope, advancedMatch, advancedCriteria, advancedScope, advancedCollectionId, searchOffset, hasMoreResults, isLoadingMoreResults]);
+  }, [search, quickScope, searchOffset, hasMoreResults, isLoadingMoreResults]);
 
   const handleResultsScroll = useCallback(() => {
     const el = resultsContainerRef.current;
@@ -412,33 +299,6 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
       handleLoadMoreResults();
     }
   }, [isLoadingMoreResults, hasMoreResults, handleLoadMoreResults]);
-
-  const addAdvancedCriterion = useCallback(() => {
-    const id = `advanced-${advancedCounterRef.current}`;
-    advancedCounterRef.current += 1;
-    setAdvancedCriteria((prev) => [
-      ...prev,
-      {
-        id,
-        field: "title",
-        operator: "contains",
-        value: "",
-      },
-    ]);
-  }, []);
-
-  const updateAdvancedCriterion = useCallback(
-    (id: string, updates: Partial<AdvancedCriterion>) => {
-      setAdvancedCriteria((prev) =>
-        prev.map((criterion) => (criterion.id === id ? { ...criterion, ...updates } : criterion))
-      );
-    },
-    []
-  );
-
-  const removeAdvancedCriterion = useCallback((id: string) => {
-    setAdvancedCriteria((prev) => (prev.length > 1 ? prev.filter((criterion) => criterion.id !== id) : prev));
-  }, []);
 
   const handleSelect = useCallback(
     (callback: () => void) => {
@@ -2116,7 +1976,7 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
             {/* Search mode toggle */}
             <div className="flex items-center gap-2 shrink-0">
               <div className="flex gap-1 bg-muted/50 rounded-lg p-1">
-                {(["quick", "full", "semantic"] as const).map((mode) => {
+                {(["quick", "semantic"] as const).map((mode) => {
                   const config = searchModeConfig[mode];
                   const Icon = config.icon;
                   const isActive = searchMode === mode;
@@ -2128,40 +1988,55 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
                   );
 
                   if (mode === "quick") {
+                    // Split button: main part switches mode, chevron opens scope dropdown
                     return (
-                      <DropdownMenu key={mode}>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            onClick={() => setSearchMode(mode)}
-                            title={config.description}
-                            className={buttonClasses}
-                          >
-                            <Icon className="h-3.5 w-3.5" />
-                            <span>{config.label}</span>
-                            <ChevronDown className="h-3 w-3 opacity-70" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-[220px]">
-                          <DropdownMenuItem onClick={() => {
+                      <div key={mode} className="flex">
+                        <button
+                          onClick={() => {
                             setSearchMode("quick");
                             setQuickScope("title_creator_year");
-                          }}>
-                            Title, Creator, Year
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => {
-                            setSearchMode("quick");
-                            setQuickScope("fields_tags");
-                          }}>
-                            All Fields &amp; Tags
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => {
-                            setSearchMode("quick");
-                            setQuickScope("everything");
-                          }}>
-                            Everything
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                          }}
+                          title={config.description}
+                          className={cn(
+                            "flex items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 text-xs font-medium rounded-l-md transition-all",
+                            isActive
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                          )}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          <span>{config.label}</span>
+                        </button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              title="Change search scope"
+                              className={cn(
+                                "flex items-center px-1 py-1.5 text-xs font-medium rounded-r-md transition-all border-l",
+                                isActive
+                                  ? "bg-primary text-primary-foreground shadow-sm border-primary-foreground/20"
+                                  : "text-muted-foreground hover:text-foreground hover:bg-muted border-transparent"
+                              )}
+                            >
+                              <ChevronDown className="h-3 w-3 opacity-70" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="min-w-[220px]">
+                            <DropdownMenuItem onClick={() => {
+                              setSearchMode("quick");
+                              setQuickScope("title_creator_year");
+                            }}>
+                              Title, Creator, Year
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => {
+                              setSearchMode("quick");
+                              setQuickScope("fields_tags");
+                            }}>
+                              All Fields &amp; Tags
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
                     );
                   }
 
@@ -2180,138 +2055,6 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
               </div>
             </div>
           </div>
-
-          {searchMode === "full" && (
-            <div className="border-b border-border/50 px-4 py-3 bg-muted/20">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                <span>Search in</span>
-                <Select value={advancedScope} onValueChange={(value) => setAdvancedScope(value as AdvancedScope)}>
-                  <SelectTrigger className="h-7 w-36 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Library</SelectItem>
-                    <SelectItem value="collection">Current Collection</SelectItem>
-                  </SelectContent>
-                </Select>
-                {advancedScope === "collection" && (
-                  <Select
-                    value={advancedCollectionId}
-                    onValueChange={(value) => setAdvancedCollectionId(value)}
-                  >
-                    <SelectTrigger className="h-7 w-44 text-xs">
-                      <SelectValue placeholder="Select collection" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {collections.map((collection) => (
-                        <SelectItem key={collection.id} value={collection.id.toString()}>
-                          {collection.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                <span className="mx-1 text-muted-foreground/60">•</span>
-                <span>Match</span>
-                <Select value={advancedMatch} onValueChange={(value) => setAdvancedMatch(value as AdvancedMatchMode)}>
-                  <SelectTrigger className="h-7 w-24 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">all</SelectItem>
-                    <SelectItem value="any">any</SelectItem>
-                  </SelectContent>
-                </Select>
-                <span>of the following:</span>
-                <div className="flex-1" />
-                <button
-                  onClick={addAdvancedCriterion}
-                  className="inline-flex items-center gap-1 rounded-md border border-border/60 px-2 py-1 text-xs text-foreground hover:bg-muted"
-                >
-                  <Plus className="h-3 w-3" />
-                  Add rule
-                </button>
-              </div>
-
-              <div className="mt-3 space-y-2">
-                {advancedCriteria.map((criterion) => {
-                  const operator = advancedOperators.find((op) => op.value === criterion.operator);
-                  const requiresValue = operator ? operator.requiresValue : true;
-                  const isCollection = criterion.field === "collection";
-                  return (
-                    <div key={criterion.id} className="flex items-center gap-2">
-                      <Select
-                        value={criterion.field}
-                        onValueChange={(value) => updateAdvancedCriterion(criterion.id, { field: value })}
-                      >
-                        <SelectTrigger className="h-7 w-44 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {advancedFields.map((field) => (
-                            <SelectItem key={field.value} value={field.value}>
-                              {field.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Select
-                        value={criterion.operator}
-                        onValueChange={(value) => updateAdvancedCriterion(criterion.id, { operator: value })}
-                      >
-                        <SelectTrigger className="h-7 w-40 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {advancedOperators
-                            .filter((op) => (isCollection ? ["is", "is_not"].includes(op.value) : true))
-                            .map((op) => (
-                              <SelectItem key={op.value} value={op.value}>
-                                {op.label}
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
-                      {isCollection ? (
-                        <Select
-                          value={criterion.value}
-                          onValueChange={(value) => updateAdvancedCriterion(criterion.id, { value })}
-                        >
-                          <SelectTrigger className="h-7 w-full text-xs">
-                            <SelectValue placeholder="Select collection" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {collections.map((collection) => (
-                              <SelectItem key={collection.id} value={collection.id.toString()}>
-                                {collection.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input
-                          value={criterion.value}
-                          onChange={(event) =>
-                            updateAdvancedCriterion(criterion.id, { value: event.target.value })
-                          }
-                          placeholder={requiresValue ? "Value" : "No value"}
-                          disabled={!requiresValue}
-                          className="h-7 text-xs"
-                        />
-                      )}
-                      <button
-                        onClick={() => removeAdvancedCriterion(criterion.id)}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted"
-                        aria-label="Remove rule"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           {/* Results */}
           <Command.List
@@ -2388,7 +2131,6 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
             )}
 
             {/* Commands */}
-            {searchMode === "quick" && (
             <>
               {/* Actions on selected entries */}
               {selectedEntryIds.length > 0 && activeFilter !== "trash" && (
@@ -3130,6 +2872,29 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
                   </Command.Item>
                 </Command.Group>
 
+                {/* Search commands */}
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Search
+                  </div>
+                  <Command.Item
+                    value="advanced search filter criteria smart"
+                    onSelect={() =>
+                      handleSelect(() => setAdvancedSearchOpen(true))
+                    }
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10">
+                      <BookOpen className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Advanced Search</span>
+                      <span className="text-xs text-muted-foreground">Search with multiple criteria</span>
+                    </div>
+                    <ShortcutBadge keys={["⌘", "⇧", "F"]} />
+                  </Command.Item>
+                </Command.Group>
+
                 {/* Settings commands */}
                 <Command.Group>
                   <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
@@ -3182,7 +2947,6 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
                   </Command.Item>
                 </Command.Group>
             </>
-            )}
           </Command.List>
 
           {/* Footer with keyboard hints */}

@@ -2,12 +2,15 @@ import { useEffect, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Toaster } from "@/components/ui/Toaster";
 import { DeleteConfirmationDialog } from "@/components/dialogs/DeleteConfirmationDialog";
+import { AdvancedSearchDialog } from "@/components/search/AdvancedSearchDialog";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useTabStore } from "@/stores/tabStore";
+import { useUIStore } from "@/stores/uiStore";
 
 function App() {
   const { theme, showWelcomeOnStartup } = useSettingsStore();
   const { openTab, tabs } = useTabStore();
+  const { setAdvancedSearchOpen } = useUIStore();
   const hasInitialized = useRef(false);
 
   // Open welcome tab on startup if enabled
@@ -17,6 +20,18 @@ function App() {
       hasInitialized.current = true;
     }
   }, [showWelcomeOnStartup, openTab, tabs.length]);
+
+  // Keyboard shortcut for Advanced Search (Cmd+Shift+F)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey && e.shiftKey && e.key === "f") {
+        e.preventDefault();
+        setAdvancedSearchOpen(true);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [setAdvancedSearchOpen]);
 
   // Apply theme on mount and when it changes
   useEffect(() => {
@@ -52,6 +67,7 @@ function App() {
       <AppLayout />
       <Toaster />
       <DeleteConfirmationDialog />
+      <AdvancedSearchDialog />
     </>
   );
 }

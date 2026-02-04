@@ -374,3 +374,54 @@ pub struct Setting {
     #[serde(rename = "valueType")]
     pub value_type: String,
 }
+
+// =====================================================
+// SAVED SEARCH MODELS (Smart Filters)
+// =====================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedSearchCriterion {
+    pub field: String,
+    pub operator: String,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedSearch {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "matchMode")]
+    pub match_mode: String,
+    pub criteria: Vec<SavedSearchCriterion>,
+    pub scope: String,
+    #[serde(rename = "collectionId")]
+    pub collection_id: Option<i64>,
+    #[serde(rename = "sortOrder")]
+    pub sort_order: i32,
+    #[serde(rename = "dateAdded")]
+    pub date_added: String,
+    #[serde(rename = "dateModified")]
+    pub date_modified: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSavedSearchInput {
+    pub name: String,
+    #[serde(rename = "matchMode")]
+    pub match_mode: String,
+    pub criteria: Vec<SavedSearchCriterion>,
+    pub scope: String,
+    #[serde(rename = "collectionId")]
+    pub collection_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateSavedSearchInput {
+    pub name: Option<String>,
+    #[serde(rename = "matchMode")]
+    pub match_mode: Option<String>,
+    pub criteria: Option<Vec<SavedSearchCriterion>>,
+    pub scope: Option<String>,
+    #[serde(rename = "collectionId")]
+    pub collection_id: Option<i64>,
+}

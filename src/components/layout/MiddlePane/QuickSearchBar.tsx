@@ -74,7 +74,6 @@ export function QuickSearchBar() {
           <SelectContent>
             <SelectItem value="title_creator_year">Title, Creator, Year</SelectItem>
             <SelectItem value="fields_tags">All Fields &amp; Tags</SelectItem>
-            <SelectItem value="everything">Everything</SelectItem>
             <SelectSeparator />
             <SelectItem value="advanced">
               <span className="flex items-center gap-2">

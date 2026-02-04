@@ -243,6 +243,44 @@ export interface EntryLink {
 }
 
 // =====================================================
+// SAVED SEARCH TYPES (Smart Filters)
+// =====================================================
+
+export interface SavedSearchCriterion {
+  field: string;
+  operator: string;
+  value: string | null;
+}
+
+export interface SavedSearch {
+  id: number;
+  name: string;
+  matchMode: 'all' | 'any';
+  criteria: SavedSearchCriterion[];
+  scope: 'all' | 'collection';
+  collectionId?: number;
+  sortOrder: number;
+  dateAdded: string;
+  dateModified: string;
+}
+
+export interface CreateSavedSearchInput {
+  name: string;
+  matchMode: 'all' | 'any';
+  criteria: SavedSearchCriterion[];
+  scope: 'all' | 'collection';
+  collectionId?: number;
+}
+
+export interface UpdateSavedSearchInput {
+  name?: string;
+  matchMode?: 'all' | 'any';
+  criteria?: SavedSearchCriterion[];
+  scope?: 'all' | 'collection';
+  collectionId?: number;
+}
+
+// =====================================================
 // HELPER FUNCTIONS
 // =====================================================
 
