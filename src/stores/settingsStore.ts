@@ -17,6 +17,12 @@ interface SettingsState {
   // Embedding
   embeddingModel: string;
 
+  // OCR Settings
+  skipOcr: boolean; // Skip all OCR processing (Ollama + traditional)
+  ollamaEnabled: boolean;
+  ollamaEndpoint: string;
+  ollamaVisionModel: string;
+
   // Startup
   showWelcomeOnStartup: boolean;
 
@@ -25,6 +31,10 @@ interface SettingsState {
   setLibraryPath: (path: string) => void;
   setAutoRenameFiles: (enabled: boolean) => void;
   setEmbeddingModel: (model: string) => void;
+  setSkipOcr: (skip: boolean) => void;
+  setOllamaEnabled: (enabled: boolean) => void;
+  setOllamaEndpoint: (endpoint: string) => void;
+  setOllamaVisionModel: (model: string) => void;
   setShowWelcomeOnStartup: (show: boolean) => void;
   loadFromBackend: () => Promise<void>;
 }
@@ -36,6 +46,10 @@ export const useSettingsStore = create<SettingsState>()(
       libraryPath: "~/Wren",
       autoRenameFiles: true,
       embeddingModel: "all-MiniLM-L6-v2",
+      skipOcr: false,
+      ollamaEnabled: false,
+      ollamaEndpoint: "http://localhost:11434",
+      ollamaVisionModel: "llava",
       showWelcomeOnStartup: true,
 
       setTheme: (theme) => set({ theme }),
@@ -50,6 +64,10 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       setEmbeddingModel: (model) => set({ embeddingModel: model }),
+      setSkipOcr: (skip) => set({ skipOcr: skip }),
+      setOllamaEnabled: (enabled) => set({ ollamaEnabled: enabled }),
+      setOllamaEndpoint: (endpoint) => set({ ollamaEndpoint: endpoint }),
+      setOllamaVisionModel: (model) => set({ ollamaVisionModel: model }),
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
       loadFromBackend: async () => {
         try {

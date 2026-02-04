@@ -64,6 +64,14 @@ type BiblatexImportProgress = {
   currentTitle: string;
 };
 
+type ImportDetailProgress = {
+  fileName: string;
+  step: string;
+  method: string | null;
+  status: string;
+  message: string | null;
+};
+
 export function ImportPreviewDialog({
   open,
   onOpenChange,
@@ -80,6 +88,7 @@ export function ImportPreviewDialog({
   const [showNewCollection, setShowNewCollection] = useState(false);
   const [newCollectionName, setNewCollectionName] = useState('');
   const [progress, setProgress] = useState<BiblatexImportProgress | null>(null);
+  const [detailProgress, setDetailProgress] = useState<ImportDetailProgress | null>(null);
 
   const { collections, setCollections } = useLibraryStore();
 
@@ -115,6 +124,7 @@ export function ImportPreviewDialog({
   useEffect(() => {
     if (!open) return;
     let unlisten: (() => void) | null = null;
+    let unlistenDetail: (() => void) | null = null;
 
     const setup = async () => {
       const un = await listen<BiblatexImportProgress>('import:biblatex:progress', (event) => {
@@ -122,6 +132,13 @@ export function ImportPreviewDialog({
         setProgress(event.payload);
       });
       unlisten = un;
+
+      // Listen for file-level extraction details
+      const unDetail = await listen<ImportDetailProgress>('import:detail', (event) => {
+        if (!isImporting) return;
+        setDetailProgress(event.payload);
+      });
+      unlistenDetail = unDetail;
     };
 
     setup();
@@ -130,12 +147,16 @@ export function ImportPreviewDialog({
       if (unlisten) {
         unlisten();
       }
+      if (unlistenDetail) {
+        unlistenDetail();
+      }
     };
   }, [open, isImporting]);
 
   useEffect(() => {
     if (!isImporting) {
       setProgress(null);
+      setDetailProgress(null);
     }
   }, [isImporting]);
 
@@ -308,6 +329,39 @@ export function ImportPreviewDialog({
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
+            {/* File-level extraction detail */}
+            {detailProgress && (
+              <div className="mt-2 text-xs space-y-1 bg-muted/50 rounded p-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">File:</span>
+                  <span className="truncate font-mono">{detailProgress.fileName}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Step:</span>
+                  <span>{detailProgress.step}</span>
+                  {detailProgress.method && (
+                    <>
+                      <span className="text-muted-foreground">•</span>
+                      <span className="text-blue-500">{detailProgress.method}</span>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Status:</span>
+                  <span className={cn(
+                    detailProgress.status === 'success' && 'text-green-500',
+                    detailProgress.status === 'failed' && 'text-red-500',
+                    detailProgress.status === 'skipped' && 'text-yellow-500',
+                    detailProgress.status === 'processing' && 'text-blue-500'
+                  )}>
+                    {detailProgress.status}
+                  </span>
+                  {detailProgress.message && (
+                    <span className="text-muted-foreground truncate">({detailProgress.message})</span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

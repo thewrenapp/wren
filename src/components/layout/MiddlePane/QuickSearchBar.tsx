@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { BookOpen, Search, Sparkles, X } from "lucide-react";
+import { BookOpen, FileSearch, Search, Sparkles, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,6 +55,11 @@ export function QuickSearchBar() {
         <Select
           value={searchScope}
           onValueChange={(value) => {
+            if (value === "full") {
+              setCommandPaletteMode("full");
+              setCommandPaletteOpen(true);
+              return;
+            }
             if (value === "advanced") {
               setCommandPaletteMode("advanced");
               setCommandPaletteOpen(true);
@@ -75,6 +80,12 @@ export function QuickSearchBar() {
             <SelectItem value="title_creator_year">Title, Creator, Year</SelectItem>
             <SelectItem value="fields_tags">All Fields &amp; Tags</SelectItem>
             <SelectSeparator />
+            <SelectItem value="full">
+              <span className="flex items-center gap-2">
+                <FileSearch className="h-3.5 w-3.5" />
+                Full Search
+              </span>
+            </SelectItem>
             <SelectItem value="advanced">
               <span className="flex items-center gap-2">
                 <BookOpen className="h-3.5 w-3.5" />

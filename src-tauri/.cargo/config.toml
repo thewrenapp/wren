@@ -1,0 +1,2 @@
+[env]
+LIBRARY_PATH = { value = "/opt/homebrew/opt/zstd/lib", force = true }

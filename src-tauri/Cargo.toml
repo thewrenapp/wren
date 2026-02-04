@@ -39,8 +39,19 @@ pdf-extract = "0.7"
 # Markdown (for later phases)
 # comrak = { version = "0.28", features = ["syntect"] }
 
-# Search (for later phases)
-# tantivy = "0.22"
+# Full-text search
+tantivy = "0.22"
+scraper = "0.22"
+pdfium-render = "0.8"
+base64 = "0.22"
+image = "0.25"
+reqwest = { version = "0.12", features = ["json"] }
+
+# OCR fallback (pure Rust, uses ONNX models)
+ocrs = "0.11"
+rten = "0.22"
+rten-tensor = "0.22"
+dirs = "6"
 
 # Embeddings (for later phases)
 # fastembed = "4"

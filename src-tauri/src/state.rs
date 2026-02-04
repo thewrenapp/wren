@@ -5,10 +5,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::db;
+use crate::search::SearchIndex;
 
 pub struct AppState {
     pub db: SqlitePool,
     pub library_path: Arc<RwLock<PathBuf>>,
+    pub search_index: Arc<SearchIndex>,
 }
 
 impl AppState {
@@ -29,9 +31,15 @@ impl AppState {
 
         tracing::info!("Database initialized at {:?}", db_path);
 
+        // Initialize full-text search index
+        let index_path = library_path.join(".wren").join("tantivy_index");
+        let search_index = SearchIndex::open_or_create(&index_path)?;
+        tracing::info!("Search index initialized at {:?}", index_path);
+
         Ok(Self {
             db,
             library_path: Arc::new(RwLock::new(library_path)),
+            search_index: Arc::new(search_index),
         })
     }
 

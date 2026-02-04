@@ -1,5 +1,7 @@
 use crate::filename;
 use crate::pdf;
+use crate::search::extractor::ExtractionConfig;
+use crate::search::indexer::{AttachmentData, EntryMetadata};
 use crate::state::AppState;
 use crate::commands::settings::is_setting_enabled;
 use biblatex::{Bibliography, Chunk, Entry, EntryType, Spanned, Type};
@@ -43,6 +45,22 @@ pub struct BiblatexImportProgress {
     pub current_title: String,
 }
 
+/// Detailed progress event for import operations (file extraction)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportDetailProgress {
+    /// File name being processed
+    pub file_name: String,
+    /// Current step: "extracting", "indexing"
+    pub step: String,
+    /// Method being used: "pdf-extract → ollama → ocr", "direct", etc.
+    pub method: Option<String>,
+    /// Status: "processing", "success", "skipped", "failed"
+    pub status: String,
+    /// Optional message
+    pub message: Option<String>,
+}
+
 /// Import a single PDF file
 #[tauri::command]
 pub async fn import_pdf(
@@ -62,6 +80,7 @@ pub async fn import_pdf(
 #[tauri::command]
 pub async fn import_pdfs(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     file_paths: Vec<String>,
 ) -> Result<Vec<ImportResult>, String> {
     let mut results = Vec::new();
@@ -83,7 +102,7 @@ pub async fn import_pdfs(
             continue;
         }
 
-        match import_single_pdf(&state, &source_path).await {
+        match import_single_pdf_with_handle(&state, &source_path, Some(&app_handle)).await {
             Ok(result) => results.push(result),
             Err(e) => results.push(ImportResult {
                 id: 0,
@@ -107,6 +126,7 @@ pub async fn import_pdfs(
 #[tauri::command]
 pub async fn import_folder(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     folder_path: String,
 ) -> Result<Vec<ImportResult>, String> {
     let folder = PathBuf::from(&folder_path);
@@ -120,7 +140,7 @@ pub async fn import_folder(
 
     let mut results = Vec::new();
     for path in pdf_paths {
-        match import_single_pdf(&state, &path).await {
+        match import_single_pdf_with_handle(&state, &path, Some(&app_handle)).await {
             Ok(result) => results.push(result),
             Err(e) => results.push(ImportResult {
                 id: 0,
@@ -158,6 +178,15 @@ fn collect_pdfs(folder: &Path, paths: &mut Vec<PathBuf>) {
 async fn import_single_pdf(
     state: &State<'_, AppState>,
     source_path: &Path,
+) -> Result<ImportResult, String> {
+    import_single_pdf_with_handle(state, source_path, None).await
+}
+
+/// Import a single PDF file with optional app handle for progress events
+async fn import_single_pdf_with_handle(
+    state: &State<'_, AppState>,
+    source_path: &Path,
+    app_handle: Option<&AppHandle>,
 ) -> Result<ImportResult, String> {
     // Calculate file hash
     let file_content = fs::read(source_path)
@@ -477,6 +506,102 @@ async fn import_single_pdf(
 
     tracing::info!("Imported PDF: {} (entry: {}, attachment: {})", final_title, entry_key, attachment_key);
 
+    // Index entry metadata for full-text search
+    let creators_str = authors.join("; ");
+    let abstract_text = metadata.subject.clone();
+
+    let entry_metadata = EntryMetadata {
+        entry_id,
+        entry_key: entry_key.clone(),
+        title: Some(final_title.clone()),
+        creators: if creators_str.is_empty() { None } else { Some(creators_str) },
+        abstract_text,
+        item_type: "journalArticle".to_string(),
+    };
+
+    if let Err(e) = state.search_index.index_entry_metadata(&entry_metadata).await {
+        tracing::warn!("Failed to index entry metadata: {}", e);
+    }
+
+    // Index PDF content for full-text search
+    let attachment_data = AttachmentData {
+        entry_id,
+        entry_key: entry_key.clone(),
+        attachment_id,
+        title: Some(final_title.clone()),
+        file_path: final_dest_path_str.clone(),
+        content_source: "pdf".to_string(),
+    };
+
+    // Use default extraction config (Ollama disabled by default)
+    let config = ExtractionConfig::default();
+
+    // Get file name for progress reporting
+    let file_name = final_dest_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    // Emit progress: extracting with expected method
+    if let Some(handle) = app_handle {
+        let expected_method = if config.skip_ocr {
+            "pdf-extract (OCR disabled)"
+        } else if config.ollama_enabled {
+            "pdf-extract → ollama → ocr"
+        } else {
+            "pdf-extract → ocr"
+        };
+
+        let _ = handle.emit(
+            "import:detail",
+            ImportDetailProgress {
+                file_name: file_name.clone(),
+                step: "extracting".to_string(),
+                method: Some(expected_method.to_string()),
+                status: "processing".to_string(),
+                message: None,
+            },
+        );
+    }
+
+    match state.search_index.index_attachment_content(&attachment_data, &config).await {
+        Ok(result) => {
+            if let Some(handle) = app_handle {
+                let _ = handle.emit(
+                    "import:detail",
+                    ImportDetailProgress {
+                        file_name: file_name.clone(),
+                        step: "indexing".to_string(),
+                        method: Some(result.method.as_str().to_string()),
+                        status: if result.indexed { "success" } else { "skipped" }.to_string(),
+                        message: result.message,
+                    },
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to index PDF content: {}", e);
+            if let Some(handle) = app_handle {
+                let _ = handle.emit(
+                    "import:detail",
+                    ImportDetailProgress {
+                        file_name: file_name.clone(),
+                        step: "indexing".to_string(),
+                        method: None,
+                        status: "failed".to_string(),
+                        message: Some(e.to_string()),
+                    },
+                );
+            }
+        }
+    }
+
+    // Commit index changes
+    if let Err(e) = state.search_index.commit().await {
+        tracing::warn!("Failed to commit search index: {}", e);
+    }
+
     Ok(ImportResult {
         id: entry_id,
         key: entry_key,
@@ -771,7 +896,46 @@ pub async fn import_bibtex(
             }
         }
 
+        // Index entry metadata for full-text search
+        let creators_str: String = entry.author()
+            .ok()
+            .map(|authors| {
+                authors.iter()
+                    .map(|p| {
+                        if !p.name.is_empty() && !p.given_name.is_empty() {
+                            format!("{} {}", p.given_name, p.name)
+                        } else if !p.name.is_empty() {
+                            p.name.clone()
+                        } else {
+                            p.given_name.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .unwrap_or_default();
+
+        let abstract_text = get_field_string(entry, "abstract");
+
+        let entry_metadata = EntryMetadata {
+            entry_id,
+            entry_key: entry_key.clone(),
+            title: Some(title.clone()),
+            creators: if creators_str.is_empty() { None } else { Some(creators_str) },
+            abstract_text,
+            item_type: item_type.to_string(),
+        };
+
+        if let Err(e) = state.search_index.index_entry_metadata(&entry_metadata).await {
+            tracing::warn!("Failed to index entry metadata for {}: {}", entry_key, e);
+        }
+
         imported += 1;
+    }
+
+    // Commit search index changes
+    if let Err(e) = state.search_index.commit().await {
+        tracing::warn!("Failed to commit search index: {}", e);
     }
 
     Ok(BibtexImportResult {
@@ -1117,7 +1281,46 @@ pub async fn import_csl_json(
             tracing::warn!("Failed to refresh entries_fts for entry {}: {}", entry_id, e);
         }
 
+        // Index entry metadata for full-text search
+        let creators_str: String = item.author.as_ref()
+            .map(|authors| {
+                authors.iter()
+                    .filter_map(|a| {
+                        if let Some(lit) = &a.literal {
+                            Some(lit.clone())
+                        } else {
+                            match (&a.given, &a.family) {
+                                (Some(g), Some(f)) => Some(format!("{} {}", g, f)),
+                                (None, Some(f)) => Some(f.clone()),
+                                (Some(g), None) => Some(g.clone()),
+                                _ => None,
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .unwrap_or_default();
+
+        let entry_metadata = EntryMetadata {
+            entry_id,
+            entry_key: entry_key.clone(),
+            title: Some(title.clone()),
+            creators: if creators_str.is_empty() { None } else { Some(creators_str) },
+            abstract_text: item.abstract_text.clone(),
+            item_type: item_type.to_string(),
+        };
+
+        if let Err(e) = state.search_index.index_entry_metadata(&entry_metadata).await {
+            tracing::warn!("Failed to index entry metadata for {}: {}", entry_key, e);
+        }
+
         imported += 1;
+    }
+
+    // Commit search index changes
+    if let Err(e) = state.search_index.commit().await {
+        tracing::warn!("Failed to commit search index: {}", e);
     }
 
     Ok(CslJsonImportResult {
@@ -1698,8 +1901,38 @@ pub async fn import_biblatex_with_files(
             tracing::warn!("Failed to refresh entries_fts for entry {}: {}", entry_id, e);
         }
 
-        if let Err(e) = crate::commands::entries::refresh_entry_fts(&state.db, entry_id).await {
-            tracing::warn!("Failed to refresh entries_fts for entry {}: {}", entry_id, e);
+        // Index entry metadata for full-text search
+        let creators_str: String = entry.author()
+            .ok()
+            .map(|authors| {
+                authors.iter()
+                    .map(|p| {
+                        if !p.name.is_empty() && !p.given_name.is_empty() {
+                            format!("{} {}", p.given_name, p.name)
+                        } else if !p.name.is_empty() {
+                            p.name.clone()
+                        } else {
+                            p.given_name.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .unwrap_or_default();
+
+        let abstract_text = get_field_string(entry, "abstract");
+
+        let entry_metadata = EntryMetadata {
+            entry_id,
+            entry_key: entry_key.clone(),
+            title: Some(title.clone()),
+            creators: if creators_str.is_empty() { None } else { Some(creators_str) },
+            abstract_text,
+            item_type: item_type.to_string(),
+        };
+
+        if let Err(e) = state.search_index.index_entry_metadata(&entry_metadata).await {
+            tracing::warn!("Failed to index entry metadata for {}: {}", entry_key, e);
         }
 
         // Handle keywords field - create tags (if enabled)
@@ -1920,13 +2153,14 @@ pub async fn import_biblatex_with_files(
                     file_title
                 };
 
-                let _ = sqlx::query(
+                let attachment_result = sqlx::query(
                     r#"
                     INSERT INTO attachments (
                         key, entry_id, attachment_type_id, title,
                         file_path, file_hash, file_size, page_count
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
                     "#
                 )
                 .bind(&attachment_key)
@@ -1937,10 +2171,95 @@ pub async fn import_biblatex_with_files(
                 .bind(&file_hash)
                 .bind(file_size)
                 .bind(page_count)
-                .execute(&state.db)
+                .fetch_one(&state.db)
                 .await;
 
-                files_imported += 1;
+                if let Ok(row) = attachment_result {
+                    let attachment_id: i64 = row.get("id");
+
+                    // Index attachment content for full-text search
+                    let attachment_data = AttachmentData {
+                        entry_id,
+                        entry_key: entry_key.clone(),
+                        attachment_id,
+                        title: Some(attachment_title.clone()),
+                        file_path: final_dest_path_str.clone(),
+                        content_source: attachment_type.to_string(),
+                    };
+
+                    // Use default extraction config (Ollama disabled by default)
+                    let config = ExtractionConfig::default();
+
+                    // Get file name for progress reporting
+                    let progress_file_name = final_dest_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    // Determine expected extraction method based on file type
+                    let expected_method = match final_dest_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_lowercase())
+                        .as_deref()
+                    {
+                        Some("pdf") => {
+                            if config.skip_ocr {
+                                "pdf-extract (OCR disabled)"
+                            } else if config.ollama_enabled {
+                                "pdf-extract → ollama → ocr"
+                            } else {
+                                "pdf-extract → ocr"
+                            }
+                        }
+                        Some("md") | Some("txt") | Some("markdown") => "direct",
+                        Some("html") | Some("htm") => "html-parse",
+                        _ => "unknown",
+                    };
+
+                    // Emit progress: extracting
+                    let _ = app_handle.emit(
+                        "import:detail",
+                        ImportDetailProgress {
+                            file_name: progress_file_name.clone(),
+                            step: "extracting".to_string(),
+                            method: Some(expected_method.to_string()),
+                            status: "processing".to_string(),
+                            message: None,
+                        },
+                    );
+
+                    match state.search_index.index_attachment_content(&attachment_data, &config).await {
+                        Ok(result) => {
+                            let _ = app_handle.emit(
+                                "import:detail",
+                                ImportDetailProgress {
+                                    file_name: progress_file_name.clone(),
+                                    step: "indexing".to_string(),
+                                    method: Some(result.method.as_str().to_string()),
+                                    status: if result.indexed { "success" } else { "skipped" }.to_string(),
+                                    message: result.message,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to index attachment content for {}: {}", attachment_key, e);
+                            let _ = app_handle.emit(
+                                "import:detail",
+                                ImportDetailProgress {
+                                    file_name: progress_file_name.clone(),
+                                    step: "indexing".to_string(),
+                                    method: None,
+                                    status: "failed".to_string(),
+                                    message: Some(e.to_string()),
+                                },
+                            );
+                        }
+                    }
+
+                    files_imported += 1;
+                }
             }
         }
 
@@ -1956,6 +2275,11 @@ pub async fn import_biblatex_with_files(
         }
 
         imported += 1;
+    }
+
+    // Commit search index changes
+    if let Err(e) = state.search_index.commit().await {
+        tracing::warn!("Failed to commit search index: {}", e);
     }
 
     tracing::info!(

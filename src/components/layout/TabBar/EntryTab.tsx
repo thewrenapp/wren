@@ -5,6 +5,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { PDFViewer } from "@/components/pdf/PDFViewer";
+import { HTMLViewer } from "@/components/viewer/HTMLViewer";
 import { EntryInfoPanel } from "@/components/layout/RightPane/EntryInfoPanel";
 import { useUIStore } from "@/stores/uiStore";
 import { useLibraryStore } from "@/stores/libraryStore";
@@ -119,28 +120,42 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
   const rightPanePercent = (rightPaneWidth / totalWidth) * 100;
   const bottomPanePercent = (infoPanelHeight / totalHeight) * 100;
 
-  // Render main content (PDF or placeholder)
-  const mainContent = targetAttachment?.attachmentType === "pdf" && targetAttachment.filePath ? (
-    <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} />
-  ) : targetAttachment?.attachmentType === "note" ? (
-    <div className="flex-1 flex items-center justify-center text-muted-foreground">
-      <div className="text-center">
-        <p className="font-medium">{entry.title}</p>
-        <p className="text-sm mt-2">Note Editor - Coming Soon</p>
+  // Render main content based on attachment type
+  const renderMainContent = () => {
+    if (targetAttachment?.attachmentType === "pdf" && targetAttachment.filePath) {
+      return <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} />;
+    }
+
+    if (targetAttachment?.attachmentType === "snapshot" && targetAttachment.filePath) {
+      return <HTMLViewer filePath={targetAttachment.filePath} title={targetAttachment.title} />;
+    }
+
+    if (targetAttachment?.attachmentType === "note") {
+      return (
+        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <div className="text-center">
+            <p className="font-medium">{entry.title}</p>
+            <p className="text-sm mt-2">Note Editor - Coming Soon</p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <div className="text-center">
+          <p className="font-medium">{entry.title}</p>
+          <p className="text-sm mt-2">
+            {entry.attachments?.length === 0
+              ? "No attachments"
+              : "No viewable attachments"}
+          </p>
+        </div>
       </div>
-    </div>
-  ) : (
-    <div className="flex-1 flex items-center justify-center text-muted-foreground">
-      <div className="text-center">
-        <p className="font-medium">{entry.title}</p>
-        <p className="text-sm mt-2">
-          {entry.attachments?.length === 0
-            ? "No attachments"
-            : "No viewable attachments"}
-        </p>
-      </div>
-    </div>
-  );
+    );
+  };
+
+  const mainContent = renderMainContent();
 
   // Stacked layout: vertical split (content on top, info on bottom)
   if (libraryLayout === "stacked") {

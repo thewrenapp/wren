@@ -18,6 +18,15 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useLibrarySync } from "@/hooks/useLibrarySync";
 import { useEffect, useRef, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { toast } from "@/stores/toastStore";
+
+type ImportDetailProgress = {
+  fileName: string;
+  step: string;
+  method: string | null;
+  status: string;
+  message: string | null;
+};
 
 export function AppLayout() {
   const { sidebarWidth, setSidebarWidth, setLibraryLayout, settingsOpen, setSettingsOpen, commandPaletteMode } = useUIStore();
@@ -50,6 +59,33 @@ export function AppLayout() {
       unlistenSettings.then((fn) => fn());
     };
   }, [setLibraryLayout, setSettingsOpen]);
+
+  // Listen for import:detail events to show toast notifications for individual file extractions
+  // This provides feedback when adding attachments to existing entries
+  useEffect(() => {
+    const unlisten = listen<ImportDetailProgress>("import:detail", (event) => {
+      const { fileName, step, method, status, message } = event.payload;
+
+      // Only show toast when indexing completes (not during extraction to avoid spam)
+      if (step === "indexing") {
+        const shortName = fileName.length > 40 ? fileName.slice(0, 37) + "..." : fileName;
+
+        if (status === "success") {
+          const methodInfo = method ? ` (${method})` : "";
+          toast.success(`Indexed: ${shortName}${methodInfo}`);
+        } else if (status === "failed") {
+          const errorInfo = message ? `: ${message}` : "";
+          toast.error(`Failed to index: ${shortName}${errorInfo}`);
+        } else if (status === "skipped" && message) {
+          toast.info(`Skipped: ${shortName} - ${message}`);
+        }
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   const totalWidth = typeof window !== "undefined" ? window.innerWidth : 1400;
   const sidebarPercent = (sidebarWidth / totalWidth) * 100;
@@ -140,9 +176,11 @@ export function AppLayout() {
         openMode={
           commandPaletteMode === 'advanced'
             ? 'advanced'
-            : commandPaletteMode === 'ai'
-              ? 'ai'
-              : undefined
+            : commandPaletteMode === 'full'
+              ? 'full'
+              : commandPaletteMode === 'ai'
+                ? 'ai'
+                : undefined
         }
       />
 

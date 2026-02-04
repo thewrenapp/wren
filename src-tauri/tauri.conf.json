@@ -45,6 +45,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "resources/*": "./"
+    },
     "macOS": {
       "minimumSystemVersion": "14.0"
     }

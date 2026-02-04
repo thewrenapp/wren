@@ -6,5 +6,6 @@ pub mod export;
 pub mod import;
 pub mod saved_searches;
 pub mod schema;
+pub mod search;
 pub mod settings;
 pub mod tags;

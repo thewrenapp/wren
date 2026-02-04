@@ -68,7 +68,7 @@ interface UIState {
 
   // Command palette
   commandPaletteOpen: boolean;
-  commandPaletteMode: 'default' | 'advanced' | 'ai';
+  commandPaletteMode: 'default' | 'full' | 'advanced' | 'ai';
 
   // Settings dialog
   settingsOpen: boolean;

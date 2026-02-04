@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod filename;
 pub mod pdf;
+pub mod search;
 pub mod state;
 
 use state::AppState;
@@ -243,6 +244,11 @@ pub fn run() {
             commands::saved_searches::update_saved_search,
             commands::saved_searches::delete_saved_search,
             commands::saved_searches::reorder_saved_searches,
+            // Full-text Search
+            commands::search::full_text_search,
+            commands::search::reindex_entry,
+            commands::search::reindex_library,
+            commands::search::check_ollama_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

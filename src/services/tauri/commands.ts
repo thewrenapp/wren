@@ -835,3 +835,64 @@ export async function deleteSavedSearch(id: number): Promise<void> {
 export async function reorderSavedSearches(ids: number[]): Promise<void> {
   return invoke('reorder_saved_searches', { ids });
 }
+
+// =====================================================
+// Full-Text Search Commands
+// =====================================================
+
+export interface FullSearchResult {
+  entryId: number;
+  entryKey: string;
+  attachmentId: number | null;
+  title: string | null;
+  snippet: string | null;
+  contentSource: string;
+  score: number;
+}
+
+export async function fullTextSearch(
+  query: string,
+  limit?: number,
+  offset?: number,
+): Promise<FullSearchResult[]> {
+  return invoke('full_text_search', {
+    query,
+    limit: limit ?? null,
+    offset: offset ?? null,
+  });
+}
+
+export interface ExtractionConfig {
+  skipOcr?: boolean;
+  ollamaEnabled?: boolean;
+  ollamaEndpoint?: string;
+  ollamaModel?: string;
+}
+
+export async function reindexEntry(entryId: number, config?: ExtractionConfig): Promise<void> {
+  return invoke('reindex_entry', {
+    entryId,
+    skipOcr: config?.skipOcr ?? null,
+    ollamaEnabled: config?.ollamaEnabled ?? null,
+    ollamaEndpoint: config?.ollamaEndpoint ?? null,
+    ollamaModel: config?.ollamaModel ?? null,
+  });
+}
+
+export async function reindexLibrary(config?: ExtractionConfig): Promise<void> {
+  return invoke('reindex_library', {
+    skipOcr: config?.skipOcr ?? null,
+    ollamaEnabled: config?.ollamaEnabled ?? null,
+    ollamaEndpoint: config?.ollamaEndpoint ?? null,
+    ollamaModel: config?.ollamaModel ?? null,
+  });
+}
+
+export interface OllamaStatus {
+  connected: boolean;
+  models: string[];
+}
+
+export async function checkOllamaStatus(endpoint: string): Promise<OllamaStatus> {
+  return invoke('check_ollama_status', { endpoint });
+}

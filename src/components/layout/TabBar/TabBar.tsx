@@ -23,7 +23,7 @@ export function TabBar() {
   }
 
   return (
-    <div className="flex items-center h-10 px-2 gap-1 overflow-x-auto">
+    <div className="flex items-center h-10 px-2 gap-1 overflow-hidden">
       {tabs.map((tab) => {
         const isActive = tab.id === activeTabId;
 
@@ -33,6 +33,7 @@ export function TabBar() {
             onClick={() => setActiveTab(tab.id)}
             className={cn(
               "group relative flex items-center gap-2 h-8 px-3 rounded-md cursor-pointer transition-colors",
+              "flex-shrink min-w-0 max-w-[200px]",
               isActive
                 ? "bg-accent text-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
@@ -40,13 +41,14 @@ export function TabBar() {
           >
             {/* Icon */}
             <span className={cn(
+              "flex-shrink-0",
               isActive ? "text-primary" : "text-muted-foreground"
             )}>
               {tabIcons[tab.type]}
             </span>
 
             {/* Title */}
-            <span className="text-sm max-w-[150px] truncate">
+            <span className="text-sm truncate min-w-0">
               {tab.title}
             </span>
 
@@ -58,7 +60,7 @@ export function TabBar() {
                   closeTab(tab.id);
                 }}
                 className={cn(
-                  "p-0.5 rounded hover:bg-muted transition-opacity ml-1",
+                  "flex-shrink-0 p-0.5 rounded hover:bg-muted transition-opacity ml-1",
                   "opacity-0 group-hover:opacity-100",
                   isActive && "opacity-60 hover:opacity-100"
                 )}

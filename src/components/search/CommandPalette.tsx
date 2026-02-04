@@ -43,6 +43,7 @@ import {
   GitMerge,
   Loader2,
   BookOpen,
+  FileSearch,
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
@@ -86,10 +87,12 @@ import {
   deleteAttachment,
   importAnnotationsFromPdf,
   getEntryAttachments,
+  fullTextSearch,
   type ExportOptions,
   type BiblatexPreviewResult,
   type Attachment,
   type EntrySummary,
+  type FullSearchResult,
 } from "@/services/tauri";
 import { useSchemaStore } from "@/stores/schemaStore";
 import { ExportOptionsDialog } from "@/components/dialogs/ExportOptionsDialog";
@@ -103,11 +106,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-type SearchMode = "quick" | "semantic";
+type SearchMode = "quick" | "full" | "semantic";
 type QuickSearchScope = "title_creator_year" | "fields_tags";
 
 const searchModeConfig = {
   quick: { icon: Zap, label: "Quick", description: "Title search", hasScope: true },
+  full: { icon: FileSearch, label: "Full", description: "Content search" },
   semantic: { icon: Sparkles, label: "AI", description: "Semantic" },
 };
 
@@ -124,7 +128,7 @@ function ShortcutBadge({ keys }: { keys: string[] }) {
   );
 }
 
-export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = {}) {
+export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | "ai" } = {}) {
   const {
     commandPaletteOpen,
     setCommandPaletteOpen,
@@ -202,6 +206,7 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
   const [isImporting, setIsImporting] = useState(false);
 
   const [searchResults, setSearchResults] = useState<EntrySummary[]>([]);
+  const [fullSearchResults, setFullSearchResults] = useState<FullSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchOffset, setSearchOffset] = useState(0);
@@ -216,6 +221,7 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
     }
     if (!search.trim()) {
       setSearchResults([]);
+      setFullSearchResults([]);
       setIsSearching(false);
       setSearchTotal(0);
       setSearchOffset(0);
@@ -226,19 +232,31 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
     setIsSearching(true);
     searchTimeoutRef.current = window.setTimeout(async () => {
       try {
-        const result = await getEntriesPaged({
-          searchQuery: search.trim(),
-          searchScope: quickScope,
-          limit: 20,
-          offset: 0,
-        });
-        setSearchResults(result.entries);
-        setSearchTotal(result.total);
-        setSearchOffset(result.entries.length);
-        setHasMoreResults(result.entries.length < result.total);
+        if (searchMode === "full") {
+          // Full text search (searches inside PDF content, notes, etc.)
+          const results = await fullTextSearch(search.trim(), 50, 0);
+          setFullSearchResults(results);
+          setSearchResults([]);
+          setSearchTotal(results.length);
+          setHasMoreResults(false);
+        } else {
+          // Quick search (metadata only)
+          const result = await getEntriesPaged({
+            searchQuery: search.trim(),
+            searchScope: quickScope,
+            limit: 20,
+            offset: 0,
+          });
+          setSearchResults(result.entries);
+          setFullSearchResults([]);
+          setSearchTotal(result.total);
+          setSearchOffset(result.entries.length);
+          setHasMoreResults(result.entries.length < result.total);
+        }
       } catch (err) {
         console.error("Search error:", err);
         setSearchResults([]);
+        setFullSearchResults([]);
         setSearchTotal(0);
         setSearchOffset(0);
         setHasMoreResults(false);
@@ -256,13 +274,14 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
       setCommandPaletteOpen(false);
       return;
     }
-    if (openMode === "ai") {
+    // Only set mode if explicitly requested via openMode prop
+    // Otherwise preserve the previous mode and search state
+    if (openMode === "full") {
+      setSearchMode("full");
+    } else if (openMode === "ai") {
       setSearchMode("semantic");
-    } else {
-      // Always reset to quick mode with first scope option when opening
-      setSearchMode("quick");
-      setQuickScope("title_creator_year");
     }
+    // No else clause - preserve existing mode when reopening
   }, [commandPaletteOpen, openMode, setAdvancedSearchOpen, setCommandPaletteOpen]);
 
   useEffect(() => {
@@ -1976,7 +1995,7 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
             {/* Search mode toggle */}
             <div className="flex items-center gap-2 shrink-0">
               <div className="flex gap-1 bg-muted/50 rounded-lg p-1">
-                {(["quick", "semantic"] as const).map((mode) => {
+                {(["quick", "full", "semantic"] as const).map((mode) => {
                   const config = searchModeConfig[mode];
                   const Icon = config.icon;
                   const isActive = searchMode === mode;
@@ -2127,6 +2146,58 @@ export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = 
                     )}
                   </div>
                 )}
+              </Command.Group>
+            )}
+
+            {/* Full search results (content search) */}
+            {fullSearchResults.length > 0 && (
+              <Command.Group>
+                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                  Content Matches ({fullSearchResults.length})
+                </div>
+                {fullSearchResults.map((result, idx) => (
+                  <Command.Item
+                    key={`${result.entryId}-${result.attachmentId ?? 'meta'}-${idx}`}
+                    value={`${result.title} ${result.snippet}`}
+                    onSelect={() =>
+                      handleSelect(() =>
+                        openTab({
+                          type: "entry",
+                          title: result.title || "Untitled",
+                          entryId: String(result.entryId),
+                          // Pass attachmentId to open the specific attachment where match was found
+                          attachmentId: result.attachmentId ? String(result.attachmentId) : undefined,
+                        })
+                      )
+                    }
+                    className="flex items-start gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className={cn(
+                      "flex items-center justify-center h-8 w-8 rounded-lg mt-0.5",
+                      result.contentSource === "pdf" ? "bg-red-500/10" : "bg-primary/10"
+                    )}>
+                      {result.contentSource === "pdf" ? (
+                        <File className="h-4 w-4 text-red-500" />
+                      ) : result.contentSource === "note" ? (
+                        <StickyNote className="h-4 w-4 text-primary" />
+                      ) : (
+                        <FileText className="h-4 w-4 text-primary" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="block text-sm font-medium truncate">{result.title || "Untitled"}</span>
+                      {result.snippet && (
+                        <p
+                          className="text-xs text-muted-foreground line-clamp-2 mt-0.5"
+                          dangerouslySetInnerHTML={{ __html: result.snippet }}
+                        />
+                      )}
+                      <span className="text-xs text-muted-foreground/60 mt-0.5">
+                        {result.contentSource} · score: {result.score.toFixed(2)}
+                      </span>
+                    </div>
+                  </Command.Item>
+                ))}
               </Command.Group>
             )}
 

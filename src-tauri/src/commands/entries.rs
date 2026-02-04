@@ -2,6 +2,8 @@ use crate::db::models::{
     Attachment, CreateAttachmentInput, CreateEntryInput, Creator, CreatorInput, Entry,
     EntrySummary, SavedSearch, SavedSearchCriterion, Tag, UpdateEntryInput,
 };
+use crate::search::extractor::ExtractionConfig;
+use crate::search::indexer::{AttachmentData, EntryMetadata};
 use crate::state::AppState;
 use sqlx::{FromRow, Row, Sqlite, SqlitePool, QueryBuilder};
 use std::collections::HashMap;
@@ -2068,6 +2070,14 @@ pub async fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), Str
         .await
         .map_err(|e| e.to_string())?;
 
+    // Remove from search index
+    if let Err(e) = state.search_index.delete_entry(id).await {
+        tracing::warn!("Failed to delete entry from search index: {}", e);
+    }
+    if let Err(e) = state.search_index.commit().await {
+        tracing::warn!("Failed to commit search index: {}", e);
+    }
+
     Ok(())
 }
 
@@ -2165,6 +2175,100 @@ pub async fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), St
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Re-index entry metadata
+    #[derive(FromRow)]
+    struct EntryRow {
+        key: String,
+        title: Option<String>,
+        item_type: String,
+        creators_sort: Option<String>,
+    }
+
+    if let Ok(entry_row) = sqlx::query_as::<_, EntryRow>(
+        r#"
+        SELECT e.key, e.title, it.name as item_type,
+               e.creators_sort
+        FROM entries e
+        JOIN item_types it ON e.item_type_id = it.id
+        WHERE e.id = ?
+        "#
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    {
+        // Get abstract
+        let abstract_text: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT ef.value FROM entry_fields ef
+            JOIN fields f ON ef.field_id = f.id
+            WHERE ef.entry_id = ? AND f.name = 'abstractNote'
+            "#
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+        let entry_metadata = EntryMetadata {
+            entry_id: id,
+            entry_key: entry_row.key.clone(),
+            title: entry_row.title,
+            creators: entry_row.creators_sort,
+            abstract_text,
+            item_type: entry_row.item_type,
+        };
+
+        if let Err(e) = state.search_index.index_entry_metadata(&entry_metadata).await {
+            tracing::warn!("Failed to re-index entry metadata: {}", e);
+        }
+
+        // Re-index attachments
+        #[derive(FromRow)]
+        struct AttachmentRow {
+            id: i64,
+            title: Option<String>,
+            file_path: Option<String>,
+            attachment_type: String,
+        }
+
+        let attachments: Vec<AttachmentRow> = sqlx::query_as(
+            r#"
+            SELECT a.id, a.title, a.file_path, at.name as attachment_type
+            FROM attachments a
+            JOIN attachment_types at ON a.attachment_type_id = at.id
+            WHERE a.entry_id = ?
+            "#
+        )
+        .bind(id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        let config = ExtractionConfig::default();
+        for att in attachments {
+            if let Some(file_path) = att.file_path {
+                let attachment_data = AttachmentData {
+                    entry_id: id,
+                    entry_key: entry_row.key.clone(),
+                    attachment_id: att.id,
+                    title: att.title,
+                    file_path,
+                    content_source: att.attachment_type,
+                };
+
+                if let Err(e) = state.search_index.index_attachment_content(&attachment_data, &config).await {
+                    tracing::warn!("Failed to re-index attachment: {}", e);
+                }
+            }
+        }
+
+        if let Err(e) = state.search_index.commit().await {
+            tracing::warn!("Failed to commit search index: {}", e);
+        }
+    }
 
     Ok(())
 }
@@ -2526,14 +2630,19 @@ pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<()
 #[tauri::command]
 pub async fn add_pdf_attachment(
     state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     entry_id: i64,
     file_path: String,
 ) -> Result<Attachment, String> {
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::path::PathBuf;
+    use tauri::Emitter;
     use crate::filename;
     use crate::commands::settings::is_setting_enabled;
+    use crate::search::extractor::ExtractionConfig;
+    use crate::search::indexer::AttachmentData;
+    use crate::commands::import::ImportDetailProgress;
 
     let source_path = PathBuf::from(&file_path);
     if !source_path.exists() {
@@ -2689,6 +2798,80 @@ pub async fn add_pdf_attachment(
         entry_id,
         dest_path.file_name().unwrap_or_default().to_string_lossy()
     );
+
+    // Index attachment content for full-text search
+    let attachment_data = AttachmentData {
+        entry_id,
+        entry_key: entry_key.clone(),
+        attachment_id,
+        title: Some(title.clone()),
+        file_path: dest_path_str.clone(),
+        content_source: "pdf".to_string(),
+    };
+
+    // Use default extraction config (Ollama disabled by default)
+    let config = ExtractionConfig::default();
+
+    // Get file name for progress reporting
+    let file_name_for_progress = dest_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    // Determine expected extraction method based on config
+    let expected_method = if config.skip_ocr {
+        "pdf-extract (OCR disabled)"
+    } else if config.ollama_enabled {
+        "pdf-extract → ollama → ocr"
+    } else {
+        "pdf-extract → ocr"
+    };
+
+    // Emit progress: extracting
+    let _ = app_handle.emit(
+        "import:detail",
+        ImportDetailProgress {
+            file_name: file_name_for_progress.clone(),
+            step: "extracting".to_string(),
+            method: Some(expected_method.to_string()),
+            status: "processing".to_string(),
+            message: None,
+        },
+    );
+
+    match state.search_index.index_attachment_content(&attachment_data, &config).await {
+        Ok(result) => {
+            let _ = app_handle.emit(
+                "import:detail",
+                ImportDetailProgress {
+                    file_name: file_name_for_progress.clone(),
+                    step: "indexing".to_string(),
+                    method: Some(result.method.as_str().to_string()),
+                    status: if result.indexed { "success" } else { "skipped" }.to_string(),
+                    message: result.message,
+                },
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Failed to index PDF attachment content: {}", e);
+            let _ = app_handle.emit(
+                "import:detail",
+                ImportDetailProgress {
+                    file_name: file_name_for_progress.clone(),
+                    step: "indexing".to_string(),
+                    method: None,
+                    status: "failed".to_string(),
+                    message: Some(e.to_string()),
+                },
+            );
+        }
+    }
+
+    // Commit index changes
+    if let Err(e) = state.search_index.commit().await {
+        tracing::warn!("Failed to commit search index: {}", e);
+    }
 
     get_attachment(state, attachment_id).await
 }
