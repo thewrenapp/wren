@@ -111,6 +111,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
     attachmentCount: entry.attachmentCount,
     hasPdf: entry.attachments?.some(a => a.attachmentType === "pdf") || false,
     hasNote: entry.attachments?.some(a => a.attachmentType === "note") || false,
+    hasWeblink: entry.attachments?.some(a => a.attachmentType === "weblink") || false,
   };
 
   const totalWidth = typeof window !== "undefined" ? window.innerWidth : 1000;

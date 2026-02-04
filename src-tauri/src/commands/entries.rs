@@ -3,10 +3,11 @@ use crate::db::models::{
     EntrySummary, Tag, UpdateEntryInput,
 };
 use crate::state::AppState;
-use sqlx::{FromRow, Row};
+use sqlx::{FromRow, Row, Sqlite, QueryBuilder};
 use std::collections::HashMap;
 use tauri::State;
 use uuid::Uuid;
+use serde::Deserialize;
 
 // =====================================================
 // ROW TYPES (for sqlx queries)
@@ -39,6 +40,7 @@ struct EntrySummaryRow {
     attachment_count: i64,
     has_pdf: bool,
     has_note: bool,
+    has_weblink: bool,
     thumbnail_path: Option<String>,
 }
 
@@ -86,12 +88,422 @@ struct TagRow {
     is_imported: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EntriesPage {
+    pub entries: Vec<EntrySummary>,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EntryCounts {
+    pub total: i64,
+    pub pdf: i64,
+    pub note: i64,
+    pub recent: i64,
+    pub untagged: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvancedCriterion {
+    pub field: String,
+    pub operator: String,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvancedSearch {
+    pub match_mode: String,
+    pub criteria: Vec<AdvancedCriterion>,
+}
+
+fn apply_entry_filters(
+    qb: &mut QueryBuilder<Sqlite>,
+    collection_id: Option<i64>,
+    tag_ids: Option<Vec<i64>>,
+    tag_mode: &str,
+    attachment_type: Option<String>,
+    search_query: Option<String>,
+    search_scope: Option<&str>,
+    advanced_search: Option<&AdvancedSearch>,
+    filter_type: Option<&str>,
+) {
+    if let Some(coll_id) = collection_id {
+        qb.push(" AND e.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+        qb.push_bind(coll_id);
+        qb.push(")");
+    }
+
+    if let Some(t_ids) = tag_ids {
+        if !t_ids.is_empty() {
+            if t_ids.len() == 1 {
+                let only_id = t_ids[0];
+                qb.push(" AND e.id IN (SELECT entry_id FROM entry_tags WHERE tag_id = ");
+                qb.push_bind(only_id);
+                qb.push(")");
+            } else {
+                let count = t_ids.len() as i64;
+                qb.push(" AND e.id IN (SELECT entry_id FROM entry_tags WHERE tag_id IN (");
+                let mut separated = qb.separated(", ");
+                for id in t_ids {
+                    separated.push_bind(id);
+                }
+                qb.push(")");
+                if tag_mode == "and" {
+                    qb.push(" GROUP BY entry_id HAVING COUNT(DISTINCT tag_id) = ");
+                    qb.push_bind(count);
+                }
+                qb.push(")");
+            }
+        }
+    }
+
+    if let Some(att_type) = attachment_type {
+        qb.push(" AND e.id IN (SELECT a.entry_id FROM attachments a JOIN attachment_types at ON a.attachment_type_id = at.id WHERE at.name = ");
+        qb.push_bind(att_type);
+        qb.push(")");
+    }
+
+    if let Some(advanced) = advanced_search {
+        if !advanced.criteria.is_empty() {
+            let joiner = if advanced.match_mode == "any" { " OR " } else { " AND " };
+            qb.push(" AND (");
+            let mut first = true;
+            for criterion in &advanced.criteria {
+                if !first {
+                    qb.push(joiner);
+                }
+                first = false;
+                apply_advanced_criterion(qb, criterion);
+            }
+            qb.push(")");
+        }
+    } else if let Some(search) = search_query {
+        let scope = search_scope.unwrap_or("title_creator_year");
+        let pattern = format!("%{}%", search);
+
+        qb.push(" AND (e.title LIKE ");
+        qb.push_bind(pattern.clone());
+        qb.push(" OR COALESCE(e.creators_sort, '') LIKE ");
+        qb.push_bind(pattern.clone());
+        qb.push(" OR COALESCE(e.date, '') LIKE ");
+        qb.push_bind(pattern.clone());
+        qb.push(
+            " OR EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e.id AND f.name = 'publicationTitle' AND ef.value LIKE ",
+        );
+        qb.push_bind(pattern.clone());
+        qb.push(")");
+
+        if scope == "fields_tags" {
+            qb.push(
+                " OR EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e.id AND f.name != 'abstractNote' AND ef.value LIKE ",
+            );
+            qb.push_bind(pattern.clone());
+            qb.push(")");
+            qb.push(
+                " OR EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e.id AND t.name LIKE ",
+            );
+            qb.push_bind(pattern);
+            qb.push(")");
+        } else if scope == "everything" {
+            qb.push(
+                " OR EXISTS(SELECT 1 FROM entry_fields ef WHERE ef.entry_id = e.id AND ef.value LIKE ",
+            );
+            qb.push_bind(pattern.clone());
+            qb.push(")");
+            qb.push(
+                " OR EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e.id AND t.name LIKE ",
+            );
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+
+        qb.push(")");
+    }
+
+    match filter_type {
+        Some("recent") => {
+            qb.push(" AND e.date_added >= datetime('now', '-7 days')");
+        }
+        Some("untagged") => {
+            qb.push(" AND e.id NOT IN (SELECT entry_id FROM entry_tags)");
+        }
+        _ => {}
+    }
+}
+
+fn apply_advanced_criterion(qb: &mut QueryBuilder<Sqlite>, criterion: &AdvancedCriterion) {
+    let field = criterion.field.as_str();
+    let operator = criterion.operator.as_str();
+    let value = criterion.value.clone().unwrap_or_default();
+    let has_value = !value.is_empty();
+
+    let (op_kind, pattern) = match operator {
+        "contains" => ("like", format!("%{}%", value)),
+        "does_not_contain" => ("not_like", format!("%{}%", value)),
+        "is" => ("eq", value.clone()),
+        "is_not" => ("neq", value.clone()),
+        "begins_with" => ("like", format!("{}%", value)),
+        "ends_with" => ("like", format!("%{}", value)),
+        "is_before" => ("before", value.clone()),
+        "is_after" => ("after", value.clone()),
+        "is_empty" => ("empty", value.clone()),
+        "is_not_empty" => ("not_empty", value.clone()),
+        _ => ("like", format!("%{}%", value)),
+    };
+
+    match field {
+        "title" => apply_text_column(qb, "e.title", op_kind, pattern.clone(), has_value),
+        "creator" => apply_text_column(qb, "COALESCE(e.creators_sort, '')", op_kind, pattern.clone(), has_value),
+        "year" => apply_text_column(qb, "SUBSTR(COALESCE(e.date, ''), 1, 4)", op_kind, pattern.clone(), has_value),
+        "publication_title" => apply_field_match(qb, "publicationTitle", op_kind, pattern.clone(), has_value),
+        "abstract" => apply_field_match(qb, "abstractNote", op_kind, pattern.clone(), has_value),
+        "tags" => apply_tag_match(qb, op_kind, pattern.clone(), has_value),
+        "item_type" => apply_text_column(qb, "it.display_name", op_kind, pattern.clone(), has_value),
+        "date_added" => apply_date_column(qb, "e.date_added", op_kind, pattern.clone(), has_value),
+        "collection" => apply_collection_match(qb, op_kind, &value, has_value),
+        _ => apply_text_column(qb, "e.title", op_kind, pattern, has_value),
+    }
+}
+
+fn apply_text_column(
+    qb: &mut QueryBuilder<Sqlite>,
+    column: &'static str,
+    op_kind: &str,
+    pattern: String,
+    has_value: bool,
+) {
+    match op_kind {
+        "eq" => {
+            qb.push(column);
+            qb.push(" = ");
+            qb.push_bind(pattern);
+        }
+        "neq" => {
+            qb.push(column);
+            qb.push(" != ");
+            qb.push_bind(pattern);
+        }
+        "not_like" => {
+            qb.push(column);
+            qb.push(" NOT LIKE ");
+            qb.push_bind(pattern);
+        }
+        "empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') = ''");
+        }
+        "not_empty" => {
+            qb.push("COALESCE(");
+            qb.push(column);
+            qb.push(", '') != ''");
+        }
+        "before" | "after" => {
+            if has_value {
+                qb.push("DATE(");
+                qb.push(column);
+                qb.push(") ");
+                qb.push(if op_kind == "before" { "<" } else { ">" });
+                qb.push(" DATE(");
+                qb.push_bind(pattern);
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        _ => {
+            qb.push(column);
+            qb.push(" LIKE ");
+            qb.push_bind(pattern);
+        }
+    }
+}
+
+fn apply_field_match(
+    qb: &mut QueryBuilder<Sqlite>,
+    field_name: &'static str,
+    op_kind: &str,
+    pattern: String,
+    has_value: bool,
+) {
+    match op_kind {
+        "empty" => {
+            qb.push("e.id NOT IN (SELECT entry_id FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE f.name = ");
+            qb.push_bind(field_name);
+            qb.push(" AND COALESCE(ef.value, '') != '')");
+        }
+        "not_empty" => {
+            qb.push("e.id IN (SELECT entry_id FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE f.name = ");
+            qb.push_bind(field_name);
+            qb.push(" AND COALESCE(ef.value, '') != '')");
+        }
+        "eq" => {
+            qb.push("e.id IN (SELECT entry_id FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE f.name = ");
+            qb.push_bind(field_name);
+            qb.push(" AND ef.value = ");
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+        "neq" => {
+            qb.push("e.id NOT IN (SELECT entry_id FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE f.name = ");
+            qb.push_bind(field_name);
+            qb.push(" AND ef.value = ");
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+        "not_like" => {
+            qb.push("e.id NOT IN (SELECT entry_id FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE f.name = ");
+            qb.push_bind(field_name);
+            qb.push(" AND ef.value LIKE ");
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+        "before" | "after" => {
+            if has_value {
+                qb.push("e.id IN (SELECT entry_id FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE f.name = ");
+                qb.push_bind(field_name);
+                qb.push(" AND DATE(ef.value) ");
+                qb.push(if op_kind == "before" { "<" } else { ">" });
+                qb.push(" DATE(");
+                qb.push_bind(pattern);
+                qb.push("))");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        _ => {
+            qb.push("e.id IN (SELECT entry_id FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE f.name = ");
+            qb.push_bind(field_name);
+            qb.push(" AND ef.value LIKE ");
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+    }
+}
+
+fn apply_tag_match(
+    qb: &mut QueryBuilder<Sqlite>,
+    op_kind: &str,
+    pattern: String,
+    has_value: bool,
+) {
+    match op_kind {
+        "empty" => {
+            qb.push("e.id NOT IN (SELECT entry_id FROM entry_tags)");
+        }
+        "not_empty" => {
+            qb.push("e.id IN (SELECT entry_id FROM entry_tags)");
+        }
+        "eq" => {
+            qb.push("e.id IN (SELECT entry_id FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE t.name = ");
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+        "neq" => {
+            qb.push("e.id NOT IN (SELECT entry_id FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE t.name = ");
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+        "not_like" => {
+            qb.push("e.id NOT IN (SELECT entry_id FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE t.name LIKE ");
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+        "before" | "after" => {
+            if has_value {
+                qb.push("e.id IN (SELECT entry_id FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE DATE(t.name) ");
+                qb.push(if op_kind == "before" { "<" } else { ">" });
+                qb.push(" DATE(");
+                qb.push_bind(pattern);
+                qb.push("))");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        _ => {
+            qb.push("e.id IN (SELECT entry_id FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE t.name LIKE ");
+            qb.push_bind(pattern);
+            qb.push(")");
+        }
+    }
+}
+
+fn apply_date_column(
+    qb: &mut QueryBuilder<Sqlite>,
+    column: &'static str,
+    op_kind: &str,
+    pattern: String,
+    has_value: bool,
+) {
+    match op_kind {
+        "before" | "after" => {
+            if has_value {
+                qb.push("DATE(");
+                qb.push(column);
+                qb.push(") ");
+                qb.push(if op_kind == "before" { "<" } else { ">" });
+                qb.push(" DATE(");
+                qb.push_bind(pattern);
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        _ => apply_text_column(qb, column, op_kind, pattern, has_value),
+    }
+}
+
+fn apply_collection_match(
+    qb: &mut QueryBuilder<Sqlite>,
+    op_kind: &str,
+    raw_value: &str,
+    has_value: bool,
+) {
+    if !has_value {
+        qb.push("1=1");
+        return;
+    }
+    let id: Option<i64> = raw_value.parse().ok();
+    match op_kind {
+        "eq" => {
+            if let Some(collection_id) = id {
+                qb.push("e.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=0");
+            }
+        }
+        "neq" => {
+            if let Some(collection_id) = id {
+                qb.push("e.id NOT IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=1");
+            }
+        }
+        _ => {
+            if let Some(collection_id) = id {
+                qb.push("e.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
+                qb.push_bind(collection_id);
+                qb.push(")");
+            } else {
+                qb.push("1=0");
+            }
+        }
+    }
+}
+
 // =====================================================
 // GET ENTRIES (List View)
 // =====================================================
 
 /// Get all entries with optional filtering
 #[tauri::command]
+#[allow(non_snake_case)]
 pub async fn get_entries(
     state: State<'_, AppState>,
     collection_id: Option<i64>,
@@ -99,19 +511,39 @@ pub async fn get_entries(
     tag_mode: Option<String>,
     attachment_type: Option<String>,
     search_query: Option<String>,
+    search_scope: Option<String>,
+    advanced_search: Option<AdvancedSearch>,
+    filter_type: Option<String>,
     collectionId: Option<i64>,
     tagIds: Option<Vec<i64>>,
     tagMode: Option<String>,
     attachmentType: Option<String>,
     searchQuery: Option<String>,
+    searchScope: Option<String>,
+    advancedSearch: Option<AdvancedSearch>,
+    filterType: Option<String>,
 ) -> Result<Vec<EntrySummary>, String> {
     let collection_id = collection_id.or(collectionId);
     let tag_ids = tag_ids.or(tagIds);
     let tag_mode = tag_mode.or(tagMode).unwrap_or_else(|| "or".to_string());
     let attachment_type = attachment_type.or(attachmentType);
     let search_query = search_query.or(searchQuery);
+    let search_scope = search_scope.or(searchScope);
+    let advanced_search = advanced_search.or(advancedSearch);
+    let filter_type = filter_type.or(filterType);
 
-    let base_query = r#"
+    let mut effective_attachment_type = attachment_type;
+    let filter_type_str = filter_type.as_deref();
+    if effective_attachment_type.is_none() {
+        if matches!(filter_type_str, Some("pdfs")) {
+            effective_attachment_type = Some("pdf".to_string());
+        } else if matches!(filter_type_str, Some("notes")) {
+            effective_attachment_type = Some("note".to_string());
+        }
+    }
+
+    let mut qb = QueryBuilder::<Sqlite>::new(
+        r#"
         SELECT
             e.id, e.key, it.name as item_type, it.display_name as item_type_display,
             e.title, e.date, e.date_added, e.date_modified,
@@ -122,6 +554,9 @@ pub async fn get_entries(
             EXISTS(SELECT 1 FROM attachments a
                    JOIN attachment_types at ON a.attachment_type_id = at.id
                    WHERE a.entry_id = e.id AND at.name = 'note') as has_note,
+            EXISTS(SELECT 1 FROM attachments a
+                   JOIN attachment_types at ON a.attachment_type_id = at.id
+                   WHERE a.entry_id = e.id AND at.name = 'weblink') as has_weblink,
             (SELECT a.thumbnail_path FROM attachments a
              JOIN attachment_types at ON a.attachment_type_id = at.id
              WHERE a.entry_id = e.id AND at.name = 'pdf'
@@ -129,108 +564,28 @@ pub async fn get_entries(
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.is_deleted = 0
-    "#;
+        "#,
+    );
 
-    let entries: Vec<EntrySummaryRow> = if let Some(coll_id) = collection_id {
-        let query = format!(
-            "{} AND e.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ?) ORDER BY e.date_added DESC",
-            base_query
-        );
-        sqlx::query_as::<_, EntrySummaryRow>(&query)
-            .bind(coll_id)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| e.to_string())?
-    } else if let Some(ref t_ids) = tag_ids {
-        if t_ids.is_empty() {
-            // No tags selected, return all entries
-            let query = format!("{} ORDER BY e.date_added DESC", base_query);
-            sqlx::query_as::<_, EntrySummaryRow>(&query)
-                .fetch_all(&state.db)
-                .await
-                .map_err(|e| e.to_string())?
-        } else if t_ids.len() == 1 {
-            // Single tag - use simple query
-            let query = format!(
-                "{} AND e.id IN (SELECT entry_id FROM entry_tags WHERE tag_id = ?) ORDER BY e.date_added DESC",
-                base_query
-            );
-            sqlx::query_as::<_, EntrySummaryRow>(&query)
-                .bind(t_ids[0])
-                .fetch_all(&state.db)
-                .await
-                .map_err(|e| e.to_string())?
-        } else {
-            // Multiple tags - use AND or OR mode
-            let placeholders: Vec<String> = t_ids.iter().map(|_| "?".to_string()).collect();
-            let in_clause = placeholders.join(", ");
+    apply_entry_filters(
+        &mut qb,
+        collection_id,
+        tag_ids.clone(),
+        &tag_mode,
+        effective_attachment_type.clone(),
+        search_query.clone(),
+        search_scope.as_deref(),
+        advanced_search.as_ref(),
+        filter_type_str,
+    );
 
-            let query = if tag_mode == "and" {
-                // AND mode: entry must have ALL selected tags
-                format!(
-                    "{} AND e.id IN (
-                        SELECT entry_id FROM entry_tags
-                        WHERE tag_id IN ({})
-                        GROUP BY entry_id
-                        HAVING COUNT(DISTINCT tag_id) = ?
-                    ) ORDER BY e.date_added DESC",
-                    base_query, in_clause
-                )
-            } else {
-                // OR mode: entry must have ANY of the selected tags
-                format!(
-                    "{} AND e.id IN (SELECT entry_id FROM entry_tags WHERE tag_id IN ({})) ORDER BY e.date_added DESC",
-                    base_query, in_clause
-                )
-            };
+    qb.push(" ORDER BY e.date_added DESC");
 
-            let mut query_builder = sqlx::query_as::<_, EntrySummaryRow>(&query);
-            for id in t_ids {
-                query_builder = query_builder.bind(id);
-            }
-            if tag_mode == "and" {
-                query_builder = query_builder.bind(t_ids.len() as i64);
-            }
-
-            query_builder
-                .fetch_all(&state.db)
-                .await
-                .map_err(|e| e.to_string())?
-        }
-    } else if let Some(att_type) = attachment_type {
-        let query = format!(
-            "{} AND e.id IN (SELECT a.entry_id FROM attachments a JOIN attachment_types at ON a.attachment_type_id = at.id WHERE at.name = ?) ORDER BY e.date_added DESC",
-            base_query
-        );
-        sqlx::query_as::<_, EntrySummaryRow>(&query)
-            .bind(att_type)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| e.to_string())?
-    } else if let Some(search) = search_query {
-        // Search in title and abstractNote field
-        let query = format!(
-            "{} AND (e.title LIKE ? OR e.id IN (
-                SELECT ef.entry_id FROM entry_fields ef
-                JOIN fields f ON ef.field_id = f.id
-                WHERE f.name = 'abstractNote' AND ef.value LIKE ?
-            )) ORDER BY e.date_added DESC",
-            base_query
-        );
-        let search_pattern = format!("%{}%", search);
-        sqlx::query_as::<_, EntrySummaryRow>(&query)
-            .bind(&search_pattern)
-            .bind(&search_pattern)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| e.to_string())?
-    } else {
-        let query = format!("{} ORDER BY e.date_added DESC", base_query);
-        sqlx::query_as::<_, EntrySummaryRow>(&query)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| e.to_string())?
-    };
+    let entries: Vec<EntrySummaryRow> = qb
+        .build_query_as()
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Collect all entry IDs for batch queries
     let entry_ids: Vec<i64> = entries.iter().map(|e| e.id).collect();
@@ -269,11 +624,270 @@ pub async fn get_entries(
             attachment_count: entry.attachment_count,
             has_pdf: entry.has_pdf,
             has_note: entry.has_note,
+            has_weblink: entry.has_weblink,
             thumbnail_path: entry.thumbnail_path,
         });
     }
 
     Ok(result)
+}
+
+/// Get entries with pagination (lazy loading)
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn get_entries_paged(
+    state: State<'_, AppState>,
+    collection_id: Option<i64>,
+    tag_ids: Option<Vec<i64>>,
+    tag_mode: Option<String>,
+    attachment_type: Option<String>,
+    search_query: Option<String>,
+    search_scope: Option<String>,
+    advanced_search: Option<AdvancedSearch>,
+    filter_type: Option<String>,
+    sort_field: Option<String>,
+    sort_direction: Option<String>,
+    secondary_sort_field: Option<String>,
+    secondary_sort_direction: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    collectionId: Option<i64>,
+    tagIds: Option<Vec<i64>>,
+    tagMode: Option<String>,
+    attachmentType: Option<String>,
+    searchQuery: Option<String>,
+    searchScope: Option<String>,
+    advancedSearch: Option<AdvancedSearch>,
+    filterType: Option<String>,
+    sortField: Option<String>,
+    sortDirection: Option<String>,
+    secondarySortField: Option<String>,
+    secondarySortDirection: Option<String>,
+    limitValue: Option<i64>,
+    offsetValue: Option<i64>,
+) -> Result<EntriesPage, String> {
+    let collection_id = collection_id.or(collectionId);
+    let tag_ids = tag_ids.or(tagIds);
+    let tag_mode = tag_mode.or(tagMode).unwrap_or_else(|| "or".to_string());
+    let attachment_type = attachment_type.or(attachmentType);
+    let search_query = search_query.or(searchQuery);
+    let search_scope = search_scope.or(searchScope);
+    let advanced_search = advanced_search.or(advancedSearch);
+    let filter_type = filter_type.or(filterType);
+    let sort_field = sort_field.or(sortField).unwrap_or_else(|| "dateAdded".to_string());
+    let sort_direction = sort_direction.or(sortDirection).unwrap_or_else(|| "desc".to_string());
+    let secondary_sort_field = secondary_sort_field.or(secondarySortField);
+    let secondary_sort_direction = secondary_sort_direction.or(secondarySortDirection).unwrap_or_else(|| "asc".to_string());
+    let limit = limit.or(limitValue).unwrap_or(20);
+    let offset = offset.or(offsetValue).unwrap_or(0);
+
+    let mut effective_attachment_type = attachment_type;
+    let filter_type_str = filter_type.as_deref();
+    if effective_attachment_type.is_none() {
+        if matches!(filter_type_str, Some("pdfs")) {
+            effective_attachment_type = Some("pdf".to_string());
+        } else if matches!(filter_type_str, Some("notes")) {
+            effective_attachment_type = Some("note".to_string());
+        }
+    }
+
+    let mut count_qb = QueryBuilder::<Sqlite>::new(
+        "SELECT COUNT(*) FROM entries e WHERE e.is_deleted = 0",
+    );
+    apply_entry_filters(
+        &mut count_qb,
+        collection_id,
+        tag_ids.clone(),
+        &tag_mode,
+        effective_attachment_type.clone(),
+        search_query.clone(),
+        search_scope.as_deref(),
+        advanced_search.as_ref(),
+        filter_type_str,
+    );
+
+    let total: i64 = count_qb
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut qb = QueryBuilder::<Sqlite>::new(
+        r#"
+        SELECT
+            e.id, e.key, it.name as item_type, it.display_name as item_type_display,
+            e.title, e.date, e.date_added, e.date_modified,
+            (SELECT COUNT(*) FROM attachments WHERE entry_id = e.id) as attachment_count,
+            EXISTS(SELECT 1 FROM attachments a
+                   JOIN attachment_types at ON a.attachment_type_id = at.id
+                   WHERE a.entry_id = e.id AND at.name = 'pdf') as has_pdf,
+            EXISTS(SELECT 1 FROM attachments a
+                   JOIN attachment_types at ON a.attachment_type_id = at.id
+                   WHERE a.entry_id = e.id AND at.name = 'note') as has_note,
+            EXISTS(SELECT 1 FROM attachments a
+                   JOIN attachment_types at ON a.attachment_type_id = at.id
+                   WHERE a.entry_id = e.id AND at.name = 'weblink') as has_weblink,
+            (SELECT a.thumbnail_path FROM attachments a
+             JOIN attachment_types at ON a.attachment_type_id = at.id
+             WHERE a.entry_id = e.id AND at.name = 'pdf'
+             LIMIT 1) as thumbnail_path
+        FROM entries e
+        JOIN item_types it ON e.item_type_id = it.id
+        WHERE e.is_deleted = 0
+        "#,
+    );
+
+    apply_entry_filters(
+        &mut qb,
+        collection_id,
+        tag_ids.clone(),
+        &tag_mode,
+        effective_attachment_type.clone(),
+        search_query.clone(),
+        search_scope.as_deref(),
+        advanced_search.as_ref(),
+        filter_type_str,
+    );
+
+    let sort_dir = if sort_direction.to_lowercase() == "asc" { "ASC" } else { "DESC" };
+    let secondary_dir = if secondary_sort_direction.to_lowercase() == "desc" { "DESC" } else { "ASC" };
+
+    let primary_sort = match sort_field.as_str() {
+        "title" => "LOWER(e.title)",
+        "creator" => "LOWER(COALESCE(e.creators_sort, ''))",
+        "year" => "SUBSTR(COALESCE(e.date, ''), 1, 4)",
+        "dateModified" => "e.date_modified",
+        "itemType" => "it.display_name",
+        "dateAdded" | _ => "e.date_added",
+    };
+
+    qb.push(" ORDER BY ");
+    qb.push(primary_sort);
+    qb.push(" ");
+    qb.push(sort_dir);
+
+    if let Some(secondary) = secondary_sort_field {
+        let secondary_sort = match secondary.as_str() {
+            "title" => "LOWER(e.title)",
+            "creator" => "LOWER(COALESCE(e.creators_sort, ''))",
+            "year" => "SUBSTR(COALESCE(e.date, ''), 1, 4)",
+            "dateModified" => "e.date_modified",
+            "itemType" => "it.display_name",
+            "dateAdded" | _ => "e.date_added",
+        };
+        qb.push(", ");
+        qb.push(secondary_sort);
+        qb.push(" ");
+        qb.push(secondary_dir);
+    }
+
+    qb.push(" LIMIT ");
+    qb.push_bind(limit);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+
+    let entries: Vec<EntrySummaryRow> = qb
+        .build_query_as()
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let entry_ids: Vec<i64> = entries.iter().map(|e| e.id).collect();
+
+    if entry_ids.is_empty() {
+        return Ok(EntriesPage { entries: Vec::new(), total });
+    }
+
+    let tags_map = batch_get_entry_tags(&state, &entry_ids).await?;
+    let creators_map = batch_get_entry_creators(&state, &entry_ids).await?;
+
+    let mut result = Vec::new();
+    for entry in entries {
+        let tags = tags_map.get(&entry.id).cloned().unwrap_or_default();
+        let creators = creators_map.get(&entry.id).cloned().unwrap_or_default();
+        let creators_display = format_creators_display(&creators);
+        let year = entry
+            .date
+            .as_ref()
+            .map(|d| d.split('-').next().unwrap_or(d).to_string());
+
+        result.push(EntrySummary {
+            id: entry.id,
+            key: entry.key,
+            item_type: entry.item_type,
+            item_type_display: entry.item_type_display,
+            title: entry.title,
+            creators_display,
+            year,
+            date_added: entry.date_added,
+            date_modified: entry.date_modified,
+            tags,
+            attachment_count: entry.attachment_count,
+            has_pdf: entry.has_pdf,
+            has_note: entry.has_note,
+            has_weblink: entry.has_weblink,
+            thumbnail_path: entry.thumbnail_path,
+        });
+    }
+
+    Ok(EntriesPage { entries: result, total })
+}
+
+/// Get counts for top-level filters (All, PDFs, Notes, Recent, Untagged)
+#[tauri::command]
+pub async fn get_entry_counts(state: State<'_, AppState>) -> Result<EntryCounts, String> {
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM entries e WHERE e.is_deleted = 0"
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let pdf: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM entries e
+        WHERE e.is_deleted = 0
+          AND EXISTS (
+            SELECT 1 FROM attachments a
+            JOIN attachment_types at ON a.attachment_type_id = at.id
+            WHERE a.entry_id = e.id AND at.name = 'pdf'
+          )
+        "#
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let note: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM entries e
+        WHERE e.is_deleted = 0
+          AND EXISTS (
+            SELECT 1 FROM attachments a
+            JOIN attachment_types at ON a.attachment_type_id = at.id
+            WHERE a.entry_id = e.id AND at.name = 'note'
+          )
+        "#
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let recent: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM entries e WHERE e.is_deleted = 0 AND e.date_added >= datetime('now', '-7 days')"
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let untagged: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM entries e WHERE e.is_deleted = 0 AND NOT EXISTS (SELECT 1 FROM entry_tags et WHERE et.entry_id = e.id)"
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(EntryCounts { total, pdf, note, recent, untagged })
 }
 
 // =====================================================
@@ -411,6 +1025,13 @@ pub async fn create_entry(
     // Commit transaction
     tx.commit().await.map_err(|e| e.to_string())?;
 
+    if let Err(e) = refresh_entry_creators_sort(&state.db, entry_id).await {
+        tracing::warn!("Failed to refresh creators_sort for entry {}: {}", entry_id, e);
+    }
+    if let Err(e) = refresh_entry_fts(&state.db, entry_id).await {
+        tracing::warn!("Failed to refresh entries_fts for entry {}: {}", entry_id, e);
+    }
+
     get_entry(state, entry_id, None).await
 }
 
@@ -530,7 +1151,248 @@ pub async fn update_entry(
     // Commit transaction
     tx.commit().await.map_err(|e| e.to_string())?;
 
+    if input.creators.is_some() {
+        if let Err(e) = refresh_entry_creators_sort(&state.db, id).await {
+            tracing::warn!("Failed to refresh creators_sort for entry {}: {}", id, e);
+        }
+    }
+    if input.title.is_some() || input.fields.is_some() {
+        if let Err(e) = refresh_entry_fts(&state.db, id).await {
+            tracing::warn!("Failed to refresh entries_fts for entry {}: {}", id, e);
+        }
+    }
+
+    // Sync attachment filenames if relevant fields changed and auto-rename is enabled
+    // Run synchronously so the updated attachment data is included in the response
+    let renamed_files = input.title.is_some() || input.date.is_some() || input.creators.is_some();
+    if renamed_files {
+        if let Err(e) = sync_entry_attachment_filenames(&state.db, &state.library_path, id).await {
+            tracing::warn!("Failed to sync attachment filenames for entry {}: {}", id, e);
+        }
+    }
+
     get_entry(state, id, None).await
+}
+
+/// Sync attachment filenames with entry metadata (Zotero 8-style behavior)
+async fn sync_entry_attachment_filenames(
+    db: &sqlx::SqlitePool,
+    library_path: &tokio::sync::RwLock<std::path::PathBuf>,
+    entry_id: i64,
+) -> Result<(), String> {
+    use crate::filename;
+    use crate::commands::settings::is_setting_enabled;
+
+    // Check if auto-rename is enabled
+    if !is_setting_enabled(db, "auto_rename_files").await {
+        return Ok(());
+    }
+
+    // Get library path
+    let lib_path = library_path.read().await;
+
+    // Fetch entry metadata
+    let entry_row = sqlx::query(
+        "SELECT title, date FROM entries WHERE id = ?"
+    )
+    .bind(entry_id)
+    .fetch_one(db)
+    .await
+    .map_err(|e| format!("Failed to fetch entry: {}", e))?;
+
+    let entry_title: String = entry_row.get("title");
+    let entry_date: Option<String> = entry_row.get("date");
+
+    // Fetch creators
+    let creator_rows = sqlx::query(
+        r#"
+        SELECT ec.first_name, ec.last_name, ec.name, ct.name as creator_type, ec.sort_order
+        FROM entry_creators ec
+        JOIN creator_types ct ON ec.creator_type_id = ct.id
+        WHERE ec.entry_id = ?
+        ORDER BY ec.sort_order
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| format!("Failed to fetch creators: {}", e))?;
+
+    let creators: Vec<crate::db::models::Creator> = creator_rows
+        .iter()
+        .map(|row| crate::db::models::Creator {
+            id: None,
+            creator_type: row.get("creator_type"),
+            creator_type_display: None,
+            first_name: row.get("first_name"),
+            last_name: row.get("last_name"),
+            name: row.get("name"),
+            sort_order: row.get("sort_order"),
+        })
+        .collect();
+
+    // Extract year from date
+    let year = entry_date
+        .as_ref()
+        .and_then(|d| filename::extract_year(d));
+
+    // Fetch file attachments for this entry
+    let attachments = sqlx::query(
+        r#"
+        SELECT a.id, a.file_path
+        FROM attachments a
+        WHERE a.entry_id = ? AND a.file_path IS NOT NULL
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| format!("Failed to fetch attachments: {}", e))?;
+
+    for attachment_row in attachments {
+        let attachment_id: i64 = attachment_row.get("id");
+        let file_path_str: String = attachment_row.get("file_path");
+        let mut file_path = std::path::PathBuf::from(&file_path_str);
+
+        // Only rename files inside the library directory
+        if !filename::is_in_library(&file_path, &lib_path) {
+            tracing::debug!("Skipping file outside library: {}", file_path_str);
+            continue;
+        }
+
+        // If file doesn't exist at expected path, try to find it in the same directory
+        if !file_path.exists() {
+            if let Some(dir) = file_path.parent() {
+                let expected_ext = file_path
+                    .extension()
+                    .map(|ext| ext.to_string_lossy().to_lowercase());
+                // Try to find a matching file in the same directory
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    let candidates: Vec<_> = entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| {
+                            if let Some(ref ext) = expected_ext {
+                                e.path().extension()
+                                    .map(|entry_ext| entry_ext.to_string_lossy().to_lowercase() == *ext)
+                                    .unwrap_or(false)
+                            } else {
+                                true
+                            }
+                        })
+                        .collect();
+
+                    if candidates.len() == 1 {
+                        // Found exactly one candidate - use it and update DB
+                        let found_path = candidates[0].path();
+                        tracing::info!(
+                            "File not found at {}, but found {} - updating DB",
+                            file_path_str,
+                            found_path.display()
+                        );
+                        file_path = found_path.clone();
+
+                        // Update the database with the correct path
+                        let correct_path_str = found_path.to_string_lossy().to_string();
+                        let _ = sqlx::query(
+                            "UPDATE attachments SET file_path = ?, date_modified = datetime('now') WHERE id = ?"
+                        )
+                        .bind(&correct_path_str)
+                        .bind(attachment_id)
+                        .execute(db)
+                        .await;
+                    } else {
+                        tracing::warn!(
+                            "Cannot sync filename for attachment {}: file not found at {} (found {} candidates in dir)",
+                            attachment_id,
+                            file_path_str,
+                            candidates.len()
+                        );
+                        continue;
+                    }
+                } else {
+                    tracing::warn!(
+                        "Cannot sync filename for attachment {}: file not found at {}",
+                        attachment_id,
+                        file_path_str
+                    );
+                    continue;
+                }
+            } else {
+                tracing::warn!(
+                    "Cannot sync filename for attachment {}: file not found at {}",
+                    attachment_id,
+                    file_path_str
+                );
+                continue;
+            }
+        }
+
+        // Get extension
+        let extension = file_path
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_else(|| "bin".to_string());
+
+        // Generate new filename
+        let generated = filename::generate_filename(
+            &entry_title,
+            &creators,
+            year.as_deref(),
+            &extension,
+        );
+
+        if generated.is_empty() {
+            continue;
+        }
+
+        // Check if filename needs to change
+        let current_filename = file_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if generated == current_filename {
+            continue;
+        }
+
+        // Get the directory
+        let dir = file_path.parent().unwrap_or(&file_path);
+
+        // Resolve any conflicts
+        let new_path = filename::resolve_conflict(dir, &generated);
+
+        // Rename the file
+        match std::fs::rename(&file_path, &new_path) {
+            Ok(_) => {
+                // Update database with new path
+                let new_path_str = new_path.to_string_lossy().to_string();
+                let new_title = new_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| entry_title.clone());
+
+                let _ = sqlx::query(
+                    "UPDATE attachments SET file_path = ?, title = ?, date_modified = datetime('now') WHERE id = ?"
+                )
+                .bind(&new_path_str)
+                .bind(&new_title)
+                .bind(attachment_id)
+                .execute(db)
+                .await;
+
+                tracing::info!(
+                    "Synced attachment filename: {} -> {}",
+                    current_filename,
+                    new_path.file_name().unwrap_or_default().to_string_lossy()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to rename attachment file: {}", e);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // =====================================================
@@ -564,6 +1426,9 @@ pub async fn get_trashed_entries(state: State<'_, AppState>) -> Result<Vec<Entry
             EXISTS(SELECT 1 FROM attachments a
                    JOIN attachment_types at ON a.attachment_type_id = at.id
                    WHERE a.entry_id = e.id AND at.name = 'note') as has_note,
+            EXISTS(SELECT 1 FROM attachments a
+                   JOIN attachment_types at ON a.attachment_type_id = at.id
+                   WHERE a.entry_id = e.id AND at.name = 'weblink') as has_weblink,
             (SELECT a.thumbnail_path FROM attachments a
              JOIN attachment_types at ON a.attachment_type_id = at.id
              WHERE a.entry_id = e.id AND at.name = 'pdf'
@@ -613,6 +1478,7 @@ pub async fn get_trashed_entries(state: State<'_, AppState>) -> Result<Vec<Entry
             attachment_count: entry.attachment_count,
             has_pdf: entry.has_pdf,
             has_note: entry.has_note,
+            has_weblink: entry.has_weblink,
             thumbnail_path: entry.thumbnail_path,
         });
     }
@@ -681,10 +1547,10 @@ pub async fn permanent_delete_entry(state: State<'_, AppState>, id: i64) -> Resu
 
     // Delete entry folder
     let library_path = state.library_path.read().await;
-    let pdf_folder = library_path.join("files").join("pdfs").join(&entry_key);
-    if pdf_folder.exists() {
-        if let Err(e) = fs::remove_dir_all(&pdf_folder) {
-            tracing::warn!("Failed to delete folder {:?}: {}", pdf_folder, e);
+    let entry_folder = library_path.join("files").join(&entry_key);
+    if entry_folder.exists() {
+        if let Err(e) = fs::remove_dir_all(&entry_folder) {
+            tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
         }
     }
 
@@ -730,10 +1596,10 @@ pub async fn empty_trash(state: State<'_, AppState>) -> Result<i64, String> {
 
         // Delete entry folder
         let library_path = state.library_path.read().await;
-        let pdf_folder = library_path.join("files").join("pdfs").join(&entry_key);
-        if pdf_folder.exists() {
-            if let Err(e) = fs::remove_dir_all(&pdf_folder) {
-                tracing::warn!("Failed to delete folder {:?}: {}", pdf_folder, e);
+        let entry_folder = library_path.join("files").join(&entry_key);
+        if entry_folder.exists() {
+            if let Err(e) = fs::remove_dir_all(&entry_folder) {
+                tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
             }
         }
     }
@@ -840,6 +1706,94 @@ pub async fn get_attachment(state: State<'_, AppState>, id: i64) -> Result<Attac
     })
 }
 
+/// Repair attachment file paths for an entry by finding actual files in the directory
+#[tauri::command]
+pub async fn repair_entry_attachments(
+    state: State<'_, AppState>,
+    entry_id: i64,
+) -> Result<Vec<String>, String> {
+    let library_path = state.library_path.read().await;
+    let mut repaired = Vec::new();
+
+    // Get entry key for folder path
+    let entry_key: String = sqlx::query_scalar("SELECT key FROM entries WHERE id = ?")
+        .bind(entry_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| format!("Entry not found: {}", e))?;
+
+    // Get all attachments for this entry
+    let attachments = sqlx::query(
+        r#"
+        SELECT a.id, a.file_path, at.name as attachment_type
+        FROM attachments a
+        JOIN attachment_types at ON a.attachment_type_id = at.id
+        WHERE a.entry_id = ? AND a.file_path IS NOT NULL
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| format!("Failed to fetch attachments: {}", e))?;
+
+    for attachment in attachments {
+        let attachment_id: i64 = attachment.get("id");
+        let file_path_str: String = attachment.get("file_path");
+        let file_path = std::path::PathBuf::from(&file_path_str);
+
+        // Skip if file exists
+        if file_path.exists() {
+            continue;
+        }
+
+        // Try to find the file in the expected directory
+        let expected_dir = library_path.join("files").join(&entry_key);
+
+        if expected_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&expected_dir) {
+                let pdfs: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path().extension()
+                            .map(|ext| ext.to_string_lossy().to_lowercase() == "pdf")
+                            .unwrap_or(false)
+                    })
+                    .collect();
+
+                if pdfs.len() == 1 {
+                    let found_path = pdfs[0].path();
+                    let correct_path_str = found_path.to_string_lossy().to_string();
+
+                    // Update the title from the actual filename
+                    let new_title = found_path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "PDF Attachment".to_string());
+
+                    sqlx::query(
+                        "UPDATE attachments SET file_path = ?, title = ?, date_modified = datetime('now') WHERE id = ?"
+                    )
+                    .bind(&correct_path_str)
+                    .bind(&new_title)
+                    .bind(attachment_id)
+                    .execute(&state.db)
+                    .await
+                    .map_err(|e| format!("Failed to update attachment: {}", e))?;
+
+                    repaired.push(format!(
+                        "Repaired attachment {}: {} -> {}",
+                        attachment_id,
+                        file_path_str,
+                        correct_path_str
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(repaired)
+}
+
 /// Create a new attachment for an entry
 #[tauri::command]
 pub async fn create_attachment(
@@ -918,6 +1872,8 @@ pub async fn add_pdf_attachment(
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::path::PathBuf;
+    use crate::filename;
+    use crate::commands::settings::is_setting_enabled;
 
     let source_path = PathBuf::from(&file_path);
     if !source_path.exists() {
@@ -942,17 +1898,91 @@ pub async fn add_pdf_attachment(
     // Create destination path
     let dest_dir = {
         let library_path = state.library_path.read().await;
-        library_path.join("files").join("pdfs").join(&entry_key)
+        library_path.join("files").join(&entry_key)
     };
 
     fs::create_dir_all(&dest_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
 
-    let file_name = source_path
+    // Get original filename
+    let original_file_name = source_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| format!("{}.pdf", Uuid::new_v4()));
 
-    let dest_path = dest_dir.join(&file_name);
+    // Check if auto-rename is enabled
+    let auto_rename = is_setting_enabled(&state.db, "auto_rename_files").await;
+
+    let final_file_name = if auto_rename {
+        // Fetch entry metadata for renaming
+        let entry_row = sqlx::query(
+            "SELECT title, date FROM entries WHERE id = ?"
+        )
+        .bind(entry_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| format!("Failed to fetch entry: {}", e))?;
+
+        let entry_title: String = entry_row.get("title");
+        let entry_date: Option<String> = entry_row.get("date");
+
+        // Fetch creators
+        let creator_rows = sqlx::query(
+            r#"
+            SELECT ec.first_name, ec.last_name, ec.name, ct.name as creator_type, ec.sort_order
+            FROM entry_creators ec
+            JOIN creator_types ct ON ec.creator_type_id = ct.id
+            WHERE ec.entry_id = ?
+            ORDER BY ec.sort_order
+            "#
+        )
+        .bind(entry_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| format!("Failed to fetch creators: {}", e))?;
+
+        let creators: Vec<crate::db::models::Creator> = creator_rows
+            .iter()
+            .map(|row| crate::db::models::Creator {
+                id: None,
+                creator_type: row.get("creator_type"),
+                creator_type_display: None,
+                first_name: row.get("first_name"),
+                last_name: row.get("last_name"),
+                name: row.get("name"),
+                sort_order: row.get("sort_order"),
+            })
+            .collect();
+
+        // Extract year from date
+        let year = entry_date
+            .as_ref()
+            .and_then(|d| filename::extract_year(d));
+
+        // Get file extension
+        let extension = source_path
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_else(|| "pdf".to_string());
+
+        // Generate new filename
+        let generated = filename::generate_filename(
+            &entry_title,
+            &creators,
+            year.as_deref(),
+            &extension,
+        );
+
+        if generated.is_empty() {
+            original_file_name
+        } else {
+            generated
+        }
+    } else {
+        original_file_name
+    };
+
+    // Resolve any filename conflicts
+    let dest_path = filename::resolve_conflict(&dest_dir, &final_file_name);
 
     // Copy file to library
     fs::copy(&source_path, &dest_path).map_err(|e| format!("Failed to copy file: {}", e))?;
@@ -966,8 +1996,8 @@ pub async fn add_pdf_attachment(
             .await
             .map_err(|e| e.to_string())?;
 
-    // Get title from filename (without extension)
-    let title = source_path
+    // Get title from final filename (without extension)
+    let title = dest_path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "PDF Attachment".to_string());
@@ -994,9 +2024,10 @@ pub async fn add_pdf_attachment(
 
     let attachment_id: i64 = result.get("id");
     tracing::info!(
-        "Added PDF attachment {} to entry {}",
+        "Added PDF attachment {} to entry {} (filename: {})",
         attachment_id,
-        entry_id
+        entry_id,
+        dest_path.file_name().unwrap_or_default().to_string_lossy()
     );
 
     get_attachment(state, attachment_id).await
@@ -1172,6 +2203,75 @@ pub async fn show_entry_in_finder(state: State<'_, AppState>, entry_id: i64) -> 
                 .arg(parent)
                 .spawn()
                 .map_err(|e| format!("Failed to open file manager: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Show multiple entries' attachments in Finder/Explorer (batch operation)
+#[tauri::command]
+pub async fn show_entries_in_finder(state: State<'_, AppState>, entry_ids: Vec<i64>) -> Result<(), String> {
+    if entry_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Get file paths for all entries
+    let placeholders: Vec<String> = entry_ids.iter().map(|_| "?".to_string()).collect();
+    let query = format!(
+        "SELECT DISTINCT file_path FROM attachments WHERE entry_id IN ({}) AND file_path IS NOT NULL",
+        placeholders.join(",")
+    );
+
+    let mut query_builder = sqlx::query_scalar::<_, String>(&query);
+    for id in &entry_ids {
+        query_builder = query_builder.bind(id);
+    }
+
+    let file_paths: Vec<String> = query_builder
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if file_paths.is_empty() {
+        return Err("No file attachments found for the selected entries".to_string());
+    }
+
+    // Reveal files in Finder (macOS)
+    #[cfg(target_os = "macos")]
+    {
+        // Use open -R for each file - more reliable than AppleScript
+        // and handles special characters in paths correctly
+        for path in &file_paths {
+            std::process::Command::new("open")
+                .args(["-R", path])
+                .spawn()
+                .map_err(|e| format!("Failed to open Finder: {}", e))?;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows Explorer doesn't easily support selecting multiple files
+        // Fall back to opening the first file
+        if let Some(path) = file_paths.first() {
+            std::process::Command::new("explorer")
+                .args(["/select,", path])
+                .spawn()
+                .map_err(|e| format!("Failed to open Explorer: {}", e))?;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: open the parent directory of the first file
+        if let Some(path) = file_paths.first() {
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                std::process::Command::new("xdg-open")
+                    .arg(parent)
+                    .spawn()
+                    .map_err(|e| format!("Failed to open file manager: {}", e))?;
+            }
         }
     }
 
@@ -1363,7 +2463,7 @@ async fn insert_entry_creators_tx(
 }
 
 /// Format creators for display (e.g., "Wu" or "Wu & Green" or "Wu et al.")
-fn format_creators_display(creators: &[Creator]) -> String {
+pub(crate) fn format_creators_display(creators: &[Creator]) -> String {
     // Find primary creators (usually authors)
     let primary: Vec<&Creator> = creators
         .iter()
@@ -1386,6 +2486,90 @@ fn format_creators_display(creators: &[Creator]) -> String {
         ),
         _ => format!("{} et al.", display_creators[0].short_name()),
     }
+}
+
+pub(crate) async fn refresh_entry_creators_sort(
+    db: &sqlx::SqlitePool,
+    entry_id: i64,
+) -> Result<(), String> {
+    let creator_rows = sqlx::query(
+        r#"
+        SELECT ec.first_name, ec.last_name, ec.name, ct.name as creator_type, ec.sort_order
+        FROM entry_creators ec
+        JOIN creator_types ct ON ec.creator_type_id = ct.id
+        WHERE ec.entry_id = ?
+        ORDER BY ec.sort_order
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| format!("Failed to fetch creators: {}", e))?;
+
+    let creators: Vec<crate::db::models::Creator> = creator_rows
+        .iter()
+        .map(|row| crate::db::models::Creator {
+            id: None,
+            creator_type: row.get("creator_type"),
+            creator_type_display: None,
+            first_name: row.get("first_name"),
+            last_name: row.get("last_name"),
+            name: row.get("name"),
+            sort_order: row.get("sort_order"),
+        })
+        .collect();
+
+    let creators_sort = format_creators_display(&creators);
+
+    sqlx::query("UPDATE entries SET creators_sort = ? WHERE id = ?")
+        .bind(&creators_sort)
+        .bind(entry_id)
+        .execute(db)
+        .await
+        .map_err(|e| format!("Failed to update creators_sort: {}", e))?;
+
+    Ok(())
+}
+
+pub(crate) async fn refresh_entry_fts(
+    db: &sqlx::SqlitePool,
+    entry_id: i64,
+) -> Result<(), String> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            e.title,
+            (
+                SELECT ef.value
+                FROM entry_fields ef
+                JOIN fields f ON ef.field_id = f.id
+                WHERE ef.entry_id = e.id AND f.name = 'abstractNote'
+                LIMIT 1
+            ) AS abstract_note
+        FROM entries e
+        WHERE e.id = ?
+        "#
+    )
+    .bind(entry_id)
+    .fetch_one(db)
+    .await
+    .map_err(|e| format!("Failed to fetch entry for FTS: {}", e))?;
+
+    let title: String = row.get("title");
+    let abstract_note: Option<String> = row.get("abstract_note");
+
+    sqlx::query(
+        "INSERT OR REPLACE INTO entries_fts (rowid, title, abstract_note, entry_id) VALUES (?, ?, ?, ?)"
+    )
+    .bind(entry_id)
+    .bind(&title)
+    .bind(&abstract_note)
+    .bind(entry_id)
+    .execute(db)
+    .await
+    .map_err(|e| format!("Failed to update entries_fts: {}", e))?;
+
+    Ok(())
 }
 
 // =====================================================

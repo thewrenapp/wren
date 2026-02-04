@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Command } from "cmdk";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
@@ -20,19 +20,37 @@ import {
   Download,
   Upload,
   Trash2,
+  ChevronDown,
   FolderPlus,
+  FolderMinus,
   RefreshCw,
   PanelRight,
   Copy,
   CopyPlus,
   Library,
   Settings2,
+  ExternalLink,
+  RotateCcw,
+  Pencil,
+  Minus,
+  LayoutGrid,
+  LayoutList,
+  FilePlus2,
+  FileUp,
+  Clock,
+  Files,
+  StickyNote,
+  CircleSlash,
+  GitMerge,
+  Loader2,
+  X,
 } from "lucide-react";
 import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useImport } from "@/hooks/useLibrarySync";
+import { Input } from "@/components/ui/input";
 import {
   exportToBibtex,
   exportToCslJson,
@@ -42,27 +60,99 @@ import {
   exportAllToBiblatexWithFiles,
   importBiblatexWithFiles,
   previewBiblatexImport,
+  getEntriesPaged,
   deleteEntry,
   duplicateEntry,
   addEntryToCollection,
+  removeEntryFromCollection,
   addEntryTag,
+  removeEntryTag,
   importBibtex,
   importCslJson,
+  showEntryInFinder,
+  showEntriesInFinder,
+  emptyTrash,
+  restoreEntry,
+  permanentDeleteEntry,
+  getTrashCount,
+  addPdfAttachment,
+  deleteCollection,
+  updateCollection,
+  getCollections,
+  deleteTag,
+  updateTag,
+  getTags,
+  getEntries,
+  createEntry,
+  createAttachment,
+  deleteAttachment,
+  importAnnotationsFromPdf,
+  getEntryAttachments,
   type ExportOptions,
   type BiblatexPreviewResult,
+  type Attachment,
+  type EntrySummary,
 } from "@/services/tauri";
+import { useSchemaStore } from "@/stores/schemaStore";
 import { ExportOptionsDialog } from "@/components/dialogs/ExportOptionsDialog";
 import { ImportPreviewDialog } from "@/components/dialogs/ImportPreviewDialog";
 import { toast } from "@/stores/toastStore";
 import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type SearchMode = "quick" | "full" | "semantic";
+type QuickSearchScope = "title_creator_year" | "fields_tags" | "everything";
+type AdvancedMatchMode = "all" | "any";
+type AdvancedCriterion = {
+  id: string;
+  field: string;
+  operator: string;
+  value: string;
+};
+type AdvancedScope = "all" | "collection";
 
 const searchModeConfig = {
-  quick: { icon: Zap, label: "Quick", description: "Title search" },
-  full: { icon: BookOpen, label: "Full", description: "Full-text" },
+  quick: { icon: Zap, label: "Quick", description: "Title search", hasScope: true },
+  full: { icon: BookOpen, label: "Advanced", description: "Advanced search" },
   semantic: { icon: Sparkles, label: "AI", description: "Semantic" },
 };
+
+const advancedFields = [
+  { value: "title", label: "Title" },
+  { value: "creator", label: "Creator" },
+  { value: "year", label: "Year" },
+  { value: "publication_title", label: "Publication Title" },
+  { value: "abstract", label: "Abstract" },
+  { value: "tags", label: "Tags" },
+  { value: "collection", label: "Collection" },
+  { value: "item_type", label: "Item Type" },
+  { value: "date_added", label: "Date Added" },
+];
+
+const advancedOperators = [
+  { value: "contains", label: "contains", requiresValue: true },
+  { value: "does_not_contain", label: "does not contain", requiresValue: true },
+  { value: "is", label: "is", requiresValue: true },
+  { value: "is_not", label: "is not", requiresValue: true },
+  { value: "begins_with", label: "begins with", requiresValue: true },
+  { value: "ends_with", label: "ends with", requiresValue: true },
+  { value: "is_before", label: "is before", requiresValue: true },
+  { value: "is_after", label: "is after", requiresValue: true },
+  { value: "is_empty", label: "is empty", requiresValue: false },
+  { value: "is_not_empty", label: "is not empty", requiresValue: false },
+];
 
 // Keyboard shortcut badge component
 function ShortcutBadge({ keys }: { keys: string[] }) {
@@ -77,7 +167,7 @@ function ShortcutBadge({ keys }: { keys: string[] }) {
   );
 }
 
-export function CommandPalette() {
+export function CommandPalette({ openMode }: { openMode?: "advanced" | "ai" } = {}) {
   const {
     commandPaletteOpen,
     setCommandPaletteOpen,
@@ -87,6 +177,7 @@ export function CommandPalette() {
     setTagManagementDialogOpen,
     setCollectionManagementDialogOpen,
     showDeleteConfirmation,
+    setCommandPaletteMode,
   } = useUIStore();
 
   // Threshold for showing confirmation dialog
@@ -99,17 +190,64 @@ export function CommandPalette() {
     tags,
     refreshLibrary,
     clearSelection,
+    trashCount,
+    setTrashCount,
+    activeCollectionId,
+    activeTagIds,
+    setTrashedEntries,
+    setCollections,
+    setTags,
+    invalidateEntry,
+    invalidateAttachments,
   } = useLibraryStore();
+  const { viewModeByFilter, setViewMode, activeFilter, setActiveFilter } = useUIStore();
   const { theme, setTheme } = useSettingsStore();
   const { importFiles, importFolder } = useImport();
+  const { itemTypes } = useSchemaStore();
 
   const [search, setSearch] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("quick");
-  const [subMenu, setSubMenu] = useState<"collection" | "tag" | null>(null);
+  const [quickScope, setQuickScope] = useState<QuickSearchScope>("title_creator_year");
+  const [advancedMatch, setAdvancedMatch] = useState<AdvancedMatchMode>("all");
+  const [advancedScope, setAdvancedScope] = useState<AdvancedScope>("collection");
+  const [advancedCollectionId, setAdvancedCollectionId] = useState<string>("");
+  const [advancedCriteria, setAdvancedCriteria] = useState<AdvancedCriterion[]>([
+    {
+      id: "advanced-0",
+      field: "title",
+      operator: "contains",
+      value: "",
+    },
+  ]);
+  const advancedCounterRef = useRef(1);
+  const [subMenu, setSubMenu] = useState<
+    | "collection"
+    | "tag"
+    | "removeFromCollection"
+    | "removeTag"
+    | "exportCollection"
+    | "exportTag"
+    | "renameCollection"
+    | "deleteCollection"
+    | "renameTag"
+    | "deleteTag"
+    | "addAttachment"
+    | "deleteAttachment"
+    | "createEntryType"
+    | null
+  >(null);
+  const [entryAttachments, setEntryAttachments] = useState<Attachment[]>([]);
   const [newTagName, setNewTagName] = useState("");
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportMode, setExportMode] = useState<"selected" | "all">("all");
+  const [exportContext, setExportContext] = useState<{
+    type: "collection" | "tag";
+    id: number;
+    name: string;
+  } | null>(null);
+  const [renameInput, setRenameInput] = useState("");
+  const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
 
   // Import preview state
   const [showImportPreview, setShowImportPreview] = useState(false);
@@ -117,13 +255,190 @@ export function CommandPalette() {
   const [importFolderPath, setImportFolderPath] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
 
-  // Filter entries based on search
-  const filteredEntries = search.trim()
-    ? entries.filter((entry) =>
-        entry.title.toLowerCase().includes(search.toLowerCase()) ||
-        (entry.creatorsDisplay?.toLowerCase().includes(search.toLowerCase()) ?? false)
-      )
-    : [];
+  const [searchResults, setSearchResults] = useState<EntrySummary[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchOffset, setSearchOffset] = useState(0);
+  const [hasMoreResults, setHasMoreResults] = useState(false);
+  const [isLoadingMoreResults, setIsLoadingMoreResults] = useState(false);
+  const searchTimeoutRef = useRef<number | null>(null);
+  const resultsContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (searchTimeoutRef.current) {
+      window.clearTimeout(searchTimeoutRef.current);
+    }
+    const isAdvanced = searchMode === "full";
+    if (!isAdvanced && !search.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      setSearchTotal(0);
+      setSearchOffset(0);
+      setHasMoreResults(false);
+      return;
+    }
+
+    const filteredAdvancedCriteria = advancedCriteria.filter((criterion) => {
+      const operator = advancedOperators.find((op) => op.value === criterion.operator);
+      if (!operator) return false;
+      if (!operator.requiresValue) return true;
+      return criterion.value.trim().length > 0;
+    });
+
+    if (isAdvanced && filteredAdvancedCriteria.length === 0) {
+      setSearchResults([]);
+      setIsSearching(false);
+      setSearchTotal(0);
+      setSearchOffset(0);
+      setHasMoreResults(false);
+      return;
+    }
+
+    setIsSearching(true);
+    searchTimeoutRef.current = window.setTimeout(async () => {
+      try {
+        const scope = searchMode === "full" ? undefined : quickScope;
+        const advancedSearch = isAdvanced
+          ? {
+              matchMode: advancedMatch,
+              criteria: filteredAdvancedCriteria.map((criterion) => ({
+                field: criterion.field,
+                operator: criterion.operator,
+                value: criterion.value.trim() || null,
+              })),
+            }
+          : undefined;
+        const result = await getEntriesPaged({
+          searchQuery: isAdvanced ? undefined : search.trim(),
+          searchScope: scope,
+          advancedSearch,
+          collectionId: isAdvanced && advancedScope === "collection" && advancedCollectionId
+            ? Number(advancedCollectionId)
+            : undefined,
+          limit: 20,
+          offset: 0,
+        });
+        setSearchResults(result.entries);
+        setSearchTotal(result.total);
+        setSearchOffset(result.entries.length);
+        setHasMoreResults(result.entries.length < result.total);
+      } catch (err) {
+        console.error("Search error:", err);
+        setSearchResults([]);
+        setSearchTotal(0);
+        setSearchOffset(0);
+        setHasMoreResults(false);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 150);
+  }, [search, searchMode, quickScope, advancedMatch, advancedCriteria, advancedScope, advancedCollectionId]);
+
+  useEffect(() => {
+    if (!commandPaletteOpen) return;
+    if (openMode === "advanced") {
+      setSearchMode("full");
+      setAdvancedScope(activeCollectionId ? "collection" : "all");
+      if (activeCollectionId) {
+        setAdvancedCollectionId(activeCollectionId.toString());
+      }
+    }
+    if (openMode === "ai") {
+      setSearchMode("semantic");
+    }
+  }, [commandPaletteOpen, openMode, activeCollectionId]);
+
+  useEffect(() => {
+    if (!commandPaletteOpen) return;
+    if (searchMode !== "full") return;
+    if (advancedScope === "collection" && !advancedCollectionId && activeCollectionId) {
+      setAdvancedCollectionId(activeCollectionId.toString());
+    }
+  }, [commandPaletteOpen, searchMode, advancedScope, advancedCollectionId, activeCollectionId]);
+
+  useEffect(() => {
+    if (commandPaletteOpen) return;
+    setCommandPaletteMode("default");
+  }, [commandPaletteOpen, setCommandPaletteMode]);
+
+  const handleLoadMoreResults = useCallback(async () => {
+    if (isLoadingMoreResults || !hasMoreResults) return;
+    setIsLoadingMoreResults(true);
+    try {
+      const isAdvanced = searchMode === "full";
+      const scope = isAdvanced ? undefined : quickScope;
+      const filteredAdvancedCriteria = advancedCriteria.filter((criterion) => {
+        const operator = advancedOperators.find((op) => op.value === criterion.operator);
+        if (!operator) return false;
+        if (!operator.requiresValue) return true;
+        return criterion.value.trim().length > 0;
+      });
+      const advancedSearch = isAdvanced
+        ? {
+            matchMode: advancedMatch,
+            criteria: filteredAdvancedCriteria.map((criterion) => ({
+              field: criterion.field,
+              operator: criterion.operator,
+              value: criterion.value.trim() || null,
+            })),
+          }
+        : undefined;
+      const result = await getEntriesPaged({
+        searchQuery: isAdvanced ? undefined : search.trim(),
+        searchScope: scope,
+        advancedSearch,
+        collectionId: isAdvanced && advancedScope === "collection" && advancedCollectionId
+          ? Number(advancedCollectionId)
+          : undefined,
+        limit: 20,
+        offset: searchOffset,
+      });
+      setSearchResults((prev) => [...prev, ...result.entries]);
+      const nextOffset = searchOffset + result.entries.length;
+      setSearchOffset(nextOffset);
+      setSearchTotal(result.total);
+      setHasMoreResults(nextOffset < result.total);
+    } catch (err) {
+      console.error("Load more search results failed:", err);
+    } finally {
+      setIsLoadingMoreResults(false);
+    }
+  }, [search, searchMode, quickScope, advancedMatch, advancedCriteria, advancedScope, advancedCollectionId, searchOffset, hasMoreResults, isLoadingMoreResults]);
+
+  const handleResultsScroll = useCallback(() => {
+    const el = resultsContainerRef.current;
+    if (!el || isLoadingMoreResults || !hasMoreResults) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+      handleLoadMoreResults();
+    }
+  }, [isLoadingMoreResults, hasMoreResults, handleLoadMoreResults]);
+
+  const addAdvancedCriterion = useCallback(() => {
+    const id = `advanced-${advancedCounterRef.current}`;
+    advancedCounterRef.current += 1;
+    setAdvancedCriteria((prev) => [
+      ...prev,
+      {
+        id,
+        field: "title",
+        operator: "contains",
+        value: "",
+      },
+    ]);
+  }, []);
+
+  const updateAdvancedCriterion = useCallback(
+    (id: string, updates: Partial<AdvancedCriterion>) => {
+      setAdvancedCriteria((prev) =>
+        prev.map((criterion) => (criterion.id === id ? { ...criterion, ...updates } : criterion))
+      );
+    },
+    []
+  );
+
+  const removeAdvancedCriterion = useCallback((id: string) => {
+    setAdvancedCriteria((prev) => (prev.length > 1 ? prev.filter((criterion) => criterion.id !== id) : prev));
+  }, []);
 
   const handleSelect = useCallback(
     (callback: () => void) => {
@@ -186,6 +501,7 @@ export function CommandPalette() {
         const result = await importBibtex(content);
         if (result.imported > 0) {
           toast.success(`Imported ${result.imported} entries from BibTeX`);
+          invalidateAttachments();
           await refreshLibrary();
         } else if (result.skipped > 0) {
           toast.info(`${result.skipped} entries skipped (duplicates)`);
@@ -215,6 +531,7 @@ export function CommandPalette() {
         const result = await importCslJson(content);
         if (result.imported > 0) {
           toast.success(`Imported ${result.imported} entries from CSL JSON`);
+          invalidateAttachments();
           await refreshLibrary();
         } else if (result.skipped > 0) {
           toast.info(`${result.skipped} entries skipped (duplicates)`);
@@ -230,6 +547,7 @@ export function CommandPalette() {
   };
 
   const handleImportBiblatexWithFiles = async () => {
+    // Close palette and clear search first
     setCommandPaletteOpen(false);
     setSearch("");
 
@@ -253,8 +571,10 @@ export function CommandPalette() {
     }
   };
 
-  const handleConfirmBiblatexImport = async (selectedKeys: string[], importTags: boolean) => {
+  const handleConfirmBiblatexImport = async (options: import('@/components/dialogs/ImportPreviewDialog').ImportOptions) => {
     if (!importFolderPath) return;
+
+    const { selectedKeys, importTags, excludedFiles, collectionId } = options;
 
     setIsImporting(true);
     try {
@@ -262,7 +582,9 @@ export function CommandPalette() {
         importFolderPath,
         importFolderPath,
         selectedKeys,
-        importTags
+        importTags,
+        excludedFiles,
+        collectionId
       );
 
       let message = `Imported ${result.imported} ${result.imported !== 1 ? "entries" : "entry"}`;
@@ -278,6 +600,8 @@ export function CommandPalette() {
         toast.info(`${result.skipped} entries skipped`);
       }
 
+      // Invalidate attachment cache so expanded rows refetch attachment names
+      invalidateAttachments();
       // Refresh library
       await refreshLibrary();
 
@@ -547,6 +871,491 @@ export function CommandPalette() {
     setNewTagName("");
   };
 
+  // ==================== NEW HANDLERS ====================
+
+  // Show in Finder handler
+  const handleShowInFinder = async () => {
+    if (selectedEntryIds.length === 0) {
+      toast.warning("No entries selected");
+      return;
+    }
+    try {
+      if (selectedEntryIds.length === 1) {
+        await showEntryInFinder(selectedEntryIds[0]);
+      } else {
+        await showEntriesInFinder(selectedEntryIds);
+      }
+    } catch (err) {
+      console.error("Show in Finder error:", err);
+      toast.error("Failed to show in Finder");
+    }
+    setCommandPaletteOpen(false);
+  };
+
+  // Copy title(s) handler
+  const handleCopyTitle = async () => {
+    if (selectedEntryIds.length === 0) {
+      toast.warning("No entries selected");
+      return;
+    }
+    const selectedEntries = entries.filter((e) => selectedEntryIds.includes(e.id));
+    const titles = selectedEntries.map((e) => e.title).join("\n");
+    try {
+      await writeText(titles);
+      toast.success(selectedEntryIds.length > 1 ? `${selectedEntryIds.length} titles copied` : "Title copied");
+    } catch (err) {
+      console.error("Copy title error:", err);
+      toast.error("Failed to copy title");
+    }
+    setCommandPaletteOpen(false);
+  };
+
+  // Empty trash handler
+  const handleEmptyTrash = async () => {
+    if (trashCount === 0) {
+      toast.info("Trash is already empty");
+      return;
+    }
+    try {
+      await emptyTrash();
+      setTrashCount(0);
+      setTrashedEntries([]);
+      toast.success("Trash emptied");
+      await refreshLibrary();
+    } catch (err) {
+      console.error("Empty trash error:", err);
+      toast.error("Failed to empty trash");
+    }
+    setCommandPaletteOpen(false);
+  };
+
+  // Restore from trash handler (for trash view)
+  const handleRestoreFromTrash = async () => {
+    if (selectedEntryIds.length === 0) {
+      toast.warning("No entries selected");
+      return;
+    }
+    try {
+      for (const id of selectedEntryIds) {
+        await restoreEntry(id);
+      }
+      toast.success(`Restored ${selectedEntryIds.length} entries from trash`);
+      const count = await getTrashCount();
+      setTrashCount(count);
+      clearSelection();
+      await refreshLibrary();
+    } catch (err) {
+      console.error("Restore error:", err);
+      toast.error("Failed to restore entries");
+    }
+    setCommandPaletteOpen(false);
+  };
+
+  // Permanent delete handler (for trash view)
+  const handlePermanentDelete = async () => {
+    if (selectedEntryIds.length === 0) {
+      toast.warning("No entries selected");
+      return;
+    }
+    try {
+      for (const id of selectedEntryIds) {
+        await permanentDeleteEntry(id);
+      }
+      toast.success(`Permanently deleted ${selectedEntryIds.length} entries`);
+      const count = await getTrashCount();
+      setTrashCount(count);
+      clearSelection();
+      await refreshLibrary();
+    } catch (err) {
+      console.error("Permanent delete error:", err);
+      toast.error("Failed to permanently delete entries");
+    }
+    setCommandPaletteOpen(false);
+  };
+
+  // Add PDF attachment handler
+  const handleAddPdfAttachment = async () => {
+    if (selectedEntryIds.length !== 1) {
+      toast.warning("Select exactly one entry to add attachment");
+      return;
+    }
+    setCommandPaletteOpen(false);
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (selected && typeof selected === "string") {
+        await addPdfAttachment(selectedEntryIds[0], selected);
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.success("PDF attached");
+      }
+    } catch (err) {
+      console.error("Add PDF attachment error:", err);
+      toast.error("Failed to attach PDF");
+    }
+  };
+
+  // Remove from collection handler
+  const handleRemoveFromCollection = async (collectionId: number) => {
+    if (selectedEntryIds.length === 0) {
+      toast.warning("No entries selected");
+      return;
+    }
+    try {
+      for (const entryId of selectedEntryIds) {
+        await removeEntryFromCollection(entryId, collectionId);
+      }
+      toast.success(`Removed ${selectedEntryIds.length} entries from collection`);
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      await refreshLibrary();
+    } catch (err) {
+      console.error("Remove from collection error:", err);
+      toast.error("Failed to remove from collection");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+  };
+
+  // Remove tag handler
+  const handleRemoveTag = async (tagId: number) => {
+    if (selectedEntryIds.length === 0) {
+      toast.warning("No entries selected");
+      return;
+    }
+    try {
+      for (const entryId of selectedEntryIds) {
+        await removeEntryTag(entryId, tagId);
+      }
+      const allTags = await getTags();
+      setTags(allTags);
+      toast.success(`Removed tag from ${selectedEntryIds.length} entries`);
+      await refreshLibrary();
+    } catch (err) {
+      console.error("Remove tag error:", err);
+      toast.error("Failed to remove tag");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+  };
+
+  // Export collection handler
+  const handleExportCollection = async (collectionId: number, collectionName: string, format: "bibtex" | "csl") => {
+    try {
+      const collectionEntries = await getEntries({ collectionId });
+      const entryIds = collectionEntries.map((e) => e.id);
+      if (entryIds.length === 0) {
+        toast.warning("No entries in this collection");
+        return;
+      }
+      const content = format === "bibtex" ? await exportToBibtex(entryIds) : await exportToCslJson(entryIds);
+      const ext = format === "bibtex" ? "bib" : "json";
+      const filterName = format === "bibtex" ? "BibTeX" : "CSL JSON";
+      const filePath = await save({
+        defaultPath: `${collectionName}.${ext}`,
+        filters: [{ name: filterName, extensions: [ext] }],
+      });
+      if (filePath) {
+        await writeTextFile(filePath, content);
+        toast.success(`Exported collection "${collectionName}"`);
+      }
+    } catch (err) {
+      console.error("Export collection error:", err);
+      toast.error("Failed to export collection");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+  };
+
+  // Export tag handler
+  const handleExportTag = async (tagId: number, tagName: string, format: "bibtex" | "csl") => {
+    try {
+      const tagEntries = await getEntries({ tagIds: [tagId] });
+      const entryIds = tagEntries.map((e) => e.id);
+      if (entryIds.length === 0) {
+        toast.warning("No entries with this tag");
+        return;
+      }
+      const content = format === "bibtex" ? await exportToBibtex(entryIds) : await exportToCslJson(entryIds);
+      const ext = format === "bibtex" ? "bib" : "json";
+      const filterName = format === "bibtex" ? "BibTeX" : "CSL JSON";
+      const filePath = await save({
+        defaultPath: `${tagName}.${ext}`,
+        filters: [{ name: filterName, extensions: [ext] }],
+      });
+      if (filePath) {
+        await writeTextFile(filePath, content);
+        toast.success(`Exported tag "${tagName}"`);
+      }
+    } catch (err) {
+      console.error("Export tag error:", err);
+      toast.error("Failed to export tag");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+  };
+
+  // Export collection with files handler
+  const handleExportCollectionWithFiles = (collectionId: number, collectionName: string) => {
+    setExportContext({ type: "collection", id: collectionId, name: collectionName });
+    setShowExportDialog(true);
+    setSubMenu(null);
+  };
+
+  // Export tag with files handler
+  const handleExportTagWithFiles = (tagId: number, tagName: string) => {
+    setExportContext({ type: "tag", id: tagId, name: tagName });
+    setShowExportDialog(true);
+    setSubMenu(null);
+  };
+
+  // Rename collection handler
+  const handleRenameCollection = async (collectionId: number) => {
+    if (!renameInput.trim()) return;
+    try {
+      await updateCollection(collectionId, { name: renameInput.trim() });
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      toast.success("Collection renamed");
+    } catch (err) {
+      console.error("Rename collection error:", err);
+      toast.error("Failed to rename collection");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+    setRenameInput("");
+    setSelectedItemId(null);
+  };
+
+  // Delete collection handler
+  const handleDeleteCollection = async (collectionId: number, collectionName: string) => {
+    try {
+      await deleteCollection(collectionId);
+      const allCollections = await getCollections();
+      setCollections(allCollections);
+      toast.success(`Collection "${collectionName}" deleted`);
+      await refreshLibrary();
+    } catch (err) {
+      console.error("Delete collection error:", err);
+      toast.error("Failed to delete collection");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+  };
+
+  // Rename tag handler
+  const handleRenameTag = async (tagId: number) => {
+    if (!renameInput.trim()) return;
+    try {
+      await updateTag(tagId, renameInput.trim());
+      const allTags = await getTags();
+      setTags(allTags);
+      invalidateEntry();
+      await refreshLibrary();
+      toast.success("Tag renamed");
+    } catch (err) {
+      console.error("Rename tag error:", err);
+      toast.error("Failed to rename tag");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+    setRenameInput("");
+    setSelectedItemId(null);
+  };
+
+  // Delete tag handler
+  const handleDeleteTag = async (tagId: number, tagName: string) => {
+    try {
+      await deleteTag(tagId);
+      const allTags = await getTags();
+      setTags(allTags);
+      invalidateEntry();
+      await refreshLibrary();
+      toast.success(`Tag "${tagName}" deleted`);
+    } catch (err) {
+      console.error("Delete tag error:", err);
+      toast.error("Failed to delete tag");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+  };
+
+  // Toggle view mode handler
+  const handleToggleViewMode = () => {
+    const currentMode = viewModeByFilter[activeFilter];
+    setViewMode(currentMode === "list" ? "card" : "list");
+    setCommandPaletteOpen(false);
+  };
+
+
+  // Import PDF annotations handler
+  const handleImportPdfAnnotations = async () => {
+    if (selectedEntryIds.length !== 1) {
+      toast.warning("Select exactly one entry to import annotations");
+      return;
+    }
+    try {
+      // Get the entry's attachments to find PDF
+      const attachments = await getEntryAttachments(selectedEntryIds[0]);
+      const pdfAttachment = attachments.find((a) => a.attachmentType === "pdf");
+      if (!pdfAttachment) {
+        toast.warning("Selected entry has no PDF attachment");
+        return;
+      }
+      const imported = await importAnnotationsFromPdf(pdfAttachment.id);
+      if (imported.length > 0) {
+        toast.success(`Imported ${imported.length} annotations from PDF`);
+      } else {
+        toast.info("No annotations found in PDF");
+      }
+    } catch (err) {
+      console.error("Import annotations error:", err);
+      toast.error("Failed to import PDF annotations");
+    }
+    setCommandPaletteOpen(false);
+  };
+
+  // Create note for entry handler
+  const handleCreateNote = async () => {
+    if (selectedEntryIds.length !== 1) {
+      toast.warning("Select exactly one entry to create a note");
+      return;
+    }
+    const selectedEntry = entries.find((e) => e.id === selectedEntryIds[0]);
+    if (!selectedEntry) return;
+
+    try {
+      const note = await createAttachment({
+        entryId: selectedEntry.id,
+        attachmentType: "note",
+        title: `Notes - ${selectedEntry.title}`,
+      });
+      invalidateAttachments();
+      await refreshLibrary();
+      // Open the note in a new tab
+      openTab({
+        type: "entry",
+        title: note.title || `Notes - ${selectedEntry.title}`,
+        entryId: String(selectedEntry.id),
+        attachmentId: String(note.id),
+      });
+      toast.success("Note created");
+    } catch (err) {
+      console.error("Create note error:", err);
+      toast.error("Failed to create note");
+    }
+    setCommandPaletteOpen(false);
+  };
+
+  // Navigation handler
+  const handleNavigateTo = (filter: 'all' | 'pdfs' | 'notes' | 'recent' | 'untagged' | 'duplicates' | 'trash') => {
+    setActiveFilter(filter);
+    setCommandPaletteOpen(false);
+  };
+
+  // Load attachments for delete attachment submenu
+  const handleOpenDeleteAttachment = async () => {
+    if (selectedEntryIds.length !== 1) {
+      toast.warning("Select exactly one entry to delete an attachment");
+      return;
+    }
+    try {
+      const attachments = await getEntryAttachments(selectedEntryIds[0]);
+      if (attachments.length === 0) {
+        toast.info("Selected entry has no attachments");
+        return;
+      }
+      setEntryAttachments(attachments);
+      setSubMenu("deleteAttachment");
+    } catch (err) {
+      console.error("Failed to load attachments:", err);
+      toast.error("Failed to load attachments");
+    }
+  };
+
+  // Delete attachment handler
+  const handleDeleteAttachment = async (attachmentId: number) => {
+    try {
+      await deleteAttachment(attachmentId);
+      invalidateAttachments();
+      await refreshLibrary();
+      toast.success("Attachment deleted");
+    } catch (err) {
+      console.error("Delete attachment error:", err);
+      toast.error("Failed to delete attachment");
+    }
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+    setEntryAttachments([]);
+  };
+
+  // Create entry with specific type handler
+  const handleCreateEntryWithType = async (itemType: string) => {
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+    try {
+      const newEntry = await createEntry({
+        itemType,
+        title: "New Reference",
+      });
+      await refreshLibrary();
+      toast.success(`${itemType} reference created`);
+      // Open the new entry in a tab for editing
+      openTab({
+        type: "entry",
+        title: newEntry.title,
+        entryId: String(newEntry.id),
+      });
+    } catch (err) {
+      console.error("Create reference error:", err);
+      toast.error("Failed to create reference");
+    }
+  };
+
+  // Export with context (collection or tag with files)
+  const handleExportWithContext = async (options: ExportOptions) => {
+    if (!exportContext) {
+      // Fall back to regular export
+      await handleExportBiblatexWithFiles(options);
+      return;
+    }
+    try {
+      setIsExporting(true);
+      const outputDir = await open({
+        directory: true,
+        title: "Select Export Folder",
+      });
+      if (outputDir) {
+        let entryIds: number[] = [];
+        if (exportContext.type === "collection") {
+          const collectionEntries = await getEntries({ collectionId: exportContext.id });
+          entryIds = collectionEntries.map((e) => e.id);
+        } else if (exportContext.type === "tag") {
+          const tagEntries = await getEntries({ tagIds: [exportContext.id] });
+          entryIds = tagEntries.map((e) => e.id);
+        }
+        if (entryIds.length === 0) {
+          toast.warning("No entries to export");
+          return;
+        }
+        const result = await exportToBiblatexWithFiles(entryIds, outputDir, options);
+        toast.success(
+          `Exported ${result.entriesExported} entries, ${result.filesExported} files, ${result.notesExported} notes`
+        );
+        setShowExportDialog(false);
+        setExportContext(null);
+      }
+    } catch (err) {
+      console.error("Export error:", err);
+      toast.error("Failed to export");
+    } finally {
+      setIsExporting(false);
+    }
+    setCommandPaletteOpen(false);
+  };
+
   // Close on escape
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -563,7 +1372,28 @@ export function CommandPalette() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [commandPaletteOpen, setCommandPaletteOpen, subMenu]);
 
-  if (!commandPaletteOpen) return null;
+  // Render dialogs even when command palette is closed
+  // This ensures ImportPreviewDialog shows after selecting a folder
+  if (!commandPaletteOpen) {
+    return (
+      <>
+        <ExportOptionsDialog
+          open={showExportDialog}
+          onClose={() => { setShowExportDialog(false); setExportContext(null); }}
+          onExport={exportContext ? handleExportWithContext : handleExportBiblatexWithFiles}
+          entryCount={exportMode === "selected" ? selectedEntryIds.length : entries.length}
+          isExporting={isExporting}
+        />
+        <ImportPreviewDialog
+          open={showImportPreview}
+          onOpenChange={setShowImportPreview}
+          previewData={importPreviewData}
+          onImport={handleConfirmBiblatexImport}
+          isImporting={isImporting}
+        />
+      </>
+    );
+  }
 
   // Sub-menu for collections
   if (subMenu === "collection") {
@@ -667,13 +1497,590 @@ export function CommandPalette() {
                   >
                     <div
                       className="flex items-center justify-center h-8 w-8 rounded-lg"
-                      style={{ backgroundColor: `${tag.color || '#3B82F6'}20` }}
+                      style={{ backgroundColor: (tag.color || !tag.isImported) ? `${tag.color || '#3B82F6'}20` : 'transparent' }}
                     >
-                      <Tag className="h-4 w-4" style={{ color: tag.color || '#3B82F6' }} />
+                      <Tag className="h-4 w-4" style={{ color: (tag.color || !tag.isImported) ? (tag.color || '#3B82F6') : 'var(--muted-foreground)' }} />
                     </div>
                     <span className="text-sm font-medium">{tag.name}</span>
                   </Command.Item>
                 ))}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for removing from collection
+  if (subMenu === "removeFromCollection") {
+    // Get collections that the selected entries belong to
+    const relevantCollections = activeCollectionId
+      ? collections.filter(c => c.id === activeCollectionId)
+      : collections;
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <FolderMinus className="h-5 w-5 text-primary shrink-0" />
+              <span className="text-base">Remove from Collection</span>
+              <button
+                onClick={() => setSubMenu(null)}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {relevantCollections.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No collections available.
+                </div>
+              ) : (
+                relevantCollections.map((collection) => (
+                  <Command.Item
+                    key={collection.id}
+                    onSelect={() => handleRemoveFromCollection(collection.id)}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div
+                      className="flex items-center justify-center h-8 w-8 rounded-lg"
+                      style={{ backgroundColor: `${collection.color || '#8B5CF6'}20` }}
+                    >
+                      <Library className="h-4 w-4" style={{ color: collection.color || '#8B5CF6' }} />
+                    </div>
+                    <span className="text-sm font-medium">{collection.name}</span>
+                  </Command.Item>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for removing tags
+  if (subMenu === "removeTag") {
+    // Get tags from selected entries or active tag filter
+    const relevantTags = activeTagIds.length > 0
+      ? tags.filter(t => activeTagIds.includes(t.id))
+      : tags;
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Minus className="h-5 w-5 text-primary shrink-0" />
+              <span className="text-base">Remove Tag</span>
+              <button
+                onClick={() => setSubMenu(null)}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {relevantTags.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No tags to remove.
+                </div>
+              ) : (
+                relevantTags.map((tag) => (
+                  <Command.Item
+                    key={tag.id}
+                    onSelect={() => handleRemoveTag(tag.id)}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div
+                      className="flex items-center justify-center h-8 w-8 rounded-lg"
+                      style={{ backgroundColor: tag.color ? `${tag.color}20` : 'transparent' }}
+                    >
+                      <Tag className="h-4 w-4" style={{ color: tag.color || 'var(--muted-foreground)' }} />
+                    </div>
+                    <span className="text-sm font-medium">{tag.name}</span>
+                  </Command.Item>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for exporting collection
+  if (subMenu === "exportCollection") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Download className="h-5 w-5 text-primary shrink-0" />
+              <span className="text-base">Export Collection</span>
+              <button
+                onClick={() => setSubMenu(null)}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {collections.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No collections available.
+                </div>
+              ) : (
+                collections.map((collection) => (
+                  <div key={collection.id} className="mb-2">
+                    <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground flex items-center gap-2">
+                      <Library className="h-3 w-3" style={{ color: collection.color || '#8B5CF6' }} />
+                      {collection.name} ({collection.itemCount})
+                    </div>
+                    <Command.Item
+                      onSelect={() => handleExportCollection(collection.id, collection.name, "bibtex")}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4"
+                    >
+                      <span className="text-sm">Export as BibTeX</span>
+                    </Command.Item>
+                    <Command.Item
+                      onSelect={() => handleExportCollection(collection.id, collection.name, "csl")}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4"
+                    >
+                      <span className="text-sm">Export as CSL JSON</span>
+                    </Command.Item>
+                    <Command.Item
+                      onSelect={() => handleExportCollectionWithFiles(collection.id, collection.name)}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4"
+                    >
+                      <span className="text-sm">Export with Files...</span>
+                    </Command.Item>
+                  </div>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for exporting tag
+  if (subMenu === "exportTag") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Download className="h-5 w-5 text-primary shrink-0" />
+              <span className="text-base">Export Tag</span>
+              <button
+                onClick={() => setSubMenu(null)}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {tags.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No tags available.
+                </div>
+              ) : (
+                tags.map((tag) => (
+                  <div key={tag.id} className="mb-2">
+                    <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground flex items-center gap-2">
+                      <Tag className="h-3 w-3" style={{ color: tag.color || 'var(--muted-foreground)' }} />
+                      {tag.name} ({tag.itemCount})
+                    </div>
+                    <Command.Item
+                      onSelect={() => handleExportTag(tag.id, tag.name, "bibtex")}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4"
+                    >
+                      <span className="text-sm">Export as BibTeX</span>
+                    </Command.Item>
+                    <Command.Item
+                      onSelect={() => handleExportTag(tag.id, tag.name, "csl")}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4"
+                    >
+                      <span className="text-sm">Export as CSL JSON</span>
+                    </Command.Item>
+                    <Command.Item
+                      onSelect={() => handleExportTagWithFiles(tag.id, tag.name)}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4"
+                    >
+                      <span className="text-sm">Export with Files...</span>
+                    </Command.Item>
+                  </div>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for renaming collection
+  if (subMenu === "renameCollection") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); setRenameInput(""); setSelectedItemId(null); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Pencil className="h-5 w-5 text-primary shrink-0" />
+              <span className="text-base">Rename Collection</span>
+              <button
+                onClick={() => { setSubMenu(null); setRenameInput(""); setSelectedItemId(null); }}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {selectedItemId ? (
+                <div className="p-3">
+                  <input
+                    value={renameInput}
+                    onChange={(e) => setRenameInput(e.target.value)}
+                    placeholder="New collection name..."
+                    className="w-full px-3 py-2 text-sm bg-muted rounded-lg outline-none focus:ring-2 focus:ring-primary"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && renameInput.trim()) {
+                        handleRenameCollection(selectedItemId);
+                      }
+                    }}
+                  />
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => { setSelectedItemId(null); setRenameInput(""); }}
+                      className="flex-1 px-3 py-1.5 text-sm bg-muted rounded-lg hover:bg-muted/80"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleRenameCollection(selectedItemId)}
+                      disabled={!renameInput.trim()}
+                      className="flex-1 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      Rename
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                collections.map((collection) => (
+                  <Command.Item
+                    key={collection.id}
+                    onSelect={() => { setSelectedItemId(collection.id); setRenameInput(collection.name); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div
+                      className="flex items-center justify-center h-8 w-8 rounded-lg"
+                      style={{ backgroundColor: `${collection.color || '#8B5CF6'}20` }}
+                    >
+                      <Library className="h-4 w-4" style={{ color: collection.color || '#8B5CF6' }} />
+                    </div>
+                    <span className="text-sm font-medium">{collection.name}</span>
+                  </Command.Item>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for deleting collection
+  if (subMenu === "deleteCollection") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Trash2 className="h-5 w-5 text-destructive shrink-0" />
+              <span className="text-base">Delete Collection</span>
+              <button
+                onClick={() => setSubMenu(null)}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {collections.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No collections available.
+                </div>
+              ) : (
+                collections.map((collection) => (
+                  <Command.Item
+                    key={collection.id}
+                    onSelect={() => handleDeleteCollection(collection.id, collection.name)}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-destructive/10 hover:bg-destructive/5"
+                  >
+                    <div
+                      className="flex items-center justify-center h-8 w-8 rounded-lg"
+                      style={{ backgroundColor: `${collection.color || '#8B5CF6'}20` }}
+                    >
+                      <Library className="h-4 w-4" style={{ color: collection.color || '#8B5CF6' }} />
+                    </div>
+                    <span className="text-sm font-medium">{collection.name}</span>
+                    <span className="text-xs text-muted-foreground ml-auto">{collection.itemCount} items</span>
+                  </Command.Item>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for renaming tag
+  if (subMenu === "renameTag") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); setRenameInput(""); setSelectedItemId(null); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Pencil className="h-5 w-5 text-primary shrink-0" />
+              <span className="text-base">Rename Tag</span>
+              <button
+                onClick={() => { setSubMenu(null); setRenameInput(""); setSelectedItemId(null); }}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {selectedItemId ? (
+                <div className="p-3">
+                  <input
+                    value={renameInput}
+                    onChange={(e) => setRenameInput(e.target.value)}
+                    placeholder="New tag name..."
+                    className="w-full px-3 py-2 text-sm bg-muted rounded-lg outline-none focus:ring-2 focus:ring-primary"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && renameInput.trim()) {
+                        handleRenameTag(selectedItemId);
+                      }
+                    }}
+                  />
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => { setSelectedItemId(null); setRenameInput(""); }}
+                      className="flex-1 px-3 py-1.5 text-sm bg-muted rounded-lg hover:bg-muted/80"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleRenameTag(selectedItemId)}
+                      disabled={!renameInput.trim()}
+                      className="flex-1 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      Rename
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                tags.map((tag) => (
+                  <Command.Item
+                    key={tag.id}
+                    onSelect={() => { setSelectedItemId(tag.id); setRenameInput(tag.name); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div
+                      className="flex items-center justify-center h-8 w-8 rounded-lg"
+                      style={{ backgroundColor: tag.color ? `${tag.color}20` : 'transparent' }}
+                    >
+                      <Tag className="h-4 w-4" style={{ color: tag.color || 'var(--muted-foreground)' }} />
+                    </div>
+                    <span className="text-sm font-medium">{tag.name}</span>
+                  </Command.Item>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for deleting tag
+  if (subMenu === "deleteTag") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Trash2 className="h-5 w-5 text-destructive shrink-0" />
+              <span className="text-base">Delete Tag</span>
+              <button
+                onClick={() => setSubMenu(null)}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {tags.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No tags available.
+                </div>
+              ) : (
+                tags.map((tag) => (
+                  <Command.Item
+                    key={tag.id}
+                    onSelect={() => handleDeleteTag(tag.id, tag.name)}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-destructive/10 hover:bg-destructive/5"
+                  >
+                    <div
+                      className="flex items-center justify-center h-8 w-8 rounded-lg"
+                      style={{ backgroundColor: tag.color ? `${tag.color}20` : 'transparent' }}
+                    >
+                      <Tag className="h-4 w-4" style={{ color: tag.color || 'var(--muted-foreground)' }} />
+                    </div>
+                    <span className="text-sm font-medium">{tag.name}</span>
+                    <span className="text-xs text-muted-foreground ml-auto">{tag.itemCount} items</span>
+                  </Command.Item>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for deleting attachment
+  if (subMenu === "deleteAttachment") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); setEntryAttachments([]); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Trash2 className="h-5 w-5 text-destructive shrink-0" />
+              <span className="text-base">Delete Attachment</span>
+              <button
+                onClick={() => { setSubMenu(null); setEntryAttachments([]); }}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {entryAttachments.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No attachments available.
+                </div>
+              ) : (
+                entryAttachments.map((attachment) => (
+                  <Command.Item
+                    key={attachment.id}
+                    onSelect={() => handleDeleteAttachment(attachment.id)}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-destructive/10 hover:bg-destructive/5"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      {attachment.attachmentType === "pdf" ? (
+                        <File className="h-4 w-4 text-red-500" />
+                      ) : attachment.attachmentType === "note" ? (
+                        <StickyNote className="h-4 w-4 text-yellow-500" />
+                      ) : (
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium truncate block">{attachment.title || attachment.filePath || "Untitled"}</span>
+                      <span className="text-xs text-muted-foreground">{attachment.attachmentTypeDisplay}</span>
+                    </div>
+                  </Command.Item>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
+  // Sub-menu for selecting entry type when creating
+  if (subMenu === "createEntryType") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <FilePlus2 className="h-5 w-5 text-green-500 shrink-0" />
+              <span className="text-base">Select Reference Type</span>
+              <button
+                onClick={() => setSubMenu(null)}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {itemTypes.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No entry types available.
+                </div>
+              ) : (
+                itemTypes.map((type) => (
+                  <Command.Item
+                    key={type.id}
+                    onSelect={() => handleCreateEntryWithType(type.name)}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <FileText className="h-4 w-4 text-green-500" />
+                    </div>
+                    <span className="text-sm font-medium">{type.displayName}</span>
+                  </Command.Item>
+                ))
+              )}
             </Command.List>
           </Command>
         </div>
@@ -692,8 +2099,8 @@ export function CommandPalette() {
       {/* Dialog */}
       <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
         <Command
-          className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden"
           shouldFilter={false}
+          className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden"
         >
           {/* Search input */}
           <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
@@ -707,47 +2114,232 @@ export function CommandPalette() {
             />
 
             {/* Search mode toggle */}
-            <div className="flex gap-1 shrink-0 bg-muted/50 rounded-lg p-1">
-              {(["quick", "full", "semantic"] as const).map((mode) => {
-                const config = searchModeConfig[mode];
-                const Icon = config.icon;
-                return (
-                  <button
-                    key={mode}
-                    onClick={() => setSearchMode(mode)}
-                    title={config.description}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-all",
-                      searchMode === mode
-                        ? "bg-primary text-primary-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span>{config.label}</span>
-                  </button>
-                );
-              })}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="flex gap-1 bg-muted/50 rounded-lg p-1">
+                {(["quick", "full", "semantic"] as const).map((mode) => {
+                  const config = searchModeConfig[mode];
+                  const Icon = config.icon;
+                  const isActive = searchMode === mode;
+                  const buttonClasses = cn(
+                    "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-all",
+                    isActive
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  );
+
+                  if (mode === "quick") {
+                    return (
+                      <DropdownMenu key={mode}>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            onClick={() => setSearchMode(mode)}
+                            title={config.description}
+                            className={buttonClasses}
+                          >
+                            <Icon className="h-3.5 w-3.5" />
+                            <span>{config.label}</span>
+                            <ChevronDown className="h-3 w-3 opacity-70" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[220px]">
+                          <DropdownMenuItem onClick={() => {
+                            setSearchMode("quick");
+                            setQuickScope("title_creator_year");
+                          }}>
+                            Title, Creator, Year
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => {
+                            setSearchMode("quick");
+                            setQuickScope("fields_tags");
+                          }}>
+                            All Fields &amp; Tags
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => {
+                            setSearchMode("quick");
+                            setQuickScope("everything");
+                          }}>
+                            Everything
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    );
+                  }
+
+                  return (
+                    <button
+                      key={mode}
+                      onClick={() => setSearchMode(mode)}
+                      title={config.description}
+                      className={buttonClasses}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      <span>{config.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
+          {searchMode === "full" && (
+            <div className="border-b border-border/50 px-4 py-3 bg-muted/20">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                <span>Search in</span>
+                <Select value={advancedScope} onValueChange={(value) => setAdvancedScope(value as AdvancedScope)}>
+                  <SelectTrigger className="h-7 w-36 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Library</SelectItem>
+                    <SelectItem value="collection">Current Collection</SelectItem>
+                  </SelectContent>
+                </Select>
+                {advancedScope === "collection" && (
+                  <Select
+                    value={advancedCollectionId}
+                    onValueChange={(value) => setAdvancedCollectionId(value)}
+                  >
+                    <SelectTrigger className="h-7 w-44 text-xs">
+                      <SelectValue placeholder="Select collection" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {collections.map((collection) => (
+                        <SelectItem key={collection.id} value={collection.id.toString()}>
+                          {collection.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <span className="mx-1 text-muted-foreground/60">•</span>
+                <span>Match</span>
+                <Select value={advancedMatch} onValueChange={(value) => setAdvancedMatch(value as AdvancedMatchMode)}>
+                  <SelectTrigger className="h-7 w-24 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">all</SelectItem>
+                    <SelectItem value="any">any</SelectItem>
+                  </SelectContent>
+                </Select>
+                <span>of the following:</span>
+                <div className="flex-1" />
+                <button
+                  onClick={addAdvancedCriterion}
+                  className="inline-flex items-center gap-1 rounded-md border border-border/60 px-2 py-1 text-xs text-foreground hover:bg-muted"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add rule
+                </button>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {advancedCriteria.map((criterion) => {
+                  const operator = advancedOperators.find((op) => op.value === criterion.operator);
+                  const requiresValue = operator ? operator.requiresValue : true;
+                  const isCollection = criterion.field === "collection";
+                  return (
+                    <div key={criterion.id} className="flex items-center gap-2">
+                      <Select
+                        value={criterion.field}
+                        onValueChange={(value) => updateAdvancedCriterion(criterion.id, { field: value })}
+                      >
+                        <SelectTrigger className="h-7 w-44 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {advancedFields.map((field) => (
+                            <SelectItem key={field.value} value={field.value}>
+                              {field.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={criterion.operator}
+                        onValueChange={(value) => updateAdvancedCriterion(criterion.id, { operator: value })}
+                      >
+                        <SelectTrigger className="h-7 w-40 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {advancedOperators
+                            .filter((op) => (isCollection ? ["is", "is_not"].includes(op.value) : true))
+                            .map((op) => (
+                              <SelectItem key={op.value} value={op.value}>
+                                {op.label}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                      {isCollection ? (
+                        <Select
+                          value={criterion.value}
+                          onValueChange={(value) => updateAdvancedCriterion(criterion.id, { value })}
+                        >
+                          <SelectTrigger className="h-7 w-full text-xs">
+                            <SelectValue placeholder="Select collection" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {collections.map((collection) => (
+                              <SelectItem key={collection.id} value={collection.id.toString()}>
+                                {collection.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          value={criterion.value}
+                          onChange={(event) =>
+                            updateAdvancedCriterion(criterion.id, { value: event.target.value })
+                          }
+                          placeholder={requiresValue ? "Value" : "No value"}
+                          disabled={!requiresValue}
+                          className="h-7 text-xs"
+                        />
+                      )}
+                      <button
+                        onClick={() => removeAdvancedCriterion(criterion.id)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted"
+                        aria-label="Remove rule"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Results */}
-          <Command.List className="max-h-[400px] overflow-y-auto p-2 scrollbar-hidden">
+          <Command.List
+            ref={resultsContainerRef}
+            onScroll={handleResultsScroll}
+            className="max-h-[400px] overflow-y-auto p-2 scrollbar-hidden"
+          >
             <Command.Empty className="py-12 text-center">
               <Search className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground">No results found</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">
-                Try adjusting your search or import new PDFs
-              </p>
+              {isSearching ? (
+                <p className="text-sm text-muted-foreground">Searching…</p>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">No results found</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">
+                    Try adjusting your search or import new PDFs
+                  </p>
+                </>
+              )}
             </Command.Empty>
 
             {/* Search results */}
-            {filteredEntries.length > 0 && (
+            {searchResults.length > 0 && (
               <Command.Group>
                 <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
                   Entries
                 </div>
-                {filteredEntries.slice(0, 10).map((entry) => (
+                {searchResults.map((entry) => (
                   <Command.Item
                     key={entry.id}
                     value={entry.title}
@@ -780,19 +2372,58 @@ export function CommandPalette() {
                     </div>
                   </Command.Item>
                 ))}
+                {searchTotal > 0 && (
+                  <div className="px-3 py-2.5 text-xs text-muted-foreground">
+                    {isLoadingMoreResults ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Loading more…
+                      </span>
+                    ) : (
+                      `Showing ${searchResults.length} of ${searchTotal}`
+                    )}
+                  </div>
+                )}
               </Command.Group>
             )}
 
-            {/* Commands (shown when no search) */}
-            {!search && (
-              <>
-                {/* Actions on selected entries */}
-                {selectedEntryIds.length > 0 && (
+            {/* Commands */}
+            {searchMode === "quick" && (
+            <>
+              {/* Actions on selected entries */}
+              {selectedEntryIds.length > 0 && activeFilter !== "trash" && (
                   <Command.Group>
                     <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
                       Selected ({selectedEntryIds.length})
                     </div>
                     <Command.Item
+                      value="show in finder reveal files"
+                      onSelect={handleShowInFinder}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                        <ExternalLink className="h-4 w-4 text-blue-500" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="block text-sm font-medium">Show in Finder</span>
+                      </div>
+                      <ShortcutBadge keys={["⌘", "⇧", "R"]} />
+                    </Command.Item>
+                    <Command.Item
+                      value="copy title clipboard"
+                      onSelect={handleCopyTitle}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-cyan-500/10">
+                        <Copy className="h-4 w-4 text-cyan-500" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="block text-sm font-medium">Copy Title{selectedEntryIds.length > 1 ? "s" : ""}</span>
+                      </div>
+                      <ShortcutBadge keys={["⌘", "⇧", "T"]} />
+                    </Command.Item>
+                    <Command.Item
+                      value="add to collection folder"
                       onSelect={() => setSubMenu("collection")}
                       className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                     >
@@ -803,7 +2434,22 @@ export function CommandPalette() {
                         <span className="block text-sm font-medium">Add to Collection</span>
                       </div>
                     </Command.Item>
+                    {(activeCollectionId || collections.length > 0) && (
+                      <Command.Item
+                        value="remove from collection folder"
+                        onSelect={() => activeCollectionId ? handleRemoveFromCollection(activeCollectionId) : setSubMenu("removeFromCollection")}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-orange-500/10">
+                          <FolderMinus className="h-4 w-4 text-orange-500" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="block text-sm font-medium">Remove from Collection</span>
+                        </div>
+                      </Command.Item>
+                    )}
                     <Command.Item
+                      value="add tag label"
                       onSelect={() => setSubMenu("tag")}
                       className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                     >
@@ -814,21 +2460,88 @@ export function CommandPalette() {
                         <span className="block text-sm font-medium">Add Tag</span>
                       </div>
                     </Command.Item>
-                    {selectedEntryIds.length === 1 && (
+                    {(activeTagIds.length > 0 || tags.length > 0) && (
                       <Command.Item
-                        onSelect={handleDuplicate}
+                        value="remove tag label"
+                        onSelect={() => activeTagIds.length === 1 ? handleRemoveTag(activeTagIds[0]) : setSubMenu("removeTag")}
                         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                       >
-                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10">
-                          <CopyPlus className="h-4 w-4 text-amber-500" />
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-orange-500/10">
+                          <Minus className="h-4 w-4 text-orange-500" />
                         </div>
                         <div className="flex-1">
-                          <span className="block text-sm font-medium">Duplicate Entry</span>
+                          <span className="block text-sm font-medium">Remove Tag</span>
                         </div>
-                        <ShortcutBadge keys={["⌘", "D"]} />
                       </Command.Item>
                     )}
+                    {selectedEntryIds.length === 1 && (
+                      <>
+                        <Command.Item
+                          value="add pdf attachment file"
+                          onSelect={handleAddPdfAttachment}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                            <FileUp className="h-4 w-4 text-red-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Add PDF Attachment</span>
+                          </div>
+                          <ShortcutBadge keys={["⌘", "⇧", "A"]} />
+                        </Command.Item>
+                        <Command.Item
+                          value="import pdf annotations highlights"
+                          onSelect={handleImportPdfAnnotations}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-yellow-500/10">
+                            <FileText className="h-4 w-4 text-yellow-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Import PDF Annotations</span>
+                          </div>
+                        </Command.Item>
+                        <Command.Item
+                          value="create note add notes"
+                          onSelect={handleCreateNote}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                            <StickyNote className="h-4 w-4 text-green-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Create Note</span>
+                          </div>
+                        </Command.Item>
+                        <Command.Item
+                          value="delete attachment remove file"
+                          onSelect={handleOpenDeleteAttachment}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Delete Attachment...</span>
+                          </div>
+                        </Command.Item>
+                        <Command.Item
+                          value="duplicate entry copy"
+                          onSelect={handleDuplicate}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10">
+                            <CopyPlus className="h-4 w-4 text-amber-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Duplicate Entry</span>
+                          </div>
+                          <ShortcutBadge keys={["⌘", "D"]} />
+                        </Command.Item>
+                      </>
+                    )}
                     <Command.Item
+                      value="delete move trash"
                       onSelect={handleDeleteSelected}
                       className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                     >
@@ -836,12 +2549,47 @@ export function CommandPalette() {
                         <Trash2 className="h-4 w-4 text-red-500" />
                       </div>
                       <div className="flex-1">
-                        <span className="block text-sm font-medium">Delete Selected</span>
+                        <span className="block text-sm font-medium">Move to Trash</span>
                       </div>
                       <ShortcutBadge keys={["⌫"]} />
                     </Command.Item>
                   </Command.Group>
                 )}
+
+              {/* Actions for trash view */}
+              {activeFilter === "trash" && selectedEntryIds.length > 0 && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Trash ({selectedEntryIds.length} selected)
+                  </div>
+                  <Command.Item
+                    value="restore from trash undo"
+                    onSelect={handleRestoreFromTrash}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <RotateCcw className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Restore from Trash</span>
+                    </div>
+                    <ShortcutBadge keys={["⌘", "⇧", "Z"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="permanent delete forever"
+                    onSelect={handlePermanentDelete}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Trash2 className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Permanently Delete</span>
+                      <span className="text-xs text-muted-foreground">Cannot be undone</span>
+                    </div>
+                  </Command.Item>
+                </Command.Group>
+              )}
 
                 {/* Export commands */}
                 <Command.Group>
@@ -851,6 +2599,7 @@ export function CommandPalette() {
                   {selectedEntryIds.length > 0 && (
                     <>
                       <Command.Item
+                        value="export selected bibtex"
                         onSelect={handleExportSelectedBibtex}
                         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                       >
@@ -864,6 +2613,7 @@ export function CommandPalette() {
                         <ShortcutBadge keys={["⌘", "E"]} />
                       </Command.Item>
                       <Command.Item
+                        value="export selected csl json"
                         onSelect={handleExportSelectedCsl}
                         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                       >
@@ -876,6 +2626,7 @@ export function CommandPalette() {
                         </div>
                       </Command.Item>
                       <Command.Item
+                        value="copy bibtex clipboard"
                         onSelect={handleCopyBibtex}
                         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                       >
@@ -888,6 +2639,7 @@ export function CommandPalette() {
                         <ShortcutBadge keys={["⌘", "⇧", "C"]} />
                       </Command.Item>
                       <Command.Item
+                        value="copy csl json clipboard"
                         onSelect={handleCopyCsl}
                         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                       >
@@ -899,6 +2651,7 @@ export function CommandPalette() {
                         </div>
                       </Command.Item>
                       <Command.Item
+                        value="export selected biblatex files attachments"
                         onSelect={() => openExportDialog("selected")}
                         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                       >
@@ -913,6 +2666,7 @@ export function CommandPalette() {
                     </>
                   )}
                   <Command.Item
+                    value="export all bibtex library"
                     onSelect={handleExportAllBibtex}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -925,6 +2679,7 @@ export function CommandPalette() {
                     </div>
                   </Command.Item>
                   <Command.Item
+                    value="export all csl json library"
                     onSelect={handleExportAllCsl}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -937,6 +2692,7 @@ export function CommandPalette() {
                     </div>
                   </Command.Item>
                   <Command.Item
+                    value="export all biblatex files attachments library"
                     onSelect={() => openExportDialog("all")}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -948,6 +2704,36 @@ export function CommandPalette() {
                       <span className="text-xs text-muted-foreground">Entire library with attachments</span>
                     </div>
                   </Command.Item>
+                  {collections.length > 0 && (
+                    <Command.Item
+                      value="export collection folder"
+                      onSelect={() => setSubMenu("exportCollection")}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-violet-500/10">
+                        <Library className="h-4 w-4 text-violet-500" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="block text-sm font-medium">Export Collection...</span>
+                        <span className="text-xs text-muted-foreground">Export a specific collection</span>
+                      </div>
+                    </Command.Item>
+                  )}
+                  {tags.length > 0 && (
+                    <Command.Item
+                      value="export tag label"
+                      onSelect={() => setSubMenu("exportTag")}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                        <Tag className="h-4 w-4 text-blue-500" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="block text-sm font-medium">Export Tag...</span>
+                        <span className="text-xs text-muted-foreground">Export entries with a specific tag</span>
+                      </div>
+                    </Command.Item>
+                  )}
                 </Command.Group>
 
                 {/* Create commands */}
@@ -956,6 +2742,20 @@ export function CommandPalette() {
                     Create
                   </div>
                   <Command.Item
+                    value="create new reference manual entry type"
+                    onSelect={() => setSubMenu("createEntryType")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <FilePlus2 className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Create Manual Reference...</span>
+                      <span className="text-xs text-muted-foreground">Select entry type and add manually</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="import pdf add document"
                     onSelect={handleImportPdf}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -969,23 +2769,7 @@ export function CommandPalette() {
                   </Command.Item>
 
                   <Command.Item
-                    onSelect={() =>
-                      handleSelect(() => {
-                        // TODO: Create note - deferred to next phase
-                      })
-                    }
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
-                  >
-                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10">
-                      <FileText className="h-4 w-4 text-primary" />
-                    </div>
-                    <div className="flex-1">
-                      <span className="block text-sm font-medium">New Note</span>
-                      <span className="text-xs text-muted-foreground">Create a new markdown note</span>
-                    </div>
-                  </Command.Item>
-
-                  <Command.Item
+                    value="import folder pdfs multiple"
                     onSelect={handleImportFolder}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -999,6 +2783,7 @@ export function CommandPalette() {
                   </Command.Item>
 
                   <Command.Item
+                    value="import bibtex bib references"
                     onSelect={handleImportBibtex}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -1012,6 +2797,7 @@ export function CommandPalette() {
                   </Command.Item>
 
                   <Command.Item
+                    value="import csl json references"
                     onSelect={handleImportCslJson}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -1025,6 +2811,7 @@ export function CommandPalette() {
                   </Command.Item>
 
                   <Command.Item
+                    value="import biblatex files zotero pdfs attachments"
                     onSelect={handleImportBiblatexWithFiles}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -1038,6 +2825,7 @@ export function CommandPalette() {
                   </Command.Item>
 
                   <Command.Item
+                    value="new collection create organize"
                     onSelect={() =>
                       handleSelect(() => setNewCollectionDialogOpen(true))
                     }
@@ -1059,6 +2847,7 @@ export function CommandPalette() {
                     Tags
                   </div>
                   <Command.Item
+                    value="manage tags edit merge delete colors"
                     onSelect={() =>
                       handleSelect(() => setTagManagementDialogOpen(true))
                     }
@@ -1073,6 +2862,7 @@ export function CommandPalette() {
                     </div>
                   </Command.Item>
                   <Command.Item
+                    value="create tag new add"
                     onSelect={() => setSubMenu("tag")}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -1084,6 +2874,34 @@ export function CommandPalette() {
                       <span className="text-xs text-muted-foreground">Create a new tag{selectedEntryIds.length > 0 ? " and add to selection" : ""}</span>
                     </div>
                   </Command.Item>
+                  {tags.length > 0 && (
+                    <>
+                      <Command.Item
+                        value="rename tag edit name"
+                        onSelect={() => setSubMenu("renameTag")}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                          <Pencil className="h-4 w-4 text-blue-500" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="block text-sm font-medium">Rename Tag...</span>
+                        </div>
+                      </Command.Item>
+                      <Command.Item
+                        value="delete tag remove"
+                        onSelect={() => setSubMenu("deleteTag")}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                          <Trash2 className="h-4 w-4 text-red-500" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="block text-sm font-medium">Delete Tag...</span>
+                        </div>
+                      </Command.Item>
+                    </>
+                  )}
                 </Command.Group>
 
                 {/* Collections commands */}
@@ -1092,6 +2910,7 @@ export function CommandPalette() {
                     Collections
                   </div>
                   <Command.Item
+                    value="manage collections edit merge delete colors"
                     onSelect={() =>
                       handleSelect(() => setCollectionManagementDialogOpen(true))
                     }
@@ -1106,6 +2925,7 @@ export function CommandPalette() {
                     </div>
                   </Command.Item>
                   <Command.Item
+                    value="create collection new add organize"
                     onSelect={() =>
                       handleSelect(() => setNewCollectionDialogOpen(true))
                     }
@@ -1119,6 +2939,34 @@ export function CommandPalette() {
                       <span className="text-xs text-muted-foreground">Create a new collection to organize entries</span>
                     </div>
                   </Command.Item>
+                  {collections.length > 0 && (
+                    <>
+                      <Command.Item
+                        value="rename collection edit name"
+                        onSelect={() => setSubMenu("renameCollection")}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-violet-500/10">
+                          <Pencil className="h-4 w-4 text-violet-500" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="block text-sm font-medium">Rename Collection...</span>
+                        </div>
+                      </Command.Item>
+                      <Command.Item
+                        value="delete collection remove"
+                        onSelect={() => setSubMenu("deleteCollection")}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                          <Trash2 className="h-4 w-4 text-red-500" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="block text-sm font-medium">Delete Collection...</span>
+                        </div>
+                      </Command.Item>
+                    </>
+                  )}
                 </Command.Group>
 
                 {/* Utility commands */}
@@ -1127,6 +2975,7 @@ export function CommandPalette() {
                     View
                   </div>
                   <Command.Item
+                    value="toggle info panel sidebar details"
                     onSelect={() => handleSelect(() => toggleInfoPane())}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -1136,8 +2985,30 @@ export function CommandPalette() {
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Toggle Info Panel</span>
                     </div>
+                    <ShortcutBadge keys={["⌘", "I"]} />
                   </Command.Item>
                   <Command.Item
+                    value="toggle view mode list card grid table"
+                    onSelect={handleToggleViewMode}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                      {viewModeByFilter[activeFilter] === "list" ? (
+                        <LayoutGrid className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <LayoutList className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Toggle View Mode</span>
+                      <span className="text-xs text-muted-foreground">
+                        Current: {viewModeByFilter[activeFilter] === "list" ? "List" : "Card"}
+                      </span>
+                    </div>
+                    <ShortcutBadge keys={["⌘", "⇧", "V"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="refresh library reload sync"
                     onSelect={() => handleSelect(() => refreshLibrary())}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -1148,6 +3019,115 @@ export function CommandPalette() {
                       <span className="block text-sm font-medium">Refresh Library</span>
                     </div>
                   </Command.Item>
+                  {trashCount > 0 && (
+                    <Command.Item
+                      value="empty trash clear delete permanently"
+                      onSelect={handleEmptyTrash}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                        <Trash2 className="h-4 w-4 text-red-500" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="block text-sm font-medium">Empty Trash</span>
+                        <span className="text-xs text-muted-foreground">{trashCount} items in trash</span>
+                      </div>
+                    </Command.Item>
+                  )}
+                </Command.Group>
+
+                {/* Navigation commands */}
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Navigate
+                  </div>
+                  <Command.Item
+                    value="go to all items library"
+                    onSelect={() => handleNavigateTo("all")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                      <Library className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Go to All Items</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="go to pdfs documents files"
+                    onSelect={() => handleNavigateTo("pdfs")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Files className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Go to PDFs</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="go to notes documents"
+                    onSelect={() => handleNavigateTo("notes")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-yellow-500/10">
+                      <StickyNote className="h-4 w-4 text-yellow-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Go to Notes</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="go to recently added recent"
+                    onSelect={() => handleNavigateTo("recent")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <Clock className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Go to Recently Added</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="go to untagged no tags"
+                    onSelect={() => handleNavigateTo("untagged")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                      <CircleSlash className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Go to Untagged</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="go to duplicates merge"
+                    onSelect={() => handleNavigateTo("duplicates")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10">
+                      <GitMerge className="h-4 w-4 text-amber-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Go to Duplicates</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="go to trash deleted"
+                    onSelect={() => handleNavigateTo("trash")}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Trash2 className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Go to Trash</span>
+                      {trashCount > 0 && (
+                        <span className="text-xs text-muted-foreground">{trashCount} items</span>
+                      )}
+                    </div>
+                  </Command.Item>
                 </Command.Group>
 
                 {/* Settings commands */}
@@ -1156,6 +3136,7 @@ export function CommandPalette() {
                     Settings
                   </div>
                   <Command.Item
+                    value="toggle theme dark light mode appearance"
                     onSelect={() =>
                       handleSelect(() => {
                         const themes = ["system", "light", "dark"] as const;
@@ -1184,6 +3165,7 @@ export function CommandPalette() {
                   </Command.Item>
 
                   <Command.Item
+                    value="settings preferences configure options"
                     onSelect={() =>
                       handleSelect(() => setSettingsOpen(true))
                     }
@@ -1199,7 +3181,7 @@ export function CommandPalette() {
                     <ShortcutBadge keys={["⌘", ","]} />
                   </Command.Item>
                 </Command.Group>
-              </>
+            </>
             )}
           </Command.List>
 
@@ -1225,8 +3207,8 @@ export function CommandPalette() {
 
       <ExportOptionsDialog
         open={showExportDialog}
-        onClose={() => setShowExportDialog(false)}
-        onExport={handleExportBiblatexWithFiles}
+        onClose={() => { setShowExportDialog(false); setExportContext(null); }}
+        onExport={exportContext ? handleExportWithContext : handleExportBiblatexWithFiles}
         entryCount={exportMode === "selected" ? selectedEntryIds.length : entries.length}
         isExporting={isExporting}
       />

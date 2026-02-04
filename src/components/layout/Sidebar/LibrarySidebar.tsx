@@ -21,7 +21,7 @@ import {
   X,
   Check,
 } from 'lucide-react';
-import { useState, useEffect, type MutableRefObject } from 'react';
+import { useState, useEffect, useMemo, type MutableRefObject } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import {
@@ -75,7 +75,6 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
-import { filterEntriesByType, type FilterType } from '@/lib/filters';
 import { toast } from '@/stores/toastStore';
 import { DroppableCollection } from '@/components/dnd/DroppableCollection';
 import { DroppableTrash } from '@/components/dnd/DroppableTrash';
@@ -124,7 +123,7 @@ function SidebarItem({
       onClick={(e) => onClick?.(e)}
       onContextMenu={allowContextMenu ? undefined : (e) => e.preventDefault()}
       className={cn(
-        'flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-sm transition-colors select-none',
+        'flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-sm transition-colors select-none overflow-hidden',
         'hover:bg-sidebar-accent',
         active
           ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
@@ -132,8 +131,8 @@ function SidebarItem({
       )}
     >
       <span className='flex-shrink-0 w-4 h-4'>{icon}</span>
-      <span className='flex-1 text-left truncate'>{label}</span>
-      {count !== undefined && <span className='text-xs text-muted-foreground'>{count}</span>}
+      <span className='flex-1 min-w-0 text-left truncate'>{label}</span>
+      {count !== undefined && <span className='flex-shrink-0 text-xs text-muted-foreground'>{count}</span>}
     </button>
   );
 }
@@ -174,35 +173,39 @@ function CollapsibleSection({
 
   const headerContent = (
     <div
-      className='flex items-center gap-1 px-2 py-1 group select-none'
+      className='flex items-center gap-1 px-2 py-1 group select-none overflow-hidden'
       onContextMenu={contextMenuContent ? undefined : (e) => e.preventDefault()}
     >
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className='flex items-center gap-1 flex-1 text-xs font-semibold uppercase text-muted-foreground hover:text-foreground transition-colors select-none'
+        className='flex items-center gap-1 flex-1 min-w-0 text-xs font-semibold uppercase text-muted-foreground hover:text-foreground transition-colors select-none'
       >
-        {isOpen ? <ChevronDown className='h-3 w-3' /> : <ChevronRight className='h-3 w-3' />}
-        {title}
+        <span className='flex-shrink-0'>
+          {isOpen ? <ChevronDown className='h-3 w-3' /> : <ChevronRight className='h-3 w-3' />}
+        </span>
+        <span className='truncate'>{title}</span>
       </button>
-      {actions}
-      {onAdd && (
-        <Button
-          variant='ghost'
-          size='icon-xs'
-          onClick={(e) => {
-            e.stopPropagation();
-            onAdd();
-          }}
-          className='h-5 w-5 opacity-0 group-hover:opacity-100 hover:opacity-100'
-        >
-          <Plus className='h-3 w-3' />
-        </Button>
-      )}
+      <div className='flex items-center flex-shrink-0'>
+        {actions}
+        {onAdd && (
+          <Button
+            variant='ghost'
+            size='icon-xs'
+            onClick={(e) => {
+              e.stopPropagation();
+              onAdd();
+            }}
+            className='h-5 w-5 opacity-0 group-hover:opacity-100 hover:opacity-100'
+          >
+            <Plus className='h-3 w-3' />
+          </Button>
+        )}
+      </div>
     </div>
   );
 
   return (
-    <div className='mb-2'>
+    <div className='mb-2 overflow-hidden'>
       {contextMenuContent ? (
         <ContextMenu>
           <ContextMenuTrigger asChild>{headerContent}</ContextMenuTrigger>
@@ -211,7 +214,7 @@ function CollapsibleSection({
       ) : (
         headerContent
       )}
-      {isOpen && <div className='space-y-0.5 px-1'>{children}</div>}
+      {isOpen && <div className='space-y-0.5 px-1 overflow-hidden'>{children}</div>}
     </div>
   );
 }
@@ -237,7 +240,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
   const {
     collections,
     tags,
-    allEntries,
+    entryCounts,
     trashCount,
     setTrashCount,
     setTrashedEntries,
@@ -311,11 +314,20 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
     null,
   );
   const [tagSearchQuery, setTagSearchQuery] = useState('');
+  const visibleTags = useMemo(() => {
+    return tags
+      .filter((tag) => !hideImportedTags || !tag.isImported)
+      .filter((tag) =>
+        tagSearchQuery
+          ? tag.name.toLowerCase().includes(tagSearchQuery.toLowerCase())
+          : true
+      );
+  }, [tags, hideImportedTags, tagSearchQuery]);
 
   // Fetch duplicate count
   useEffect(() => {
     getDuplicateCount().then(setDuplicateCount).catch(console.error);
-  }, [allEntries.length, entryVersion]); // Refresh when entries change or are modified
+  }, [entryCounts.total, entryVersion]); // Refresh when entries change or are modified
 
   // Update library tab title when filter changes
   const handleFilterChange = (filter: typeof activeFilter) => {
@@ -677,16 +689,17 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
     }
   };
 
-  // Helper to filter entries based on filter type (uses shared utility)
-  const getFilteredEntries = (filterType: string) => {
-    return filterEntriesByType(allEntries, filterType as FilterType);
+  const fetchFilteredEntryIds = async (filterType: string): Promise<number[]> => {
+    const entries = await getEntries({
+      filterType,
+    });
+    return entries.map((e) => e.id);
   };
 
   // Export handlers for filtered views (All Items, PDFs, Notes, Recent, Untagged)
   const handleExportFilteredCslJson = async (filterType: string, fileName: string) => {
     try {
-      const filteredEntries = getFilteredEntries(filterType);
-      const entryIds = filteredEntries.map((e) => e.id);
+      const entryIds = await fetchFilteredEntryIds(filterType);
       if (entryIds.length === 0) {
         alert('No entries to export');
         return;
@@ -706,8 +719,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
 
   const handleExportFilteredBibtex = async (filterType: string, fileName: string) => {
     try {
-      const filteredEntries = getFilteredEntries(filterType);
-      const entryIds = filteredEntries.map((e) => e.id);
+      const entryIds = await fetchFilteredEntryIds(filterType);
       if (entryIds.length === 0) {
         alert('No entries to export');
         return;
@@ -727,8 +739,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
 
   const handleCopyFilteredCslJson = async (filterType: string) => {
     try {
-      const filteredEntries = getFilteredEntries(filterType);
-      const entryIds = filteredEntries.map((e) => e.id);
+      const entryIds = await fetchFilteredEntryIds(filterType);
       if (entryIds.length === 0) {
         alert('No entries to copy');
         return;
@@ -742,8 +753,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
 
   const handleCopyFilteredBibtex = async (filterType: string) => {
     try {
-      const filteredEntries = getFilteredEntries(filterType);
-      const entryIds = filteredEntries.map((e) => e.id);
+      const entryIds = await fetchFilteredEntryIds(filterType);
       if (entryIds.length === 0) {
         alert('No entries to copy');
         return;
@@ -777,7 +787,8 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
         let entryIds: number[] = [];
 
         if (exportContext.type === 'all') {
-          entryIds = allEntries.map((e) => e.id);
+          const all = await getEntries();
+          entryIds = all.map((e) => e.id);
         } else if (exportContext.type === 'collection' && exportContext.id) {
           const collectionEntries = await getEntries({ collectionId: exportContext.id });
           entryIds = collectionEntries.map((e) => e.id);
@@ -785,8 +796,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
           const tagEntries = await getEntries({ tagIds: [exportContext.id] });
           entryIds = tagEntries.map((e) => e.id);
         } else if (exportContext.type === 'filter' && exportContext.filterType) {
-          const filteredEntries = getFilteredEntries(exportContext.filterType);
-          entryIds = filteredEntries.map((e) => e.id);
+          entryIds = await fetchFilteredEntryIds(exportContext.filterType);
         }
 
         if (entryIds.length === 0) {
@@ -833,19 +843,13 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
     }
   };
 
-  // Calculate counts from entries (new model)
-  const pdfCount = allEntries.filter((e) => e.hasPdf).length;
-  const noteCount = allEntries.filter((e) => e.hasNote).length;
-  const recentCount = allEntries.filter((e) => {
-    const added = new Date(e.dateAdded);
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    return added > weekAgo;
-  }).length;
+  const pdfCount = entryCounts.pdf;
+  const noteCount = entryCounts.note;
+  const recentCount = entryCounts.recent;
 
   return (
-    <div className='flex flex-col h-full'>
-      <ScrollArea className='flex-1 px-2 pt-2'>
+    <div className='flex flex-col h-full w-full overflow-hidden'>
+      <ScrollArea className='flex-1 px-2 pt-2 w-full min-w-0'>
         {/* Library section */}
         <CollapsibleSection
           title='Library'
@@ -890,11 +894,11 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
         >
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div>
+              <div className='w-full overflow-hidden'>
                 <SidebarItem
                   icon={<Files className='h-4 w-4' />}
                   label='All Items'
-                  count={allEntries.length}
+                  count={entryCounts.total}
                   active={activeFilter === 'all'}
                   onClick={() => handleFilterChange('all')}
                   allowContextMenu
@@ -931,7 +935,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
           </ContextMenu>
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div>
+              <div className='w-full overflow-hidden'>
                 <SidebarItem
                   icon={<FileText className='h-4 w-4' />}
                   label='PDFs'
@@ -972,7 +976,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
           </ContextMenu>
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div>
+              <div className='w-full overflow-hidden'>
                 <SidebarItem
                   icon={<FileText className='h-4 w-4' />}
                   label='Notes'
@@ -1014,7 +1018,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
           <DroppableTrash>
             <ContextMenu>
               <ContextMenuTrigger asChild>
-                <div>
+                <div className='w-full overflow-hidden'>
                   <SidebarItem
                     icon={<Trash2 className='h-4 w-4 text-pink-600' />}
                     label='Trash'
@@ -1043,7 +1047,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
         <CollapsibleSection title='Smart Filters'>
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div>
+              <div className='w-full overflow-hidden'>
                 <SidebarItem
                   icon={<Clock className='h-4 w-4' />}
                   label='Recently Added'
@@ -1088,10 +1092,11 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
           </ContextMenu>
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div>
+              <div className='w-full overflow-hidden'>
                 <SidebarItem
                   icon={<Tag className='h-4 w-4' />}
                   label='Untagged'
+                  count={entryCounts.untagged}
                   active={activeFilter === 'untagged'}
                   onClick={() => handleFilterChange('untagged')}
                   allowContextMenu
@@ -1141,7 +1146,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
 
         {/* Collections */}
         <CollapsibleSection
-          title='Collections'
+          title={collections.length > 0 ? `Collections (${collections.length})` : 'Collections'}
           isOpen={collectionsOpen}
           onOpenChange={setCollectionsOpen}
           onAdd={() => setNewCollectionDialogOpen(true)}
@@ -1186,7 +1191,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
               >
                 <ContextMenu>
                   <ContextMenuTrigger asChild>
-                    <div>
+                    <div className='w-full overflow-hidden'>
                       <SidebarItem
                         icon={
                           <FolderOpen
@@ -1269,7 +1274,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
 
         {/* Tags */}
         <CollapsibleSection
-          title={activeTagIds.length > 0 ? `Tags (${activeTagIds.length})` : 'Tags'}
+          title={visibleTags.length > 0 ? `Tags (${activeTagIds.length}/${visibleTags.length})` : 'Tags'}
           isOpen={tagsOpen}
           onOpenChange={setTagsOpen}
           onAdd={() => setTagManagementDialogOpen(true)}
@@ -1405,15 +1410,8 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
               Add tags to entries from the info panel
             </p>
           ) : (
-            <div className='max-h-[200px] overflow-y-auto'>
-              {tags
-                .filter((tag) => !hideImportedTags || !tag.isImported)
-                .filter((tag) =>
-                  tagSearchQuery
-                    ? tag.name.toLowerCase().includes(tagSearchQuery.toLowerCase())
-                    : true
-                )
-                .map((tag) => {
+            <div className='max-h-[200px] overflow-y-auto overflow-x-hidden'>
+              {visibleTags.map((tag) => {
                   const isSelected = activeTagIds.includes(tag.id);
                   return (
                     <DroppableTag
@@ -1426,7 +1424,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
                     >
                       <ContextMenu>
                         <ContextMenuTrigger asChild>
-                        <div>
+                        <div className='w-full overflow-hidden'>
                           <SidebarItem
                             icon={
                               <span className='flex items-center justify-center w-4 h-4'>
@@ -1434,18 +1432,17 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
                                   <span className='flex items-center justify-center w-3.5 h-3.5 rounded border-2 border-primary bg-primary'>
                                     <Check className='h-2.5 w-2.5 text-primary-foreground' />
                                   </span>
-                                ) : (
+                                ) : (tag.color || !tag.isImported) ? (
                                   <span
                                     className={cn(
                                       'w-2.5 h-2.5 rounded-full',
-                                      tag.isImported && !tag.color && 'border border-dashed border-muted-foreground/60',
                                       tag.isImported && tag.color && 'ring-1 ring-offset-1 ring-muted-foreground/40'
                                     )}
                                     style={{
-                                      backgroundColor: tag.color || (tag.isImported ? 'transparent' : '#6b7280')
+                                      backgroundColor: tag.color || '#6b7280'
                                     }}
                                   />
-                                )}
+                                ) : null}
                               </span>
                             }
                             label={tag.name}
@@ -1744,7 +1741,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
         onExport={exportContext?.type === 'all' ? handleExportAllBiblatexWithFiles : handleExportBiblatexWithFiles}
         entryCount={
           exportContext?.type === 'all'
-            ? allEntries.length
+            ? entryCounts.total
             : exportContext?.type === 'collection'
               ? collections.find((c) => c.id === exportContext.id)?.itemCount ?? 0
               : exportContext?.type === 'tag'

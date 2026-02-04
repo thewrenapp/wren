@@ -32,9 +32,11 @@ import {
   type ShapeType,
 } from "react-pdf-highlighter-plus";
 
+import { ChevronLeft } from "lucide-react";
 import { PDFToolbar, type SearchOptions } from "./PDFToolbar";
 import { HighlightPopup } from "./HighlightPopup";
 import { AnnotationPanel } from "./AnnotationPanel";
+import { OutlinePanel } from "./OutlinePanel";
 import {
   getAnnotations,
   createAnnotation,
@@ -254,6 +256,24 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
 
   const pdfHighlighterUtilsRef = useRef<PdfHighlighterUtils | null>(null);
   const hasInitializedUtilsRef = useRef(false);
+
+  // Auto-save drawing on mouseup (each stroke = one drawing, like shape tool)
+  useEffect(() => {
+    if (toolMode !== "drawing") return;
+
+    const handleMouseUp = () => {
+      // Small delay to let the stroke complete
+      setTimeout(() => {
+        const doneButton = document.querySelector('.DrawingCanvas__doneButton') as HTMLButtonElement;
+        if (doneButton) {
+          doneButton.click();
+        }
+      }, 100);
+    };
+
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => document.removeEventListener("mouseup", handleMouseUp);
+  }, [toolMode]);
 
   // Track dark mode from document
   useEffect(() => {
@@ -512,6 +532,41 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
       highlightType = "text";
     }
 
+    // Handle drawing content specially - stored as JSON in comment
+    if (highlightType === "drawing" && annotation.comment) {
+      try {
+        const drawingContent = JSON.parse(annotation.comment);
+        return {
+          id: String(annotation.id),
+          type: "drawing" as AppHighlight["type"],
+          position,
+          content: { image: drawingContent.image, strokes: drawingContent.strokes },
+          highlightColor: annotation.color,
+        };
+      } catch {
+        // Fall through to default handling
+      }
+    }
+
+    // Handle shape content specially - stored as JSON in comment
+    if (highlightType === "shape" && annotation.comment) {
+      try {
+        const shapeData = JSON.parse(annotation.comment);
+        return {
+          id: String(annotation.id),
+          type: "shape" as AppHighlight["type"],
+          position,
+          content: { shape: shapeData },
+          shapeType: shapeData.shapeType,
+          strokeColor: shapeData.strokeColor,
+          strokeWidth: shapeData.strokeWidth,
+          highlightColor: annotation.color,
+        };
+      } catch {
+        // Fall through to default handling
+      }
+    }
+
     // Use selectedText or comment for content
     const textContent = annotation.selectedText || annotation.comment || "";
 
@@ -622,7 +677,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         content: { image: dataUrl, strokes },
       };
       setHighlights((prev) => [...prev, newHighlight]);
-      setToolMode(null);
+      // Don't deactivate tool - keep drawing mode active for multiple strokes
 
       (async () => {
         try {
@@ -633,6 +688,8 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
             positionJson: JSON.stringify(position),
             selectedText: undefined,
             color: drawingColor,
+            // Store drawing data (image + strokes) in comment as JSON
+            comment: JSON.stringify({ image: dataUrl, strokes }),
           });
           setHighlights((prev) =>
             prev.map((h) =>
@@ -672,6 +729,8 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
             positionJson: JSON.stringify(position),
             selectedText: undefined,
             color: shape.strokeColor,
+            // Store shape data in comment as JSON
+            comment: JSON.stringify(shape),
           });
           setHighlights((prev) =>
             prev.map((h) =>
@@ -1013,7 +1072,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
               <div className="flex h-full w-full">
                 {/* Left Panel - Thumbnails, Outline & Annotations */}
                 {pdfLeftPanelOpen && (
-                  <div className="flex flex-col h-full w-[220px] border-r bg-background">
+                  <div className="relative flex flex-col h-full w-[220px] border-r bg-background overflow-visible">
                     {/* Tab bar */}
                     <div className="flex border-b px-1 py-1 gap-1">
                       <button
@@ -1057,6 +1116,13 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
                             goToPage(page);
                             // Could also scroll to the specific highlight
                           }}
+                          onDelete={handleDelete}
+                        />
+                      ) : leftPanelTab === "outline" ? (
+                        <OutlinePanel
+                          pdfDocument={pdfDocument}
+                          goToPage={goToPage}
+                          currentPage={currentPage}
                         />
                       ) : (
                         <LeftPanel
@@ -1066,12 +1132,40 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
                           eventBus={pdfHighlighterUtilsRef.current?.getEventBus()}
                           goToPage={pdfHighlighterUtilsRef.current?.goToPage}
                           isOpen={true}
-                          onOpenChange={() => {}}
+                          onOpenChange={(open) => { if (!open) togglePdfLeftPanel(); }}
                           width={220}
                           defaultTab={leftPanelTab}
                         />
                       )}
                     </div>
+
+                    {/* Toggle button for annotations/outline tabs - matches LeftPanel style */}
+                    {(leftPanelTab === "annotations" || leftPanelTab === "outline") && (
+                      <button
+                        onClick={togglePdfLeftPanel}
+                        style={{
+                          position: "absolute",
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          left: 219,
+                          zIndex: 20,
+                          width: 24,
+                          height: 48,
+                          backgroundColor: "#ffffff",
+                          border: "1px solid #e5e7eb",
+                          borderLeft: "none",
+                          borderRadius: "0 6px 6px 0",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          cursor: "pointer",
+                          boxShadow: "2px 0 8px rgba(0,0,0,0.08)",
+                        }}
+                        aria-label="Close panel"
+                      >
+                        <ChevronLeft style={{ width: 14, height: 14, color: "#6b7280" }} />
+                      </button>
+                    )}
                   </div>
                 )}
 

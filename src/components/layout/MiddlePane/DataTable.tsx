@@ -33,6 +33,13 @@ interface DataTableProps<TData> {
   isDragEnabled?: boolean;
   /** Get drag data for a row. Receives the row and selected rows if dragging a selected row */
   getDragData?: (row: TData, selectedRows: TData[]) => Record<string, unknown>;
+  /** Called when scrolling near the end of the list */
+  onEndReached?: () => void;
+  endReachedThreshold?: number;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  /** Forces a fill-viewport check when this value changes */
+  autoLoadKey?: string;
 }
 
 export function DataTable<TData>({
@@ -53,9 +60,34 @@ export function DataTable<TData>({
   onKeyboardSelect,
   isDragEnabled = false,
   getDragData,
+  onEndReached,
+  endReachedThreshold = 200,
+  hasMore = false,
+  isLoadingMore = false,
+  autoLoadKey,
 }: DataTableProps<TData>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
+
+  const handleScroll = useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      if (!onEndReached || !hasMore || isLoadingMore) return;
+      const el = event.currentTarget;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - endReachedThreshold) {
+        onEndReached();
+      }
+    },
+    [onEndReached, hasMore, isLoadingMore, endReachedThreshold],
+  );
+
+  const maybeLoadMore = useCallback(() => {
+    if (!onEndReached || !hasMore || isLoadingMore) return;
+    const el = containerRef.current;
+    if (!el) return;
+    if (el.scrollHeight <= el.clientHeight + endReachedThreshold) {
+      onEndReached();
+    }
+  }, [onEndReached, hasMore, isLoadingMore, endReachedThreshold]);
 
   // Find current focused row index based on selection
   const getFocusedIndex = useCallback(() => {
@@ -167,12 +199,31 @@ export function DataTable<TData>({
     }
   }, [selectedIds]);
 
+  useEffect(() => {
+    maybeLoadMore();
+  }, [data.length, maybeLoadMore]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      maybeLoadMore();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [maybeLoadMore]);
+
+  useEffect(() => {
+    maybeLoadMore();
+  }, [sortField, sortDirection, data.length, autoLoadKey, maybeLoadMore]);
+
   return (
     <div
       ref={containerRef}
       className="h-full overflow-auto focus:outline-none"
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      onScroll={handleScroll}
     >
       <table className="w-full border-collapse table-fixed min-w-full">
         {/* Column sizing */}

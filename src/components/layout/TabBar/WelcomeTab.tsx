@@ -4,6 +4,7 @@ import { AppLogo } from "@/components/ui/AppLogo";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/uiStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 import { useImport, useLibrarySync } from "@/hooks/useLibrarySync";
 import {
   previewBiblatexImport,
@@ -15,6 +16,7 @@ import { toast } from "@/stores/toastStore";
 
 export function WelcomeTab() {
   const { toggleCommandPalette } = useUIStore();
+  const { invalidateAttachments } = useLibraryStore();
   const { importFiles, importFolder } = useImport();
   const { refresh } = useLibrarySync();
 
@@ -75,8 +77,10 @@ export function WelcomeTab() {
     }
   };
 
-  const handleConfirmImport = async (selectedKeys: string[], importTags: boolean) => {
+  const handleConfirmImport = async (options: import('@/components/dialogs/ImportPreviewDialog').ImportOptions) => {
     if (!importFolderPath) return;
+
+    const { selectedKeys, importTags, excludedFiles, collectionId } = options;
 
     setIsImporting(true);
     try {
@@ -84,7 +88,9 @@ export function WelcomeTab() {
         importFolderPath,
         importFolderPath,
         selectedKeys,
-        importTags
+        importTags,
+        excludedFiles,
+        collectionId
       );
 
       let message = `Imported ${result.imported} ${result.imported !== 1 ? "entries" : "entry"}`;
@@ -100,6 +106,8 @@ export function WelcomeTab() {
         toast.info(`${result.skipped} entries skipped`);
       }
 
+      // Invalidate attachment cache so expanded rows refetch attachment names
+      invalidateAttachments();
       // Refresh library
       await refresh();
 

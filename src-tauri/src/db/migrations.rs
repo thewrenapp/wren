@@ -1,5 +1,7 @@
 use anyhow::Result;
-use sqlx::SqlitePool;
+use sqlx::{SqlitePool, Row};
+use crate::db::models::Creator;
+use crate::commands::entries::format_creators_display;
 
 pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     tracing::info!("Running database migrations");
@@ -49,6 +51,104 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await;
     // Ignore error if column already exists
+
+    // Migration: Add creators_sort column to entries table (if not exists)
+    let _ = sqlx::query("ALTER TABLE entries ADD COLUMN creators_sort TEXT")
+        .execute(pool)
+        .await;
+
+    // Backfill creators_sort for existing entries
+    let entry_ids: Vec<i64> = sqlx::query("SELECT id FROM entries WHERE creators_sort IS NULL OR creators_sort = ''")
+        .fetch_all(pool)
+        .await
+        .map(|rows| rows.iter().map(|r| r.get::<i64, _>("id")).collect())
+        .unwrap_or_default();
+
+    for entry_id in entry_ids {
+        let creator_rows = sqlx::query(
+            r#"
+            SELECT ec.first_name, ec.last_name, ec.name, ct.name as creator_type, ec.sort_order
+            FROM entry_creators ec
+            JOIN creator_types ct ON ec.creator_type_id = ct.id
+            WHERE ec.entry_id = ?
+            ORDER BY ec.sort_order
+            "#
+        )
+        .bind(entry_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        let creators: Vec<Creator> = creator_rows
+            .iter()
+            .map(|row| Creator {
+                id: None,
+                creator_type: row.get("creator_type"),
+                creator_type_display: None,
+                first_name: row.get("first_name"),
+                last_name: row.get("last_name"),
+                name: row.get("name"),
+                sort_order: row.get("sort_order"),
+            })
+            .collect();
+
+        let creators_sort = format_creators_display(&creators);
+        let _ = sqlx::query("UPDATE entries SET creators_sort = ? WHERE id = ?")
+            .bind(&creators_sort)
+            .bind(entry_id)
+            .execute(pool)
+            .await;
+    }
+
+    // Backfill entries_fts for existing entries
+    let entries = sqlx::query(
+        r#"
+        SELECT
+            e.id,
+            e.title,
+            (
+                SELECT ef.value
+                FROM entry_fields ef
+                JOIN fields f ON ef.field_id = f.id
+                WHERE ef.entry_id = e.id AND f.name = 'abstractNote'
+                LIMIT 1
+            ) AS abstract_note
+        FROM entries e
+        "#
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for row in entries {
+        let entry_id: i64 = row.get("id");
+        let title: String = row.get("title");
+        let abstract_note: Option<String> = row.get("abstract_note");
+        let _ = sqlx::query(
+            "INSERT OR REPLACE INTO entries_fts (rowid, title, abstract_note, entry_id) VALUES (?, ?, ?, ?)"
+        )
+        .bind(entry_id)
+        .bind(&title)
+        .bind(&abstract_note)
+        .bind(entry_id)
+        .execute(pool)
+        .await;
+    }
+
+    // Migration: Add new annotation types for PDF viewer
+    // These types are used by the frontend: text, freetext, drawing, shape
+    let _ = sqlx::query("INSERT OR IGNORE INTO annotation_types (id, name) VALUES (6, 'text')")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("INSERT OR IGNORE INTO annotation_types (id, name) VALUES (7, 'freetext')")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("INSERT OR IGNORE INTO annotation_types (id, name) VALUES (8, 'drawing')")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("INSERT OR IGNORE INTO annotation_types (id, name) VALUES (9, 'shape')")
+        .execute(pool)
+        .await;
 
     Ok(())
 }
@@ -124,6 +224,7 @@ CREATE TABLE IF NOT EXISTS entries (
     key TEXT NOT NULL UNIQUE,
     item_type_id INTEGER NOT NULL REFERENCES item_types(id),
     title TEXT NOT NULL,
+    creators_sort TEXT,
     date TEXT,
     url TEXT,
     access_date TEXT,
@@ -868,7 +969,11 @@ INSERT OR IGNORE INTO annotation_types (id, name) VALUES
     (2, 'underline'),
     (3, 'strikethrough'),
     (4, 'note'),
-    (5, 'area');
+    (5, 'area'),
+    (6, 'text'),
+    (7, 'freetext'),
+    (8, 'drawing'),
+    (9, 'shape');
 
 -- Default settings
 INSERT OR IGNORE INTO settings (key, value, value_type) VALUES
@@ -876,5 +981,6 @@ INSERT OR IGNORE INTO settings (key, value, value_type) VALUES
     ('embedding_model', 'all-MiniLM-L6-v2', 'string'),
     ('sidebar_width', '240', 'number'),
     ('right_pane_width', '320', 'number'),
-    ('right_pane_visible', 'true', 'boolean');
+    ('right_pane_visible', 'true', 'boolean'),
+    ('auto_rename_files', 'true', 'boolean');
 "#;

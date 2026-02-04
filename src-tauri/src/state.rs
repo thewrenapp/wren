@@ -12,13 +12,12 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn new(app_handle: &tauri::AppHandle) -> Result<Self> {
+    pub async fn new(_app_handle: &tauri::AppHandle) -> Result<Self> {
         let library_path = Self::get_library_path()?;
 
         // Ensure library directory exists
         std::fs::create_dir_all(&library_path)?;
-        std::fs::create_dir_all(library_path.join("files").join("pdfs"))?;
-        std::fs::create_dir_all(library_path.join("files").join("notes"))?;
+        std::fs::create_dir_all(library_path.join("files"))?;
         std::fs::create_dir_all(library_path.join(".wren"))?;
 
         // Initialize database

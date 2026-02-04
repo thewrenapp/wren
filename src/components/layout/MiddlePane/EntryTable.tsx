@@ -6,9 +6,11 @@ import { formatRelativeDate } from '@/lib/utils';
 import { EntryContextMenuContent } from './EntryContextMenu';
 import { TrashContextMenuContent } from './TrashContextMenu';
 import { DataTable, type Column } from './DataTable';
-import { deleteAttachment } from '@/services/tauri';
+import { deleteAttachment, exportToBiblatexWithFiles, type ExportOptions } from '@/services/tauri';
 import { toast } from '@/stores/toastStore';
 import type { EntryDragData } from '@/components/dnd/DragDropProvider';
+import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +34,10 @@ interface EntryTableProps {
   attachmentsMap?: Record<number, Attachment[]>;
   /** Callback for keyboard navigation selection */
   onKeyboardSelect?: (id: number) => void;
+  onEndReached?: () => void;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  autoLoadKey?: string;
 }
 
 export function EntryTable({
@@ -48,6 +54,10 @@ export function EntryTable({
   onAttachmentDoubleClick,
   attachmentsMap = {},
   onKeyboardSelect,
+  onEndReached,
+  hasMore = false,
+  isLoadingMore = false,
+  autoLoadKey,
 }: EntryTableProps) {
   const { columns: columnConfig, activeFilter } = useUIStore();
   const visibleColumns = columnConfig.filter((col) => col.visible);
@@ -62,6 +72,11 @@ export function EntryTable({
     attachment: Attachment;
     entryId: number;
   } | null>(null);
+
+  // Export dialog state (lifted up so it persists after context menu closes)
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportTargetIds, setExportTargetIds] = useState<number[]>([]);
 
   const handleContextMenu = (entry: EntrySummary, event: React.MouseEvent) => {
     // Select the entry if not already in selection
@@ -90,6 +105,35 @@ export function EntryTable({
     setContextMenuEntry(null);
     setContextMenuAttachment(null);
   }, []);
+
+  const handleShowExportDialog = useCallback((entryIds: number[]) => {
+    setExportTargetIds(entryIds);
+    setShowExportDialog(true);
+  }, []);
+
+  const handleExportBiblatexWithFiles = useCallback(async (options: ExportOptions) => {
+    // Close the options dialog first - we're starting the export flow
+    setShowExportDialog(false);
+
+    try {
+      setIsExporting(true);
+      const outputDir = await open({
+        directory: true,
+        title: 'Select Export Folder',
+      });
+      if (outputDir) {
+        const result = await exportToBiblatexWithFiles(exportTargetIds, outputDir, options);
+        toast.success(
+          `Exported ${result.entriesExported} entries, ${result.filesExported} files, ${result.notesExported} notes`,
+        );
+      }
+    } catch (err) {
+      console.error('Failed to export to BibLaTeX:', err);
+      toast.error('Failed to export to BibLaTeX');
+    } finally {
+      setIsExporting(false);
+    }
+  }, [exportTargetIds]);
 
   const handleDeleteAttachment = async () => {
     if (!contextMenuAttachment) return;
@@ -122,9 +166,9 @@ export function EntryTable({
             ...baseColumn,
             cell: (entry: EntrySummary) => (
               <div className='flex items-center gap-2 min-w-0'>
-                {entry.tags.length > 0 && (
+                {entry.tags.filter(t => t.color || !t.isImported).length > 0 && (
                   <div className='flex items-center gap-0.5 flex-shrink-0'>
-                    {entry.tags.slice(0, 3).map((tag) => (
+                    {entry.tags.filter(t => t.color || !t.isImported).slice(0, 3).map((tag) => (
                       <span
                         key={tag.id}
                         className='w-2 h-2 rounded-full'
@@ -132,9 +176,9 @@ export function EntryTable({
                         title={tag.name}
                       />
                     ))}
-                    {entry.tags.length > 3 && (
+                    {entry.tags.filter(t => t.color || !t.isImported).length > 3 && (
                       <span className='text-xs text-muted-foreground ml-0.5'>
-                        +{entry.tags.length - 3}
+                        +{entry.tags.filter(t => t.color || !t.isImported).length - 3}
                       </span>
                     )}
                   </div>
@@ -167,7 +211,7 @@ export function EntryTable({
             ...baseColumn,
             cell: (entry: EntrySummary) => (
               <span className='text-muted-foreground capitalize'>
-                {entry.itemType.replace(/_/g, ' ')}
+                {entry.itemTypeDisplay || entry.itemType?.replace(/_/g, ' ') || '—'}
               </span>
             ),
           };
@@ -217,10 +261,13 @@ export function EntryTable({
                     className='flex items-center gap-1 px-1.5 py-0.5 text-xs bg-muted rounded truncate max-w-[80px]'
                     title={tag.name}
                   >
-                    <span
-                      className='w-2 h-2 rounded-full flex-shrink-0'
-                      style={{ backgroundColor: tag.color || '#6b7280' }}
-                    />
+                    {/* Only show color dot if tag has a color or is not imported */}
+                    {(tag.color || !tag.isImported) && (
+                      <span
+                        className='w-2 h-2 rounded-full flex-shrink-0'
+                        style={{ backgroundColor: tag.color || '#6b7280' }}
+                      />
+                    )}
                     <span className='truncate'>{tag.name}</span>
                   </span>
                 ))}
@@ -300,6 +347,10 @@ export function EntryTable({
           entryIds: selectedEntries.map((e) => e.id),
           entries: selectedEntries,
         } satisfies EntryDragData)}
+        onEndReached={onEndReached}
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        autoLoadKey={autoLoadKey}
       />
 
       {/* Trash Context Menu - separate DropdownMenu to avoid conditional rendering issues */}
@@ -361,7 +412,7 @@ export function EntryTable({
             alignOffset={0}
           >
             {contextMenuEntry && (
-              <EntryContextMenuContent entry={contextMenuEntry} onClose={closeContextMenu} />
+              <EntryContextMenuContent entry={contextMenuEntry} onClose={closeContextMenu} onShowExportDialog={handleShowExportDialog} />
             )}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -417,6 +468,15 @@ export function EntryTable({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {/* Export Options Dialog - rendered outside menus so it persists after menu closes */}
+      <ExportOptionsDialog
+        open={showExportDialog}
+        onClose={() => setShowExportDialog(false)}
+        onExport={handleExportBiblatexWithFiles}
+        entryCount={exportTargetIds.length}
+        isExporting={isExporting}
+      />
     </>
   );
 }

@@ -13,6 +13,7 @@ export function ShortcutsSection() {
           <ShortcutRow keys={["⌘", "1-9"]} description="Switch to tab by number" />
           <ShortcutRow keys={["⌘", "⇧", "["]} description="Previous tab" />
           <ShortcutRow keys={["⌘", "⇧", "]"]} description="Next tab" />
+          <ShortcutRow keys={["⌘", "I"]} description="Toggle info panel" />
         </div>
       </section>
 
@@ -30,6 +31,12 @@ export function ShortcutsSection() {
           <ShortcutRow keys={["Esc"]} description="Clear selection" />
           <ShortcutRow keys={["Enter"]} description="Open selected item" />
           <ShortcutRow keys={["Delete"]} description="Move selected to trash" />
+          <ShortcutRow keys={["⌘", "D"]} description="Duplicate entry" />
+          <ShortcutRow keys={["⌘", "E"]} description="Copy as BibTeX" />
+          <ShortcutRow keys={["⌘", "⇧", "T"]} description="Copy title" />
+          <ShortcutRow keys={["⌘", "⇧", "R"]} description="Reveal in Finder" />
+          <ShortcutRow keys={["⌘", "⇧", "A"]} description="Add PDF attachment" />
+          <ShortcutRow keys={["⌘", "⇧", "Z"]} description="Restore from trash" />
         </div>
       </section>
 
@@ -42,9 +49,11 @@ export function ShortcutsSection() {
         <div className="space-y-1">
           <ShortcutRow keys={["⌘", "+"]} description="Zoom in" />
           <ShortcutRow keys={["⌘", "-"]} description="Zoom out" />
-          <ShortcutRow keys={["⌘", "0"]} description="Reset zoom" />
+          <ShortcutRow keys={["⌘", "0"]} description="Fit to width" />
           <ShortcutRow keys={["Space"]} description="Scroll down" />
           <ShortcutRow keys={["⇧", "Space"]} description="Scroll up" />
+          <ShortcutRow keys={["⌘", "C"]} description="Copy selected text" />
+          <ShortcutRow keys={["⌘", "F"]} description="Search in document" />
         </div>
       </section>
 
@@ -58,7 +67,7 @@ export function ShortcutsSection() {
           <ShortcutRow keys={["⌘", "S"]} description="Save note" />
           <ShortcutRow keys={["⌘", "B"]} description="Bold text" />
           <ShortcutRow keys={["⌘", "I"]} description="Italic text" />
-          <ShortcutRow keys={["⌘", "["]} description="Insert link" />
+          <ShortcutRow keys={["⌘", "K"]} description="Insert link" />
         </div>
       </section>
     </div>

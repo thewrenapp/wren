@@ -50,6 +50,9 @@ pdf-extract = "0.7"
 # File watching (for later phases)
 # notify = "7"
 
+# BibTeX/BibLaTeX parsing and writing
+biblatex = "0.11"
+
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

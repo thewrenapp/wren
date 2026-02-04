@@ -100,6 +100,7 @@ export interface EntrySummary {
   attachmentCount: number;
   hasPdf: boolean;
   hasNote: boolean;
+  hasWeblink: boolean;
   thumbnailPath?: string;
 }
 
@@ -164,6 +165,16 @@ export async function getEntries(params?: {
   tagMode?: 'and' | 'or';
   attachmentType?: string;
   searchQuery?: string;
+  searchScope?: 'title_creator_year' | 'fields_tags' | 'everything';
+  advancedSearch?: {
+    matchMode: 'all' | 'any';
+    criteria: {
+      field: string;
+      operator: string;
+      value?: string | null;
+    }[];
+  };
+  filterType?: string;
 }): Promise<EntrySummary[]> {
   return invoke('get_entries', {
     collectionId: params?.collectionId ?? null,
@@ -171,7 +182,68 @@ export async function getEntries(params?: {
     tagMode: params?.tagMode ?? null,
     attachmentType: params?.attachmentType ?? null,
     searchQuery: params?.searchQuery ?? null,
+    searchScope: params?.searchScope ?? null,
+    advancedSearch: params?.advancedSearch ?? null,
+    filterType: params?.filterType ?? null,
   });
+}
+
+export type EntriesPage = {
+  entries: EntrySummary[];
+  total: number;
+};
+
+export async function getEntriesPaged(params?: {
+  collectionId?: number;
+  tagIds?: number[];
+  tagMode?: 'and' | 'or';
+  attachmentType?: string;
+  searchQuery?: string;
+  searchScope?: 'title_creator_year' | 'fields_tags' | 'everything';
+  advancedSearch?: {
+    matchMode: 'all' | 'any';
+    criteria: {
+      field: string;
+      operator: string;
+      value?: string | null;
+    }[];
+  };
+  filterType?: string;
+  sortField?: 'title' | 'creator' | 'year' | 'dateAdded' | 'dateModified' | 'itemType';
+  sortDirection?: 'asc' | 'desc';
+  secondarySortField?: 'title' | 'creator' | 'year' | 'dateAdded' | 'dateModified' | 'itemType';
+  secondarySortDirection?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+}): Promise<EntriesPage> {
+  return invoke('get_entries_paged', {
+    collectionId: params?.collectionId ?? null,
+    tagIds: params?.tagIds ?? null,
+    tagMode: params?.tagMode ?? null,
+    attachmentType: params?.attachmentType ?? null,
+    searchQuery: params?.searchQuery ?? null,
+    searchScope: params?.searchScope ?? null,
+    advancedSearch: params?.advancedSearch ?? null,
+    filterType: params?.filterType ?? null,
+    sortField: params?.sortField ?? null,
+    sortDirection: params?.sortDirection ?? null,
+    secondarySortField: params?.secondarySortField ?? null,
+    secondarySortDirection: params?.secondarySortDirection ?? null,
+    limitValue: params?.limit ?? null,
+    offsetValue: params?.offset ?? null,
+  });
+}
+
+export type EntryCounts = {
+  total: number;
+  pdf: number;
+  note: number;
+  recent: number;
+  untagged: number;
+};
+
+export async function getEntryCounts(): Promise<EntryCounts> {
+  return invoke('get_entry_counts');
 }
 
 export async function getEntry(id: number, includeDeleted?: boolean): Promise<Entry> {
@@ -192,6 +264,10 @@ export async function deleteEntry(id: number): Promise<void> {
 
 export async function duplicateEntry(id: number): Promise<Entry> {
   return invoke('duplicate_entry', { id });
+}
+
+export async function repairEntryAttachments(entryId: number): Promise<string[]> {
+  return invoke('repair_entry_attachments', { entryId });
 }
 
 // =====================================================
@@ -414,12 +490,16 @@ export async function importBiblatexWithFiles(
   filesBasePath?: string,
   selectedKeys?: string[],
   importTags?: boolean,
+  excludedFiles?: Record<string, number[]>,
+  collectionId?: number,
 ): Promise<BiblatexImportResult> {
   return invoke('import_biblatex_with_files', {
     biblatexPath,
     filesBasePath: filesBasePath ?? null,
     selectedKeys: selectedKeys ?? null,
     importTags: importTags ?? null,
+    excludedFiles: excludedFiles ?? null,
+    collectionId: collectionId ?? null,
   });
 }
 
@@ -492,6 +572,10 @@ export async function getAttachmentTypes(): Promise<AttachmentType[]> {
 
 export async function showEntryInFinder(entryId: number): Promise<void> {
   return invoke('show_entry_in_finder', { entryId });
+}
+
+export async function showEntriesInFinder(entryIds: number[]): Promise<void> {
+  return invoke('show_entries_in_finder', { entryIds });
 }
 
 // =====================================================

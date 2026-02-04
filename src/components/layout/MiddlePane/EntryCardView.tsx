@@ -20,6 +20,7 @@ interface EntryCardViewProps {
   onEntryClick: (id: number, event: React.MouseEvent) => void;
   onEntryDoubleClick: (id: number) => void;
   isTrashView?: boolean;
+  footer?: React.ReactNode;
 }
 
 // Map item types to icons (Zotero-compatible)
@@ -74,6 +75,7 @@ export function EntryCardView({
   onEntryClick,
   onEntryDoubleClick,
   isTrashView = false,
+  footer,
 }: EntryCardViewProps) {
   return (
     <div className='grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-3'>
@@ -150,10 +152,13 @@ export function EntryCardView({
                       className='flex items-center gap-1 px-1.5 py-0.5 text-xs bg-muted rounded truncate max-w-full'
                       title={tag.name}
                     >
-                      <span
-                        className='w-2 h-2 rounded-full flex-shrink-0'
-                        style={{ backgroundColor: tag.color || '#6b7280' }}
-                      />
+                      {/* Only show color dot if tag has a color or is not imported */}
+                      {(tag.color || !tag.isImported) && (
+                        <span
+                          className='w-2 h-2 rounded-full flex-shrink-0'
+                          style={{ backgroundColor: tag.color || '#6b7280' }}
+                        />
+                      )}
                       <span className='truncate'>{tag.name}</span>
                     </span>
                   ))}
@@ -166,6 +171,11 @@ export function EntryCardView({
           </Wrapper>
         );
       })}
+      {footer && (
+        <div className='col-span-full'>
+          {footer}
+        </div>
+      )}
     </div>
   );
 }

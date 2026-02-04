@@ -66,7 +66,7 @@ export function DroppableTag({
     <div
       ref={setNodeRef}
       className={cn(
-        'transition-all duration-150',
+        'transition-all duration-150 w-full overflow-hidden',
         showDropHighlight && 'ring-2 ring-primary ring-offset-1 rounded-md bg-accent/50',
         isDragging && 'opacity-50',
         className

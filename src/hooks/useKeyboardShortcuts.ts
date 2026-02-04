@@ -1,8 +1,18 @@
 import { useEffect, useCallback } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
-import { deleteEntry, duplicateEntry, exportToBibtex } from "@/services/tauri";
+import {
+  deleteEntry,
+  duplicateEntry,
+  exportToBibtex,
+  showEntryInFinder,
+  showEntriesInFinder,
+  addPdfAttachment,
+  restoreEntry,
+  getTrashCount,
+} from "@/services/tauri";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "@/stores/toastStore";
 
@@ -10,11 +20,18 @@ import { toast } from "@/stores/toastStore";
 const BULK_DELETE_THRESHOLD = 3;
 
 export function useKeyboardShortcuts() {
-  const { toggleCommandPalette, setViewMode, viewModeByFilter, activeFilter, showDeleteConfirmation } = useUIStore();
-  const viewMode = viewModeByFilter[activeFilter];
+  const { toggleCommandPalette, toggleInfoPane, setViewMode, viewModeByFilter, activeFilter: uiActiveFilter, showDeleteConfirmation } = useUIStore();
+  const viewMode = viewModeByFilter[uiActiveFilter];
   const { closeTab, activeTabId, tabs, setActiveTab, openTab } = useTabStore();
-  const { selectedEntryIds, entries, selectEntry, clearSelection, refreshLibrary } =
-    useLibraryStore();
+  const {
+    selectedEntryIds,
+    entries,
+    selectEntry,
+    clearSelection,
+    refreshLibrary,
+    setTrashCount,
+    invalidateAttachments,
+  } = useLibraryStore();
 
   // Actual delete operation
   const performDelete = useCallback(async () => {
@@ -73,6 +90,79 @@ export function useKeyboardShortcuts() {
       toast.error("Failed to export");
     }
   }, [selectedEntryIds]);
+
+  // Handle show in Finder
+  const handleShowInFinder = useCallback(async () => {
+    if (selectedEntryIds.length === 0) return;
+
+    try {
+      if (selectedEntryIds.length === 1) {
+        await showEntryInFinder(selectedEntryIds[0]);
+      } else {
+        await showEntriesInFinder(selectedEntryIds);
+      }
+    } catch (err) {
+      console.error("Failed to show in Finder:", err);
+      toast.error("Failed to show in Finder");
+    }
+  }, [selectedEntryIds]);
+
+  // Handle copy title
+  const handleCopyTitle = useCallback(async () => {
+    if (selectedEntryIds.length === 0) return;
+
+    const selectedEntries = entries.filter((e) => selectedEntryIds.includes(e.id));
+    const titles = selectedEntries.map((e) => e.title).join("\n");
+
+    try {
+      await writeText(titles);
+      toast.success(selectedEntryIds.length > 1 ? `${selectedEntryIds.length} titles copied` : "Title copied");
+    } catch (err) {
+      console.error("Failed to copy title:", err);
+      toast.error("Failed to copy title");
+    }
+  }, [selectedEntryIds, entries]);
+
+  // Handle add PDF attachment
+  const handleAddAttachment = useCallback(async () => {
+    if (selectedEntryIds.length !== 1) return;
+
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (selected && typeof selected === "string") {
+        await addPdfAttachment(selectedEntryIds[0], selected);
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.success("PDF attached");
+      }
+    } catch (err) {
+      console.error("Failed to attach PDF:", err);
+      toast.error("Failed to attach PDF");
+    }
+  }, [selectedEntryIds, invalidateAttachments, refreshLibrary]);
+
+  // Handle restore from trash
+  const handleRestoreFromTrash = useCallback(async () => {
+    if (selectedEntryIds.length === 0) return;
+    if (uiActiveFilter !== "trash") return;
+
+    try {
+      for (const id of selectedEntryIds) {
+        await restoreEntry(id);
+      }
+      toast.success(`Restored ${selectedEntryIds.length} entries from trash`);
+      const count = await getTrashCount();
+      setTrashCount(count);
+      clearSelection();
+      await refreshLibrary();
+    } catch (err) {
+      console.error("Failed to restore entries:", err);
+      toast.error("Failed to restore entries");
+    }
+  }, [selectedEntryIds, uiActiveFilter, setTrashCount, clearSelection, refreshLibrary]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -217,12 +307,48 @@ export function useKeyboardShortcuts() {
         handleExport();
         return;
       }
+
+      // Cmd+I: Toggle Info Panel
+      if (isMeta && e.key === "i") {
+        e.preventDefault();
+        toggleInfoPane();
+        return;
+      }
+
+      // Cmd+Shift+R: Show in Finder
+      if (isMeta && isShift && e.key === "R" && selectedEntryIds.length > 0) {
+        e.preventDefault();
+        handleShowInFinder();
+        return;
+      }
+
+      // Cmd+Shift+T: Copy Title
+      if (isMeta && isShift && e.key === "T" && selectedEntryIds.length > 0) {
+        e.preventDefault();
+        handleCopyTitle();
+        return;
+      }
+
+      // Cmd+Shift+A: Add PDF Attachment
+      if (isMeta && isShift && e.key === "A" && selectedEntryIds.length === 1) {
+        e.preventDefault();
+        handleAddAttachment();
+        return;
+      }
+
+      // Cmd+Shift+Z: Restore from Trash
+      if (isMeta && isShift && e.key === "Z" && selectedEntryIds.length > 0 && uiActiveFilter === "trash") {
+        e.preventDefault();
+        handleRestoreFromTrash();
+        return;
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
     toggleCommandPalette,
+    toggleInfoPane,
     setViewMode,
     viewMode,
     closeTab,
@@ -237,5 +363,10 @@ export function useKeyboardShortcuts() {
     handleDeleteSelected,
     handleDuplicate,
     handleExport,
+    handleShowInFinder,
+    handleCopyTitle,
+    handleAddAttachment,
+    handleRestoreFromTrash,
+    uiActiveFilter,
   ]);
 }

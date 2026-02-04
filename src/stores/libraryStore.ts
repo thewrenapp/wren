@@ -22,16 +22,24 @@ export type LibraryFilter =
 
 // Tag filter mode
 export type TagFilterMode = 'and' | 'or';
+export type LibrarySearchScope = 'title_creator_year' | 'fields_tags' | 'everything';
 
 interface LibraryState {
   // Data
   entries: EntrySummary[];
-  allEntries: EntrySummary[];
   currentEntry: Entry | null;
   itemTypes: ItemType[];
   attachmentTypes: AttachmentType[];
   collections: Collection[];
   tags: Tag[];
+  entryCounts: {
+    total: number;
+    pdf: number;
+    note: number;
+    recent: number;
+    untagged: number;
+  };
+  currentTotal: number;
 
   // Selection
   selectedEntryIds: number[];
@@ -42,12 +50,14 @@ interface LibraryState {
   activeTagIds: number[];
   tagFilterMode: TagFilterMode;
   searchQuery: string;
+  searchScope: LibrarySearchScope;
 
   // Expanded entries (for tree view)
   expandedEntryIds: number[];
 
   // Loading states
   isLoading: boolean;
+  isLoadingMore: boolean;
   error: string | null;
 
   // Attachment cache invalidation
@@ -62,11 +72,17 @@ interface LibraryState {
 
   // Entry Actions
   setEntries: (entries: EntrySummary[]) => void;
-  setAllEntries: (entries: EntrySummary[]) => void;
+  appendEntries: (entries: EntrySummary[]) => void;
   addEntry: (entry: EntrySummary) => void;
   updateEntry: (id: number, updates: Partial<EntrySummary>) => void;
   removeEntry: (id: number) => void;
   setCurrentEntry: (entry: Entry | null) => void;
+  setEntryCounts: (counts: LibraryState['entryCounts']) => void;
+  setCurrentTotal: (total: number) => void;
+  setHasMore: (hasMore: boolean) => void;
+  setLoadingMore: (loading: boolean) => void;
+  setPageOffset: (offset: number) => void;
+  resetPaging: () => void;
 
   // Type Actions
   setItemTypes: (types: ItemType[]) => void;
@@ -98,6 +114,7 @@ interface LibraryState {
   setTagFilterMode: (mode: TagFilterMode) => void;
   clearActiveTags: () => void;
   setSearchQuery: (query: string) => void;
+  setSearchScope: (scope: LibrarySearchScope) => void;
 
   // Loading Actions
   setLoading: (loading: boolean) => void;
@@ -117,53 +134,94 @@ interface LibraryState {
   _refreshFn: (() => Promise<void>) | null;
   _setRefreshFn: (fn: (() => Promise<void>) | null) => void;
   refreshLibrary: () => Promise<void>;
+
+  // Load more function for lazy loading
+  _loadMoreFn: (() => Promise<void>) | null;
+  _setLoadMoreFn: (fn: (() => Promise<void>) | null) => void;
+  loadNextPage: () => Promise<void>;
+
+  // Pagination state
+  hasMore: boolean;
+  pageOffset: number;
 }
 
 export const useLibraryStore = create<LibraryState>()((set) => ({
   // Initial state
   entries: [],
-  allEntries: [],
   currentEntry: null,
   itemTypes: [],
   attachmentTypes: [],
   collections: [],
   tags: [],
+  entryCounts: {
+    total: 0,
+    pdf: 0,
+    note: 0,
+    recent: 0,
+    untagged: 0,
+  },
+  currentTotal: 0,
   selectedEntryIds: [],
   activeFilter: { type: 'all' },
   activeCollectionId: null,
   activeTagIds: [],
   tagFilterMode: 'or',
   searchQuery: '',
+  searchScope: 'title_creator_year',
   expandedEntryIds: [],
   isLoading: false,
+  isLoadingMore: false,
   error: null,
   attachmentVersion: 0,
   entryVersion: 0,
   trashCount: 0,
   trashedEntries: [],
+  hasMore: false,
+  pageOffset: 0,
 
   // Entry actions
   setEntries: (entries) => set({ entries }),
-  setAllEntries: (entries) => set({ allEntries: entries }),
+  appendEntries: (entries) =>
+    set((state) => {
+      if (entries.length === 0) return { entries: state.entries };
+      const existingIds = new Set(state.entries.map((entry) => entry.id));
+      const nextEntries = entries.filter((entry) => !existingIds.has(entry.id));
+      if (nextEntries.length === 0) {
+        return { entries: state.entries };
+      }
+      return { entries: [...state.entries, ...nextEntries] };
+    }),
+  setEntryCounts: (counts) => set({ entryCounts: counts }),
+  setCurrentTotal: (total) => set({ currentTotal: total }),
+  setHasMore: (hasMore) => set({ hasMore }),
+  setLoadingMore: (loading) => set({ isLoadingMore: loading }),
+  setPageOffset: (offset) => set({ pageOffset: offset }),
+  resetPaging: () =>
+    set({
+      entries: [],
+      currentTotal: 0,
+      hasMore: false,
+      pageOffset: 0,
+    }),
 
   addEntry: (entry) =>
     set((state) => ({
       entries: [entry, ...state.entries],
-      allEntries: [entry, ...state.allEntries],
+      currentTotal: state.currentTotal + 1,
+      entryCounts: {
+        ...state.entryCounts,
+        total: state.entryCounts.total + 1,
+      },
     })),
 
   updateEntry: (id, updates) =>
     set((state) => ({
       entries: state.entries.map((entry) => (entry.id === id ? { ...entry, ...updates } : entry)),
-      allEntries: state.allEntries.map((entry) =>
-        entry.id === id ? { ...entry, ...updates } : entry,
-      ),
     })),
 
   removeEntry: (id) =>
     set((state) => ({
       entries: state.entries.filter((entry) => entry.id !== id),
-      allEntries: state.allEntries.filter((entry) => entry.id !== id),
       selectedEntryIds: state.selectedEntryIds.filter((i) => i !== id),
       expandedEntryIds: state.expandedEntryIds.filter((i) => i !== id),
     })),
@@ -298,6 +356,7 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
     }),
 
   setSearchQuery: (query) => set({ searchQuery: query }),
+  setSearchScope: (scope) => set({ searchScope: scope }),
 
   // Loading actions
   setLoading: (loading) => set({ isLoading: loading }),
@@ -321,6 +380,16 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
     const state = useLibraryStore.getState();
     if (state._refreshFn) {
       await state._refreshFn();
+    }
+  },
+
+  // Load more function management
+  _loadMoreFn: null,
+  _setLoadMoreFn: (fn) => set({ _loadMoreFn: fn }),
+  loadNextPage: async () => {
+    const state = useLibraryStore.getState();
+    if (state._loadMoreFn) {
+      await state._loadMoreFn();
     }
   },
 }));

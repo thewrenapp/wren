@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Highlighter,
   BoxSelect,
@@ -9,7 +9,7 @@ import {
   Copy,
   FileJson,
   FileText,
-  ChevronDown,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -19,11 +19,18 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { toast } from "@/stores/toastStore";
+import { SidebarSearchInput } from "./SidebarSearchInput";
 
 interface AnnotationHighlight {
   id: string;
@@ -48,6 +55,7 @@ interface AnnotationHighlight {
 interface AnnotationPanelProps {
   annotations: AnnotationHighlight[];
   onAnnotationClick?: (annotationId: string, pageNumber: number) => void;
+  onDelete?: (annotationId: string) => void;
   pdfTitle?: string;
 }
 
@@ -85,11 +93,23 @@ function getAnnotationLabel(type?: string) {
   }
 }
 
-export function AnnotationPanel({ annotations, onAnnotationClick, pdfTitle }: AnnotationPanelProps) {
+export function AnnotationPanel({ annotations, onAnnotationClick, onDelete, pdfTitle }: AnnotationPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  // Group annotations by page
-  const annotationsByPage = annotations.reduce((acc, ann) => {
+  // Filter annotations by search query
+  const filteredAnnotations = useMemo(() => {
+    if (!searchQuery.trim()) return annotations;
+
+    const query = searchQuery.toLowerCase();
+    return annotations.filter((ann) => {
+      const text = ann.selectedText || ann.content?.text || "";
+      return text.toLowerCase().includes(query);
+    });
+  }, [annotations, searchQuery]);
+
+  // Group filtered annotations by page
+  const annotationsByPage = filteredAnnotations.reduce((acc, ann) => {
     const page = ann.position.boundingRect.pageNumber;
     if (!acc[page]) acc[page] = [];
     acc[page].push(ann);
@@ -194,34 +214,52 @@ export function AnnotationPanel({ annotations, onAnnotationClick, pdfTitle }: An
 
   if (annotations.length === 0) {
     return (
-      <div className="h-full flex flex-col">
-        <div className="px-3 py-2 border-b flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Annotations</h3>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          // 48px + ~44px for the internal tab bar that Outline/Pages have
+          padding: "92px 20px 48px 20px",
+        }}
+      >
+        <div
+          style={{
+            width: 56,
+            height: 56,
+            borderRadius: "50%",
+            backgroundColor: "#f1f5f9",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            marginBottom: 16,
+          }}
+        >
+          <Highlighter style={{ width: 28, height: 28, color: "#94a3b8" }} />
         </div>
-        <div className="flex-1 flex items-center justify-center p-4">
-          <p className="text-sm text-muted-foreground text-center">
-            No annotations yet.
-            <br />
-            Use the edit mode to add highlights and notes.
-          </p>
-        </div>
+        <p style={{ fontSize: 14, fontWeight: 500, color: "#475569", marginBottom: 4 }}>
+          No annotations yet
+        </p>
+        <p style={{ fontSize: 13, color: "#94a3b8", textAlign: "center" }}>
+          Use the toolbar to add highlights and notes
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" data-sidebar-panel>
       {/* Header */}
-      <div className="px-3 py-2 border-b flex items-center justify-between">
-        <h3 className="text-sm font-semibold">
-          Annotations ({annotations.length})
-        </h3>
-        <DropdownMenu>
+      <div className="px-2 py-1.5 border-b space-y-1.5">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-medium">
+            Annotations ({annotations.length})
+          </h3>
+          <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="h-7 px-2">
-              <Download className="h-3.5 w-3.5 mr-1" />
-              Export
-              <ChevronDown className="h-3 w-3 ml-1" />
+            <Button variant="ghost" size="icon" className="h-6 w-6">
+              <Download className="h-3.5 w-3.5" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -239,65 +277,93 @@ export function AnnotationPanel({ annotations, onAnnotationClick, pdfTitle }: An
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
+        {/* Search input */}
+        <SidebarSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search annotations..."
+        />
       </div>
+
+      {/* No results state */}
+      {searchQuery && filteredAnnotations.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-8 px-4">
+          <p className="text-xs text-muted-foreground text-center">
+            No annotations matching "{searchQuery}"
+          </p>
+        </div>
+      )}
 
       {/* Annotation list */}
       <ScrollArea className="flex-1">
-        <div className="p-2 space-y-3">
+        <div className="p-1.5 space-y-2">
           {sortedPages.map((page) => (
             <div key={page}>
-              <div className="text-xs font-medium text-muted-foreground px-2 py-1">
+              <div className="text-[10px] font-medium text-muted-foreground px-1.5 py-0.5">
                 Page {page}
               </div>
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {annotationsByPage[page].map((annotation) => {
                   const text = annotation.selectedText || annotation.content?.text || "";
-                  const preview = text.length > 100 ? text.slice(0, 100) + "..." : text;
+                  const preview = text.length > 80 ? text.slice(0, 80) + "..." : text;
 
                   return (
-                    <button
-                      key={annotation.id}
-                      onClick={() => handleAnnotationClick(annotation)}
-                      className={cn(
-                        "w-full text-left px-2 py-1.5 rounded-md transition-colors",
-                        "hover:bg-muted/50",
-                        selectedId === annotation.id && "bg-muted"
-                      )}
-                    >
-                      <div className="flex items-start gap-2">
-                        <span
-                          className="mt-0.5 flex-shrink-0"
-                          style={{ color: annotation.highlightColor }}
+                    <ContextMenu key={annotation.id}>
+                      <ContextMenuTrigger asChild>
+                        <button
+                          onClick={() => handleAnnotationClick(annotation)}
+                          className={cn(
+                            "w-full text-left px-1.5 py-1 rounded transition-colors",
+                            "hover:bg-muted/50",
+                            selectedId === annotation.id && "bg-muted"
+                          )}
                         >
-                          {getAnnotationIcon(annotation.type)}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium text-muted-foreground">
-                            {getAnnotationLabel(annotation.type)}
+                          <div className="flex items-start gap-1.5">
+                            <span
+                              className="mt-px flex-shrink-0"
+                              style={{ color: annotation.highlightColor }}
+                            >
+                              {getAnnotationIcon(annotation.type)}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[10px] font-medium text-muted-foreground">
+                                {getAnnotationLabel(annotation.type)}
+                              </div>
+                              {preview && (
+                                <p className="text-xs text-foreground/90 line-clamp-2 leading-tight">
+                                  {preview}
+                                </p>
+                              )}
+                              {!preview && annotation.type === "area" && (
+                                <p className="text-[10px] text-muted-foreground italic">
+                                  Area selection
+                                </p>
+                              )}
+                              {!preview && annotation.type === "drawing" && (
+                                <p className="text-[10px] text-muted-foreground italic">
+                                  Freehand drawing
+                                </p>
+                              )}
+                              {!preview && annotation.type === "shape" && (
+                                <p className="text-[10px] text-muted-foreground italic">
+                                  Rectangle shape
+                                </p>
+                              )}
+                            </div>
                           </div>
-                          {preview && (
-                            <p className="text-sm text-foreground/90 line-clamp-2">
-                              {preview}
-                            </p>
-                          )}
-                          {!preview && annotation.type === "area" && (
-                            <p className="text-xs text-muted-foreground italic">
-                              Area selection
-                            </p>
-                          )}
-                          {!preview && annotation.type === "drawing" && (
-                            <p className="text-xs text-muted-foreground italic">
-                              Freehand drawing
-                            </p>
-                          )}
-                          {!preview && annotation.type === "shape" && (
-                            <p className="text-xs text-muted-foreground italic">
-                              Rectangle shape
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </button>
+                        </button>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem
+                          onClick={() => onDelete?.(annotation.id)}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Delete
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                   );
                 })}
               </div>

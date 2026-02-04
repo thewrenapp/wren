@@ -68,6 +68,7 @@ interface UIState {
 
   // Command palette
   commandPaletteOpen: boolean;
+  commandPaletteMode: 'default' | 'advanced' | 'ai';
 
   // Settings dialog
   settingsOpen: boolean;
@@ -105,6 +106,7 @@ interface UIState {
   setSecondarySort: (field: SortField | null, direction?: SortDirection) => void;
   toggleSortDirection: () => void;
   setCommandPaletteOpen: (open: boolean) => void;
+  setCommandPaletteMode: (mode: UIState['commandPaletteMode']) => void;
   toggleCommandPalette: () => void;
   setSettingsOpen: (open: boolean) => void;
   setNewCollectionDialogOpen: (open: boolean) => void;
@@ -157,6 +159,7 @@ export const useUIStore = create<UIState>()(
       infoPaneOpen: true,
       pdfLeftPanelOpen: true,
       commandPaletteOpen: false,
+      commandPaletteMode: 'default',
       settingsOpen: false,
       newCollectionDialogOpen: false,
       tagManagementDialogOpen: false,
@@ -213,6 +216,7 @@ export const useUIStore = create<UIState>()(
         })),
 
       setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+      setCommandPaletteMode: (mode) => set({ commandPaletteMode: mode }),
 
       toggleCommandPalette: () =>
         set((state) => ({ commandPaletteOpen: !state.commandPaletteOpen })),

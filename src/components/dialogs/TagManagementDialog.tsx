@@ -104,7 +104,7 @@ export function TagManagementDialog({ open, onOpenChange, tags }: TagManagementD
     setSelectedIds(new Set(tags.filter((t) => t.isImported).map((t) => t.id)));
   };
 
-  const refreshAndReset = async () => {
+  const refreshAndReset = async (closeDialog = false) => {
     const allTags = await getTags();
     setTags(allTags);
     await refreshLibrary();
@@ -115,6 +115,9 @@ export function TagManagementDialog({ open, onOpenChange, tags }: TagManagementD
     setBulkColor('');
     setNewTagName('');
     setNewTagColor('');
+    if (closeDialog) {
+      onOpenChange(false);
+    }
   };
 
   const handleStartCreate = () => {
@@ -138,7 +141,7 @@ export function TagManagementDialog({ open, onOpenChange, tags }: TagManagementD
     setIsProcessing(true);
     try {
       await createTag(name, newTagColor || undefined);
-      await refreshAndReset();
+      await refreshAndReset(true);
       toast.success(`Created tag "${name}"`);
     } catch (err) {
       console.error('Failed to create tag:', err);
@@ -520,17 +523,17 @@ export function TagManagementDialog({ open, onOpenChange, tags }: TagManagementD
                       onCheckedChange={() => toggleTag(tag.id)}
                       onClick={(e) => e.stopPropagation()}
                     />
-                    <span className="flex items-center justify-center w-4 h-4">
-                      <span
-                        className={cn(
-                          'w-2.5 h-2.5 rounded-full',
-                          tag.isImported && !tag.color && 'border border-dashed border-muted-foreground/60',
-                        )}
-                        style={{
-                          backgroundColor: tag.color || (tag.isImported ? 'transparent' : '#6b7280'),
-                        }}
-                      />
-                    </span>
+                    {/* Only show color dot if tag has a color or is not imported */}
+                    {(tag.color || !tag.isImported) && (
+                      <span className="flex items-center justify-center w-4 h-4">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full"
+                          style={{
+                            backgroundColor: tag.color || '#6b7280',
+                          }}
+                        />
+                      </span>
+                    )}
                     <span className="flex-1 truncate">
                       {tag.name}
                       {tag.isImported && (

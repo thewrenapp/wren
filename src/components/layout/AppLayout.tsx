@@ -20,7 +20,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 export function AppLayout() {
-  const { sidebarWidth, setSidebarWidth, setLibraryLayout, settingsOpen, setSettingsOpen } = useUIStore();
+  const { sidebarWidth, setSidebarWidth, setLibraryLayout, settingsOpen, setSettingsOpen, commandPaletteMode } = useUIStore();
   const { tabs, openTab, updateTab } = useTabStore();
   const { showWelcomeOnStartup } = useSettingsStore();
   const hasInitialized = useRef(false);
@@ -103,7 +103,7 @@ export function AppLayout() {
               {/* Library sidebar */}
               <ResizablePanel
                 defaultSize={sidebarPercent}
-                minSize={12}
+                minSize={15}
                 maxSize={25}
                 onResize={(size) => {
                   const newWidth = (size / 100) * totalWidth;
@@ -136,7 +136,15 @@ export function AppLayout() {
       </div>
 
       {/* Command Palette */}
-      <CommandPalette />
+      <CommandPalette
+        openMode={
+          commandPaletteMode === 'advanced'
+            ? 'advanced'
+            : commandPaletteMode === 'ai'
+              ? 'ai'
+              : undefined
+        }
+      />
 
       {/* Settings Dialog */}
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />

@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useLibraryStore } from '@/stores/libraryStore';
+import { useUIStore } from '@/stores/uiStore';
 import { toast } from '@/stores/toastStore';
 import * as tauri from '@/services/tauri';
 
@@ -10,20 +11,40 @@ import * as tauri from '@/services/tauri';
 export function useLibrarySync() {
   const {
     setEntries,
-    setAllEntries,
+    appendEntries,
     setCollections,
     setTags,
     setTrashCount,
     setLoading,
+    setLoadingMore,
     setError,
+    setEntryCounts,
+    setCurrentTotal,
+    setHasMore,
+    setPageOffset,
+    resetPaging,
     activeCollectionId,
     activeTagIds,
     tagFilterMode,
     activeFilter,
+    searchQuery,
+    searchScope,
     _setRefreshFn,
+    _setLoadMoreFn,
+    hasMore,
+    pageOffset,
+    isLoadingMore,
   } = useLibraryStore();
+  const {
+    activeFilter: uiFilter,
+    sortField,
+    sortDirection,
+    secondarySortField,
+    secondarySortDirection,
+  } = useUIStore();
 
   const isMounted = useRef(false);
+  const pageSize = 20;
 
   const loadLibrary = useCallback(async () => {
     setLoading(true);
@@ -33,24 +54,45 @@ export function useLibrarySync() {
       // Check if we're in tag mode with no tags selected - show empty
       const isEmptyTagMode = activeFilter.type === 'tag' && activeTagIds.length === 0;
 
-      // Load entries, collections, tags, and trash count in parallel
-      const [entries, allEntries, collections, tags, trashCount] = await Promise.all([
+      resetPaging();
+      // Load entries (first page), counts, collections, tags, and trash count in parallel
+      const [page, counts, collections, tags, trashCount] = await Promise.all([
         isEmptyTagMode
-          ? Promise.resolve([]) // Empty entries for tag mode with no selection
-          : tauri.getEntries({
+          ? Promise.resolve({ entries: [], total: 0 }) // Empty entries for tag mode with no selection
+          : tauri.getEntriesPaged({
               collectionId: activeCollectionId ? Number(activeCollectionId) : undefined,
               tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
               tagMode: activeTagIds.length > 1 ? tagFilterMode : undefined,
+              searchQuery: searchQuery || undefined,
+              searchScope,
+              filterType: uiFilter || undefined,
+              sortField,
+              sortDirection,
+              secondarySortField: secondarySortField || undefined,
+              secondarySortDirection: secondarySortDirection || undefined,
+              limit: pageSize,
+              offset: 0,
             }),
-        tauri.getEntries(),
+        tauri.getEntryCounts(),
         tauri.getCollections(),
         tauri.getTags(),
         tauri.getTrashCount(),
       ]);
 
+      // Debug: log first entry to check itemType fields
+      if (page.entries.length > 0) {
+        console.log('First entry itemType data:', {
+          itemType: page.entries[0].itemType,
+          itemTypeDisplay: page.entries[0].itemTypeDisplay,
+        });
+      }
+
       // Set data directly - no ID conversion needed (using numbers now)
-      setEntries(entries);
-      setAllEntries(allEntries);
+      setEntries(page.entries);
+      setCurrentTotal(page.total);
+      setHasMore(page.entries.length < page.total);
+      setPageOffset(page.entries.length);
+      setEntryCounts(counts);
       setCollections(collections);
       setTags(tags);
       setTrashCount(trashCount);
@@ -64,25 +106,92 @@ export function useLibrarySync() {
     }
   }, [
     setEntries,
-    setAllEntries,
     setCollections,
     setTags,
     setTrashCount,
     setLoading,
     setError,
+    setEntryCounts,
+    setCurrentTotal,
+    setHasMore,
+    setPageOffset,
+    resetPaging,
     activeCollectionId,
     activeTagIds,
     tagFilterMode,
     activeFilter,
+    searchQuery,
+    searchScope,
+    pageSize,
+    uiFilter,
+    sortField,
+    sortDirection,
+    secondarySortField,
+    secondarySortDirection,
+  ]);
+
+  const loadMoreInFlight = useRef(false);
+
+  const loadMore = useCallback(async () => {
+    if (loadMoreInFlight.current || isLoadingMore || !hasMore) return;
+    loadMoreInFlight.current = true;
+    setLoadingMore(true);
+    try {
+      const page = await tauri.getEntriesPaged({
+        collectionId: activeCollectionId ? Number(activeCollectionId) : undefined,
+        tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
+        tagMode: activeTagIds.length > 1 ? tagFilterMode : undefined,
+        searchQuery: searchQuery || undefined,
+        searchScope,
+        filterType: uiFilter || undefined,
+        sortField,
+        sortDirection,
+        secondarySortField: secondarySortField || undefined,
+        secondarySortDirection: secondarySortDirection || undefined,
+        limit: pageSize,
+        offset: pageOffset,
+      });
+      appendEntries(page.entries);
+      setCurrentTotal(page.total);
+      setHasMore(pageOffset + page.entries.length < page.total);
+      setPageOffset(pageOffset + page.entries.length);
+    } catch (err) {
+      console.error('Failed to load more entries:', err);
+    } finally {
+      setLoadingMore(false);
+      loadMoreInFlight.current = false;
+    }
+  }, [
+    activeCollectionId,
+    activeTagIds,
+    tagFilterMode,
+    searchQuery,
+    searchScope,
+    uiFilter,
+    sortField,
+    sortDirection,
+    secondarySortField,
+    secondarySortDirection,
+    pageSize,
+    pageOffset,
+    hasMore,
+    isLoadingMore,
+    appendEntries,
+    setCurrentTotal,
+    setHasMore,
+    setPageOffset,
+    setLoadingMore,
   ]);
 
   // Store refresh function in Zustand store (replaces global mutable state)
   useEffect(() => {
     _setRefreshFn(loadLibrary);
+    _setLoadMoreFn(loadMore);
     return () => {
       _setRefreshFn(null);
+      _setLoadMoreFn(null);
     };
-  }, [loadLibrary, _setRefreshFn]);
+  }, [loadLibrary, loadMore, _setRefreshFn, _setLoadMoreFn]);
 
   // Load library on mount
   useEffect(() => {
@@ -92,14 +201,14 @@ export function useLibrarySync() {
     }
   }, [loadLibrary]);
 
-  // Reload library when collection/tag filters change
+  // Reload library when filters/search change
   useEffect(() => {
     if (isMounted.current) {
       loadLibrary();
     }
-  }, [activeCollectionId, activeTagIds, tagFilterMode, loadLibrary]);
+  }, [activeCollectionId, activeTagIds, tagFilterMode, uiFilter, searchQuery, searchScope, sortField, sortDirection, secondarySortField, secondarySortDirection, loadLibrary]);
 
-  return { refresh: loadLibrary };
+  return { refresh: loadLibrary, loadMore };
 }
 
 /**
@@ -107,7 +216,7 @@ export function useLibrarySync() {
  * Uses store's refreshLibrary action for refresh.
  */
 export function useImport() {
-  const { setLoading, setError, refreshLibrary } = useLibraryStore();
+  const { setLoading, setError, refreshLibrary, invalidateAttachments } = useLibraryStore();
 
   const importFiles = useCallback(
     async (filePaths: string[]) => {
@@ -132,6 +241,8 @@ export function useImport() {
           toast.success(`Imported ${successes.length} PDF${successes.length !== 1 ? 's' : ''}`);
         }
 
+        // Invalidate attachment cache so expanded rows refetch attachment names
+        invalidateAttachments();
         // Refresh library to show new entries
         await refreshLibrary();
 
@@ -146,7 +257,7 @@ export function useImport() {
         setLoading(false);
       }
     },
-    [refreshLibrary, setLoading, setError],
+    [refreshLibrary, setLoading, setError, invalidateAttachments],
   );
 
   const importFolder = useCallback(
@@ -176,6 +287,8 @@ export function useImport() {
           toast.info('No new PDFs found in folder');
         }
 
+        // Invalidate attachment cache so expanded rows refetch attachment names
+        invalidateAttachments();
         // Refresh library to show new entries
         await refreshLibrary();
 
@@ -190,7 +303,7 @@ export function useImport() {
         setLoading(false);
       }
     },
-    [refreshLibrary, setLoading, setError],
+    [refreshLibrary, setLoading, setError, invalidateAttachments],
   );
 
   const importBiblatex = useCallback(
@@ -221,6 +334,8 @@ export function useImport() {
           toast.info('No entries imported');
         }
 
+        // Invalidate attachment cache so expanded rows refetch attachment names
+        invalidateAttachments();
         // Refresh library to show new entries
         await refreshLibrary();
 
@@ -235,7 +350,7 @@ export function useImport() {
         setLoading(false);
       }
     },
-    [refreshLibrary, setLoading, setError],
+    [refreshLibrary, setLoading, setError, invalidateAttachments],
   );
 
   return { importFiles, importFolder, importBiblatex, refresh: refreshLibrary };

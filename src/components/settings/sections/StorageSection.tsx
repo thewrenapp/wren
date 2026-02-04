@@ -7,13 +7,14 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { getLibraryPath } from "@/services/tauri";
 
 export function StorageSection() {
-  const { libraryPath, setLibraryPath } = useSettingsStore();
+  const { libraryPath, setLibraryPath, autoRenameFiles, setAutoRenameFiles, loadFromBackend } = useSettingsStore();
   const [actualPath, setActualPath] = useState<string>("");
 
-  // Load actual library path from backend on mount
+  // Load actual library path and settings from backend on mount
   useEffect(() => {
     getLibraryPath().then(setActualPath).catch(console.error);
-  }, []);
+    loadFromBackend();
+  }, [loadFromBackend]);
 
   const handleBrowse = async () => {
     try {
@@ -85,6 +86,41 @@ export function StorageSection() {
             <Checkbox defaultChecked />
             <span className="text-sm">Automatically extract metadata from PDFs</span>
           </label>
+        </div>
+      </section>
+
+      {/* File Renaming */}
+      <section className="space-y-4">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          File Renaming
+        </h3>
+
+        <div className="space-y-3">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <Checkbox
+              checked={autoRenameFiles}
+              onCheckedChange={(checked) => setAutoRenameFiles(checked === true)}
+            />
+            <div className="space-y-1">
+              <span className="text-sm">Automatically rename attachment files using entry metadata</span>
+              <p className="text-xs text-muted-foreground">
+                Files are renamed when imported or when metadata changes
+              </p>
+            </div>
+          </label>
+
+          {autoRenameFiles && (
+            <div className="ml-7 p-3 rounded-md bg-muted/50 border space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Template</p>
+              <code className="text-xs text-foreground block">
+                {"{Author} - {Year} - {Title}.pdf"}
+              </code>
+              <p className="text-xs text-muted-foreground mt-2">Example</p>
+              <p className="text-xs text-foreground italic">
+                Lee et al. - 2023 - The First Room-Temperature Superconductor.pdf
+              </p>
+            </div>
+          )}
         </div>
       </section>
     </div>

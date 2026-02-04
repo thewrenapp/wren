@@ -410,7 +410,7 @@ async fn fetch_creators_display(
 #[tauri::command]
 pub async fn discard_duplicates(
     state: State<'_, AppState>,
-    keep_id: i64,
+    _keep_id: i64,
     discard_ids: Vec<i64>,
 ) -> Result<(), String> {
     if discard_ids.is_empty() {

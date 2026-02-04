@@ -6,6 +6,7 @@ import {
   SortAsc,
   SortDesc,
   File,
+  FileText,
   FolderOpen,
   Library,
   RotateCcw,
@@ -17,6 +18,8 @@ import {
   Square,
   XSquare,
   Tag,
+  Paperclip,
+  Globe,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { open as openInBrowser } from '@tauri-apps/plugin-shell';
@@ -65,12 +68,7 @@ import { ColumnConfigDropdown } from './ColumnConfigDropdown';
 import { QuickSearchBar } from './QuickSearchBar';
 import { DuplicatesView } from './DuplicatesView';
 import { cn } from '@/lib/utils';
-import {
-  filterEntriesByType,
-  filterEntriesBySearch,
-  sortEntries,
-  type FilterType,
-} from '@/lib/filters';
+import { filterEntriesBySearch, sortEntries } from '@/lib/filters';
 
 export function MiddlePane() {
   const {
@@ -86,23 +84,28 @@ export function MiddlePane() {
   } = useUIStore();
   const {
     entries,
-    allEntries,
+    entryCounts,
+    currentTotal,
     selectedEntryIds,
     selectEntry,
     clearSelection,
     expandedEntryIds,
     toggleEntryExpanded,
     isLoading,
+    isLoadingMore,
     searchQuery,
     attachmentVersion,
     trashedEntries,
     setTrashedEntries,
     setTrashCount,
+    invalidateAttachments,
     tags,
     collections,
     activeTagIds,
     activeCollectionId,
     activeFilter: libraryFilter,
+    hasMore,
+    loadNextPage,
   } = useLibraryStore();
   const { openTab } = useTabStore();
   const { importFiles, importFolder } = useImport();
@@ -133,6 +136,8 @@ export function MiddlePane() {
   // State for fetched attachments (keyed by entry ID)
   const [attachmentsMap, setAttachmentsMap] = useState<Record<number, Attachment[]>>({});
   const fetchedEntryIdsRef = useRef<Set<number>>(new Set());
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const cardScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Load trashed entries when filter changes to trash
   const loadTrashedEntries = useCallback(async () => {
@@ -277,8 +282,10 @@ export function MiddlePane() {
     }
   };
 
-  const handleConfirmImport = async (selectedKeys: string[], importTags: boolean) => {
+  const handleConfirmImport = async (options: import('@/components/dialogs/ImportPreviewDialog').ImportOptions) => {
     if (!importFolderPath) return;
+
+    const { selectedKeys, importTags, excludedFiles, collectionId } = options;
 
     setIsImporting(true);
     try {
@@ -286,7 +293,9 @@ export function MiddlePane() {
         importFolderPath,
         importFolderPath,
         selectedKeys,
-        importTags
+        importTags,
+        excludedFiles,
+        collectionId
       );
 
       let message = `Imported ${result.imported} ${result.imported !== 1 ? 'entries' : 'entry'}`;
@@ -302,6 +311,8 @@ export function MiddlePane() {
         toast.info(`${result.skipped} entries skipped`);
       }
 
+      // Invalidate attachment cache so expanded rows refetch attachment names
+      invalidateAttachments();
       // Refresh library
       await refresh();
 
@@ -319,16 +330,16 @@ export function MiddlePane() {
 
   // Determine which entries to display (regular or trashed)
   const isTrashView = activeFilter === 'trash';
+  const isDuplicatesView = activeFilter === 'duplicates';
   const displayEntries = isTrashView ? trashedEntries : entries;
 
   // Memoized filter entries using shared utility
   const filteredEntries = useMemo(() => {
-    // Skip filter for trash view (already showing trash)
-    const typeFiltered = isTrashView
-      ? displayEntries
-      : filterEntriesByType(displayEntries, activeFilter as FilterType);
-    return filterEntriesBySearch(typeFiltered, searchQuery);
-  }, [displayEntries, isTrashView, activeFilter, searchQuery]);
+    if (isTrashView) {
+      return filterEntriesBySearch(displayEntries, searchQuery);
+    }
+    return displayEntries;
+  }, [displayEntries, isTrashView, searchQuery]);
 
   // Memoized sort entries using shared utility
   const sortedEntries = useMemo(() => {
@@ -340,6 +351,54 @@ export function MiddlePane() {
       secondarySortDirection,
     );
   }, [filteredEntries, sortField, sortDirection, secondarySortField, secondarySortDirection]);
+
+  const loadedCount = sortedEntries.length;
+  const totalCount = isTrashView ? sortedEntries.length : currentTotal;
+
+  const maybeLoadMoreCards = useCallback(() => {
+    if (isTrashView || isDuplicatesView || viewMode !== 'card') return;
+    if (!hasMore || isLoadingMore || isLoading) return;
+    const el = cardScrollRef.current;
+    if (!el) return;
+    if (el.scrollHeight <= el.clientHeight + 200) {
+      loadNextPage();
+    }
+  }, [hasMore, isLoadingMore, isLoading, isTrashView, isDuplicatesView, loadNextPage, viewMode]);
+
+  useEffect(() => {
+    if (isTrashView || isDuplicatesView || viewMode !== 'card') return;
+    if (!loadMoreRef.current) return;
+    const observer = new IntersectionObserver(
+      (entriesObs) => {
+        const [entry] = entriesObs;
+        if (entry.isIntersecting && hasMore && !isLoadingMore && !isLoading) {
+          loadNextPage();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(loadMoreRef.current);
+    return () => observer.disconnect();
+  }, [activeFilter, hasMore, isLoadingMore, isLoading, isTrashView, isDuplicatesView, loadNextPage, viewMode]);
+
+  useEffect(() => {
+    maybeLoadMoreCards();
+  }, [sortedEntries.length, maybeLoadMoreCards]);
+
+  useEffect(() => {
+    if (viewMode !== 'card') return;
+    maybeLoadMoreCards();
+  }, [activeFilter, activeCollectionId, activeTagIds, searchQuery, viewMode, maybeLoadMoreCards]);
+
+  useEffect(() => {
+    const el = cardScrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      maybeLoadMoreCards();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [maybeLoadMoreCards]);
 
   // Entry handlers
   const handleEntryClick = (entryId: number, event: React.MouseEvent) => {
@@ -371,6 +430,26 @@ export function MiddlePane() {
   const handleSelectUntagged = useCallback(() => {
     clearSelection();
     sortedEntries.filter((e) => e.tags.length === 0).forEach((e) => selectEntry(e.id, true));
+  }, [sortedEntries, selectEntry, clearSelection]);
+
+  const handleSelectNoAttachments = useCallback(() => {
+    clearSelection();
+    sortedEntries.filter((e) => e.attachmentCount === 0).forEach((e) => selectEntry(e.id, true));
+  }, [sortedEntries, selectEntry, clearSelection]);
+
+  const handleSelectNoPdfs = useCallback(() => {
+    clearSelection();
+    sortedEntries.filter((e) => !e.hasPdf).forEach((e) => selectEntry(e.id, true));
+  }, [sortedEntries, selectEntry, clearSelection]);
+
+  const handleSelectNoNotes = useCallback(() => {
+    clearSelection();
+    sortedEntries.filter((e) => !e.hasNote).forEach((e) => selectEntry(e.id, true));
+  }, [sortedEntries, selectEntry, clearSelection]);
+
+  const handleSelectNoWeblinks = useCallback(() => {
+    clearSelection();
+    sortedEntries.filter((e) => !e.hasWeblink).forEach((e) => selectEntry(e.id, true));
   }, [sortedEntries, selectEntry, clearSelection]);
 
   const handleEntryDoubleClick = async (entryId: number) => {
@@ -504,7 +583,9 @@ export function MiddlePane() {
         <div className='flex items-center gap-2'>
           <h2 className='font-semibold text-sm'>{getFilterTitle()}</h2>
           <span className='text-xs text-muted-foreground'>
-            {sortedEntries.length} {sortedEntries.length !== 1 ? 'entries' : 'entry'}
+            {isTrashView || totalCount <= loadedCount
+              ? `${loadedCount} ${loadedCount !== 1 ? 'entries' : 'entry'}`
+              : `${loadedCount} of ${totalCount} entries`}
           </span>
         </div>
 
@@ -512,7 +593,7 @@ export function MiddlePane() {
           <QuickSearchBar />
 
           {/* Bulk selection dropdown */}
-          {!isTrashView && activeFilter !== 'duplicates' && sortedEntries.length > 0 && (
+          {!isTrashView && !isDuplicatesView && sortedEntries.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -540,6 +621,23 @@ export function MiddlePane() {
                 <DropdownMenuItem onClick={handleSelectUntagged}>
                   <Square className='h-4 w-4 mr-2' />
                   Select Untagged
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleSelectNoAttachments}>
+                  <Paperclip className='h-4 w-4 mr-2' />
+                  Select No Attachments
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleSelectNoPdfs}>
+                  <FileType className='h-4 w-4 mr-2' />
+                  Select No PDFs
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleSelectNoNotes}>
+                  <StickyNote className='h-4 w-4 mr-2' />
+                  Select No Notes
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleSelectNoWeblinks}>
+                  <Globe className='h-4 w-4 mr-2' />
+                  Select No Weblinks
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -661,7 +759,7 @@ export function MiddlePane() {
           </DropdownMenu>
 
           {/* Hide view toggle for duplicates view (has its own layout) */}
-          {activeFilter !== 'duplicates' && (
+          {!isDuplicatesView && (
             <div className='flex items-center border rounded-md'>
               <Button
                 variant='ghost'
@@ -711,7 +809,7 @@ export function MiddlePane() {
       </div>
 
       {/* Content */}
-      {activeFilter === 'duplicates' ? (
+      {isDuplicatesView ? (
         <DuplicatesView />
       ) : isLoading || isTrashLoading ? (
         <div className='flex-1 flex items-center justify-center text-muted-foreground'>
@@ -769,10 +867,10 @@ export function MiddlePane() {
                 <p className='text-sm font-medium'>No entries in this collection</p>
                 <p className='text-xs'>Add entries to this collection to see them here</p>
               </>
-            ) : allEntries.length === 0 ? (
+            ) : entryCounts.total === 0 ? (
               <>
                 <p className='text-sm font-medium'>Your library is empty</p>
-                <p className='text-xs'>Import PDFs to start building your collection</p>
+                <p className='text-xs'>Import PDFs or BibLaTeX to start building your collection</p>
               </>
             ) : (
               <>
@@ -781,7 +879,7 @@ export function MiddlePane() {
               </>
             )}
           </div>
-          {!isTrashView && !searchQuery && allEntries.length === 0 && (
+          {!isTrashView && !searchQuery && entryCounts.total === 0 && (
             <div className='flex gap-2'>
               <Button variant='outline' size='sm' onClick={handleImportFiles}>
                 <File className='h-4 w-4 mr-2' />
@@ -790,6 +888,10 @@ export function MiddlePane() {
               <Button variant='outline' size='sm' onClick={handleImportFolder}>
                 <FolderOpen className='h-4 w-4 mr-2' />
                 Import Folder
+              </Button>
+              <Button variant='outline' size='sm' onClick={handleImportBiblatex}>
+                <FileText className='h-4 w-4 mr-2' />
+                Import BibLaTeX
               </Button>
             </div>
           )}
@@ -849,16 +951,27 @@ export function MiddlePane() {
                 onAttachmentClick={handleAttachmentClick}
                 onAttachmentDoubleClick={handleAttachmentDoubleClick}
                 onKeyboardSelect={handleKeyboardSelect}
+                onEndReached={!isTrashView && !isDuplicatesView ? loadNextPage : undefined}
+                hasMore={hasMore}
+                isLoadingMore={isLoadingMore}
+                autoLoadKey={`${activeFilter}|${activeCollectionId ?? ''}|${activeTagIds.join(',')}|${searchQuery}|${sortField}|${sortDirection}|${secondarySortField ?? ''}|${secondarySortDirection ?? ''}`}
               />
             </div>
           ) : (
-            <ScrollArea className='flex-1'>
+            <ScrollArea className='flex-1' ref={cardScrollRef}>
               <EntryCardView
                 entries={sortedEntries}
                 selectedIds={selectedEntryIds}
                 onEntryClick={handleEntryClick}
                 onEntryDoubleClick={handleEntryDoubleClick}
                 isTrashView={isTrashView}
+                footer={
+                  !isTrashView && !isDuplicatesView ? (
+                    <div ref={loadMoreRef} className='py-4 text-center text-xs text-muted-foreground'>
+                      {isLoadingMore ? 'Loading more…' : hasMore ? 'Scroll to load more' : 'All entries loaded'}
+                    </div>
+                  ) : null
+                }
               />
             </ScrollArea>
           )}

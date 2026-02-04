@@ -67,13 +67,13 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           </div>
 
           {/* Content */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="px-6 py-3 border-b">
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+            <div className="px-6 py-3 border-b shrink-0">
               <h2 className="text-lg font-semibold">
                 {sections.find((s) => s.id === activeSection)?.label}
               </h2>
             </div>
-            <ScrollArea className="flex-1">
+            <ScrollArea className="flex-1 h-0">
               <div className="p-6">
                 {activeSection === "general" && <GeneralSection />}
                 {activeSection === "storage" && <StorageSection />}

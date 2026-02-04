@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use biblatex::{Chunk, Entry, EntryType, Person, Spanned};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashMap;
@@ -119,6 +120,86 @@ fn creator_type_to_csl_role(creator_type: &str) -> &str {
         "contributor" => "author",
         _ => "author",
     }
+}
+
+// =====================================================
+// BIBLATEX CRATE HELPERS FOR EXPORT
+// =====================================================
+
+/// Map Wren item type to biblatex EntryType
+fn item_type_to_bibtex_entry_type(item_type: &str) -> EntryType {
+    match item_type {
+        "journalArticle" => EntryType::Article,
+        "book" => EntryType::Book,
+        "bookSection" => EntryType::InCollection,
+        "conferencePaper" => EntryType::InProceedings,
+        "thesis" => EntryType::PhdThesis,
+        "report" => EntryType::TechReport,
+        "preprint" => EntryType::Unpublished,
+        "webpage" => EntryType::Online,
+        "computerProgram" => EntryType::Software,
+        "dataset" => EntryType::Dataset,
+        "patent" => EntryType::Patent,
+        _ => EntryType::Misc,
+    }
+}
+
+/// Map Wren item type to biblatex EntryType for BibLaTeX export
+fn item_type_to_biblatex_entry_type(item_type: &str) -> EntryType {
+    match item_type {
+        "journalArticle" => EntryType::Article,
+        "book" => EntryType::Book,
+        "bookSection" => EntryType::InCollection,
+        "conferencePaper" => EntryType::InProceedings,
+        "thesis" => EntryType::Thesis,
+        "report" => EntryType::Report,
+        "preprint" => EntryType::Unpublished,
+        "webpage" => EntryType::Online,
+        "computerProgram" => EntryType::Software,
+        "dataset" => EntryType::Dataset,
+        "patent" => EntryType::Patent,
+        _ => EntryType::Misc,
+    }
+}
+
+/// Create a biblatex Person from first/last name or literal name
+fn create_person(first_name: Option<String>, last_name: Option<String>, literal_name: Option<String>) -> Option<Person> {
+    if let Some(literal) = literal_name {
+        // Institution or single-field name
+        Some(Person {
+            name: literal,
+            given_name: String::new(),
+            prefix: String::new(),
+            suffix: String::new(),
+        })
+    } else {
+        match (last_name, first_name) {
+            (Some(ln), Some(fn_)) => Some(Person {
+                name: ln,
+                given_name: fn_,
+                prefix: String::new(),
+                suffix: String::new(),
+            }),
+            (Some(ln), None) => Some(Person {
+                name: ln,
+                given_name: String::new(),
+                prefix: String::new(),
+                suffix: String::new(),
+            }),
+            (None, Some(fn_)) => Some(Person {
+                name: fn_,
+                given_name: String::new(),
+                prefix: String::new(),
+                suffix: String::new(),
+            }),
+            (None, None) => None,
+        }
+    }
+}
+
+/// Create chunks from a string value
+fn string_to_chunks(value: &str) -> Vec<Spanned<Chunk>> {
+    vec![Spanned::detached(Chunk::Normal(value.to_string()))]
 }
 
 // =====================================================
@@ -272,7 +353,7 @@ pub async fn export_to_csl_json(
     serde_json::to_string_pretty(&csl_items).map_err(|e| e.to_string())
 }
 
-/// Export entries to BibTeX format
+/// Export entries to BibTeX format using the biblatex crate
 #[tauri::command]
 pub async fn export_to_bibtex(
     state: State<'_, AppState>,
@@ -342,128 +423,85 @@ pub async fn export_to_bibtex(
         .await
         .map_err(|e| e.to_string())?;
 
-        // Format authors
-        let mut authors = Vec::new();
-        let mut editors = Vec::new();
+        // Create biblatex Entry
+        let entry_type = item_type_to_bibtex_entry_type(&item_type);
+        let mut bib_entry = Entry::new(key, entry_type);
+
+        // Set title
+        bib_entry.set("title", string_to_chunks(&title));
+
+        // Set authors and editors using biblatex Person type
+        let mut authors: Vec<Person> = Vec::new();
+        let mut editors: Vec<Person> = Vec::new();
 
         for (creator_type, first_name, last_name, name, _) in creator_rows {
-            let formatted = if let Some(literal) = name {
-                format!("{{{}}}", literal)
-            } else {
-                match (last_name, first_name) {
-                    (Some(ln), Some(fn_)) => format!("{}, {}", ln, fn_),
-                    (Some(ln), None) => ln,
-                    (None, Some(fn_)) => fn_,
-                    (None, None) => continue,
+            if let Some(person) = create_person(first_name, last_name, name) {
+                if creator_type == "editor" {
+                    editors.push(person);
+                } else {
+                    authors.push(person);
                 }
-            };
-
-            if creator_type == "editor" {
-                editors.push(formatted);
-            } else {
-                authors.push(formatted);
             }
         }
 
-        // Determine BibTeX entry type
-        let bibtex_type = match item_type.as_str() {
-            "journalArticle" => "article",
-            "book" => "book",
-            "bookSection" => "incollection",
-            "conferencePaper" => "inproceedings",
-            "thesis" => "phdthesis",
-            "report" => "techreport",
-            "preprint" => "unpublished",
-            "webpage" => "misc",
-            "computerProgram" => "software",
-            _ => "misc",
-        };
-
-        // Build BibTeX entry
-        let mut bibtex = format!("@{}{{{},\n", bibtex_type, key);
-
-        // Title
-        bibtex.push_str(&format!("  title = {{{}}},\n", escape_bibtex(&title)));
-
-        // Authors
         if !authors.is_empty() {
-            bibtex.push_str(&format!("  author = {{{}}},\n", authors.join(" and ")));
+            bib_entry.set_as("author", &authors);
         }
-
-        // Editors
         if !editors.is_empty() {
-            bibtex.push_str(&format!("  editor = {{{}}},\n", editors.join(" and ")));
+            bib_entry.set_as("editor", &editors);
         }
 
-        // Year
+        // Set date (biblatex crate handles date->year conversion for BibTeX output)
         if let Some(d) = &date {
-            if let Some(year) = d.split('-').next() {
-                bibtex.push_str(&format!("  year = {{{}}},\n", year));
+            bib_entry.set("date", string_to_chunks(d));
+        }
+
+        // Set journal/booktitle based on entry type
+        if let Some(journal) = fields.get("publicationTitle") {
+            // Use journaltitle for BibLaTeX - the crate converts to journal for BibTeX
+            bib_entry.set("journaltitle", string_to_chunks(journal));
+        }
+
+        // Set other fields
+        if let Some(volume) = fields.get("volume") {
+            bib_entry.set("volume", string_to_chunks(volume));
+        }
+        if let Some(issue) = fields.get("issue") {
+            bib_entry.set("number", string_to_chunks(issue));
+        }
+        if let Some(pages) = fields.get("pages") {
+            bib_entry.set("pages", string_to_chunks(pages));
+        }
+        if let Some(publisher) = fields.get("publisher") {
+            bib_entry.set("publisher", string_to_chunks(publisher));
+        }
+        if let Some(place) = fields.get("place") {
+            bib_entry.set("location", string_to_chunks(place));
+        }
+        if let Some(doi) = fields.get("DOI") {
+            bib_entry.set("doi", string_to_chunks(doi));
+        }
+        if let Some(isbn) = fields.get("ISBN") {
+            bib_entry.set("isbn", string_to_chunks(isbn));
+        }
+        if let Some(u) = &url {
+            bib_entry.set("url", string_to_chunks(u));
+        }
+        if let Some(abstract_) = fields.get("abstractNote") {
+            bib_entry.set("abstract", string_to_chunks(abstract_));
+        }
+
+        // Serialize to BibTeX format
+        match bib_entry.to_bibtex_string() {
+            Ok(bibtex) => bibtex_entries.push(bibtex),
+            Err(e) => {
+                // Fallback: log error and skip this entry
+                tracing::warn!("Failed to serialize entry to BibTeX: {:?}", e);
             }
         }
-
-        // Journal/Book title
-        if let Some(journal) = fields.get("publicationTitle") {
-            let field_name = match bibtex_type {
-                "article" => "journal",
-                "incollection" | "inproceedings" => "booktitle",
-                _ => "journal",
-            };
-            bibtex.push_str(&format!("  {} = {{{}}},\n", field_name, escape_bibtex(journal)));
-        }
-
-        // Volume
-        if let Some(volume) = fields.get("volume") {
-            bibtex.push_str(&format!("  volume = {{{}}},\n", volume));
-        }
-
-        // Number/Issue
-        if let Some(issue) = fields.get("issue") {
-            bibtex.push_str(&format!("  number = {{{}}},\n", issue));
-        }
-
-        // Pages
-        if let Some(pages) = fields.get("pages") {
-            bibtex.push_str(&format!("  pages = {{{}}},\n", pages.replace("-", "--")));
-        }
-
-        // Publisher
-        if let Some(publisher) = fields.get("publisher") {
-            bibtex.push_str(&format!("  publisher = {{{}}},\n", escape_bibtex(publisher)));
-        }
-
-        // Address/Place
-        if let Some(place) = fields.get("place") {
-            bibtex.push_str(&format!("  address = {{{}}},\n", escape_bibtex(place)));
-        }
-
-        // DOI
-        if let Some(doi) = fields.get("DOI") {
-            bibtex.push_str(&format!("  doi = {{{}}},\n", doi));
-        }
-
-        // ISBN
-        if let Some(isbn) = fields.get("ISBN") {
-            bibtex.push_str(&format!("  isbn = {{{}}},\n", isbn));
-        }
-
-        // URL
-        if let Some(u) = &url {
-            bibtex.push_str(&format!("  url = {{{}}},\n", u));
-        }
-
-        // Abstract
-        if let Some(abstract_) = fields.get("abstractNote") {
-            bibtex.push_str(&format!("  abstract = {{{}}},\n", escape_bibtex(abstract_)));
-        }
-
-        // Close entry
-        bibtex.push_str("}\n");
-
-        bibtex_entries.push(bibtex);
     }
 
-    Ok(bibtex_entries.join("\n"))
+    Ok(bibtex_entries.join("\n\n"))
 }
 
 /// Export all entries to CSL JSON
@@ -496,19 +534,6 @@ pub async fn export_all_to_bibtex(
     export_to_bibtex(state, entry_ids).await
 }
 
-// Helper function to escape special BibTeX characters
-fn escape_bibtex(s: &str) -> String {
-    s.replace('&', r"\&")
-     .replace('%', r"\%")
-     .replace('$', r"\$")
-     .replace('#', r"\#")
-     .replace('_', r"\_")
-     .replace('{', r"\{")
-     .replace('}', r"\}")
-     .replace('~', r"\textasciitilde{}")
-     .replace('^', r"\textasciicircum{}")
-}
-
 // =====================================================
 // BIBLATEX EXPORT WITH FILES
 // =====================================================
@@ -522,6 +547,7 @@ pub struct ExportOptions {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BiblatexExportResult {
     pub entries_exported: usize,
     pub files_exported: usize,
@@ -550,7 +576,7 @@ fn get_mimetype_for_attachment(attachment_type: &str, filename: &str) -> &'stati
     }
 }
 
-/// Export entries to BibLaTeX format with files
+/// Export entries to BibLaTeX format with files using the biblatex crate
 #[tauri::command]
 pub async fn export_to_biblatex_with_files(
     state: State<'_, AppState>,
@@ -630,29 +656,6 @@ pub async fn export_to_biblatex_with_files(
         .await
         .map_err(|e| e.to_string())?;
 
-        // Format creators
-        let mut authors = Vec::new();
-        let mut editors = Vec::new();
-
-        for (creator_type, first_name, last_name, name, _) in creator_rows {
-            let formatted = if let Some(literal) = name {
-                format!("{{{}}}", literal)
-            } else {
-                match (last_name, first_name) {
-                    (Some(ln), Some(fn_)) => format!("{}, {}", ln, fn_),
-                    (Some(ln), None) => ln,
-                    (None, Some(fn_)) => fn_,
-                    (None, None) => continue,
-                }
-            };
-
-            if creator_type == "editor" {
-                editors.push(formatted);
-            } else {
-                authors.push(formatted);
-            }
-        }
-
         // Get tags for keywords
         let tags: Vec<String> = sqlx::query_scalar(
             r#"
@@ -671,9 +674,10 @@ pub async fn export_to_biblatex_with_files(
         // Get attachments for file field
         let attachments: Vec<(i64, String, String, Option<String>, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT a.id, a.attachment_type, a.title, a.path, a.url
+            SELECT a.id, at.name as attachment_type, a.title, a.file_path, a.url
             FROM attachments a
-            WHERE a.entry_id = ? AND a.is_deleted = 0
+            JOIN attachment_types at ON a.attachment_type_id = at.id
+            WHERE a.entry_id = ?
             "#
         )
         .bind(entry_id)
@@ -681,117 +685,89 @@ pub async fn export_to_biblatex_with_files(
         .await
         .map_err(|e| e.to_string())?;
 
-        // Determine BibLaTeX entry type
-        let biblatex_type = match item_type.as_str() {
-            "journalArticle" => "article",
-            "book" => "book",
-            "bookSection" => "incollection",
-            "conferencePaper" => "inproceedings",
-            "thesis" => "thesis",
-            "report" => "report",
-            "preprint" => "unpublished",
-            "webpage" => "online",
-            "computerProgram" => "software",
-            "dataset" => "dataset",
-            _ => "misc",
-        };
+        // Create biblatex Entry
+        let entry_type = item_type_to_biblatex_entry_type(&item_type);
+        let mut bib_entry = Entry::new(key.clone(), entry_type);
 
-        // Build BibLaTeX entry
-        let mut biblatex = format!("@{}{{{},\n", biblatex_type, key);
+        // Set title
+        bib_entry.set("title", string_to_chunks(&title));
 
-        // Title
-        biblatex.push_str(&format!("  title = {{{}}},\n", escape_bibtex(&title)));
+        // Set authors and editors using biblatex Person type
+        let mut authors: Vec<Person> = Vec::new();
+        let mut editors: Vec<Person> = Vec::new();
 
-        // Authors
+        for (creator_type, first_name, last_name, name, _) in creator_rows {
+            if let Some(person) = create_person(first_name, last_name, name) {
+                if creator_type == "editor" {
+                    editors.push(person);
+                } else {
+                    authors.push(person);
+                }
+            }
+        }
+
         if !authors.is_empty() {
-            biblatex.push_str(&format!("  author = {{{}}},\n", authors.join(" and ")));
+            bib_entry.set_as("author", &authors);
         }
-
-        // Editors
         if !editors.is_empty() {
-            biblatex.push_str(&format!("  editor = {{{}}},\n", editors.join(" and ")));
+            bib_entry.set_as("editor", &editors);
         }
 
-        // Date (BibLaTeX uses 'date' instead of 'year')
+        // Set date
         if let Some(d) = &date {
-            biblatex.push_str(&format!("  date = {{{}}},\n", d));
+            bib_entry.set("date", string_to_chunks(d));
         }
 
-        // Journal title (BibLaTeX uses 'journaltitle')
+        // Set journal/booktitle
         if let Some(journal) = fields.get("publicationTitle") {
-            let field_name = match biblatex_type {
-                "article" => "journaltitle",
-                "incollection" | "inproceedings" => "booktitle",
-                _ => "journaltitle",
-            };
-            biblatex.push_str(&format!("  {} = {{{}}},\n", field_name, escape_bibtex(journal)));
+            bib_entry.set("journaltitle", string_to_chunks(journal));
         }
 
-        // Volume
+        // Set other fields
         if let Some(volume) = fields.get("volume") {
-            biblatex.push_str(&format!("  volume = {{{}}},\n", volume));
+            bib_entry.set("volume", string_to_chunks(volume));
         }
-
-        // Number/Issue
         if let Some(issue) = fields.get("issue") {
-            biblatex.push_str(&format!("  number = {{{}}},\n", issue));
+            bib_entry.set("number", string_to_chunks(issue));
         }
-
-        // Pages
         if let Some(pages) = fields.get("pages") {
-            biblatex.push_str(&format!("  pages = {{{}}},\n", pages.replace("-", "--")));
+            bib_entry.set("pages", string_to_chunks(pages));
         }
-
-        // Publisher
         if let Some(publisher) = fields.get("publisher") {
-            biblatex.push_str(&format!("  publisher = {{{}}},\n", escape_bibtex(publisher)));
+            bib_entry.set("publisher", string_to_chunks(publisher));
         }
-
-        // Location/Place (BibLaTeX uses 'location')
         if let Some(place) = fields.get("place") {
-            biblatex.push_str(&format!("  location = {{{}}},\n", escape_bibtex(place)));
+            bib_entry.set("location", string_to_chunks(place));
         }
-
-        // DOI
         if let Some(doi) = fields.get("DOI") {
-            biblatex.push_str(&format!("  doi = {{{}}},\n", doi));
+            bib_entry.set("doi", string_to_chunks(doi));
         }
-
-        // ISBN
         if let Some(isbn) = fields.get("ISBN") {
-            biblatex.push_str(&format!("  isbn = {{{}}},\n", isbn));
+            bib_entry.set("isbn", string_to_chunks(isbn));
         }
-
-        // ISSN
         if let Some(issn) = fields.get("ISSN") {
-            biblatex.push_str(&format!("  issn = {{{}}},\n", issn));
+            bib_entry.set("issn", string_to_chunks(issn));
         }
-
-        // URL (if include_weblinks or always include the main URL)
         if let Some(u) = &url {
-            biblatex.push_str(&format!("  url = {{{}}},\n", u));
+            bib_entry.set("url", string_to_chunks(u));
         }
-
-        // Abstract
         if let Some(abstract_) = fields.get("abstractNote") {
-            biblatex.push_str(&format!("  abstract = {{{}}},\n", escape_bibtex(abstract_)));
+            bib_entry.set("abstract", string_to_chunks(abstract_));
         }
-
-        // Language
         if let Some(language) = fields.get("language") {
-            biblatex.push_str(&format!("  langid = {{{}}},\n", escape_bibtex(language)));
+            bib_entry.set("langid", string_to_chunks(language));
         }
 
         // Keywords from tags
         if !tags.is_empty() {
-            biblatex.push_str(&format!("  keywords = {{{}}},\n", tags.join(", ")));
+            bib_entry.set("keywords", string_to_chunks(&tags.join(", ")));
         }
 
         // Process attachments and build file field
         let mut file_parts = Vec::new();
         let entry_files_dir = files_dir.join(&key);
 
-        for (att_id, att_type, att_title, att_path, att_url) in &attachments {
+        for (_att_id, att_type, att_title, att_path, att_url) in &attachments {
             match att_type.as_str() {
                 "pdf" if options.include_pdfs => {
                     if let Some(src_path) = att_path {
@@ -819,29 +795,28 @@ pub async fn export_to_biblatex_with_files(
                     }
                 }
                 "note" if options.include_notes => {
-                    // Export note content to a markdown file
-                    let note_content: Option<String> = sqlx::query_scalar(
-                        "SELECT content FROM attachments WHERE id = ?"
-                    )
-                    .bind(att_id)
-                    .fetch_optional(&state.db)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    // Export note content from the file referenced by file_path
+                    if let Some(note_file_path) = att_path {
+                        let note_src = Path::new(note_file_path);
+                        if note_src.exists() {
+                            // Read the note content from the file
+                            let content = std::fs::read_to_string(note_src)
+                                .map_err(|e| format!("Failed to read note file: {}", e))?;
 
-                    if let Some(content) = note_content {
-                        std::fs::create_dir_all(&entry_files_dir)
-                            .map_err(|e| format!("Failed to create files directory: {}", e))?;
+                            std::fs::create_dir_all(&entry_files_dir)
+                                .map_err(|e| format!("Failed to create files directory: {}", e))?;
 
-                        let note_filename = format!("{}.md", att_title.replace("/", "_").replace("\\", "_"));
-                        let note_path = entry_files_dir.join(&note_filename);
+                            let note_filename = format!("{}.md", att_title.replace("/", "_").replace("\\", "_"));
+                            let note_path = entry_files_dir.join(&note_filename);
 
-                        std::fs::write(&note_path, &content)
-                            .map_err(|e| format!("Failed to write note: {}", e))?;
+                            std::fs::write(&note_path, &content)
+                                .map_err(|e| format!("Failed to write note: {}", e))?;
 
-                        notes_exported += 1;
+                            notes_exported += 1;
 
-                        let rel_path = format!("files/{}/{}", key, note_filename);
-                        file_parts.push(format!("{}:{}:text/markdown", att_title, rel_path));
+                            let rel_path = format!("files/{}/{}", key, note_filename);
+                            file_parts.push(format!("{}:{}:text/markdown", att_title, rel_path));
+                        }
                     }
                 }
                 "weblink" if options.include_weblinks => {
@@ -880,12 +855,13 @@ pub async fn export_to_biblatex_with_files(
 
         // Handle annotations if requested
         if options.include_annotations {
-            let annotations: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
+            let annotations: Vec<(i64, String, i32, Option<String>, Option<String>, String)> = sqlx::query_as(
                 r#"
-                SELECT a.id, a.annotation_type, a.text, a.comment
-                FROM annotations a
-                JOIN attachments att ON a.attachment_id = att.id
-                WHERE att.entry_id = ? AND att.is_deleted = 0
+                SELECT aa.id, at.name as annotation_type, aa.page_number, aa.selected_text, aa.comment, aa.color
+                FROM attachment_annotations aa
+                JOIN annotation_types at ON aa.annotation_type_id = at.id
+                JOIN attachments att ON aa.attachment_id = att.id
+                WHERE att.entry_id = ?
                 "#
             )
             .bind(entry_id)
@@ -900,12 +876,14 @@ pub async fn export_to_biblatex_with_files(
                 // Export annotations as a JSON file
                 let annotations_data: Vec<serde_json::Value> = annotations
                     .iter()
-                    .map(|(id, ann_type, text, comment)| {
+                    .map(|(id, ann_type, page, text, comment, color)| {
                         serde_json::json!({
                             "id": id,
                             "type": ann_type,
+                            "page": page,
                             "text": text,
                             "comment": comment,
+                            "color": color,
                         })
                     })
                     .collect();
@@ -924,25 +902,24 @@ pub async fn export_to_biblatex_with_files(
             }
         }
 
-        // Add file field if we have any files
+        // Add file field if we have any files (custom Zotero format)
         if !file_parts.is_empty() {
-            biblatex.push_str(&format!("  file = {{{}}},\n", file_parts.join(";")));
+            bib_entry.set("file", string_to_chunks(&file_parts.join(";")));
         }
 
         // Extra/Note field
         if let Some(extra) = fields.get("extra") {
-            biblatex.push_str(&format!("  note = {{{}}},\n", escape_bibtex(extra)));
+            bib_entry.set("note", string_to_chunks(extra));
         }
 
-        // Close entry
-        biblatex.push_str("}\n");
-
+        // Serialize to BibLaTeX format
+        let biblatex = bib_entry.to_biblatex_string();
         biblatex_entries.push(biblatex);
     }
 
     // Write the BibLaTeX file
     let bib_path = output_path.join("export.bib");
-    std::fs::write(&bib_path, biblatex_entries.join("\n"))
+    std::fs::write(&bib_path, biblatex_entries.join("\n\n"))
         .map_err(|e| format!("Failed to write BibLaTeX file: {}", e))?;
 
     Ok(BiblatexExportResult {

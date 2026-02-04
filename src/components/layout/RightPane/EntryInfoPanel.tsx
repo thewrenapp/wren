@@ -47,7 +47,7 @@ interface EntryInfoPanelProps {
 }
 
 export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
-  const { collections, setTags, setCollections, entryVersion, invalidateEntry, refreshLibrary } = useLibraryStore();
+  const { collections, setTags, setCollections, entryVersion, invalidateEntry, invalidateAttachments, refreshLibrary } = useLibraryStore();
   const { tabs, updateTab } = useTabStore();
   const { activeFilter } = useUIStore();
   const { getItemTypeInfo, loadSchema, isLoaded, itemTypes } = useSchemaStore();
@@ -133,14 +133,27 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
         })),
       });
 
-      // Refresh entry data
+      // Refresh entry data (includes updated attachments with renamed files)
       const updated = await getEntry(fullEntry.id, isTrashView);
       setFullEntry(updated);
       // Update any open tabs for this entry with the new title
       const entryTabs = tabs.filter(t => t.type === "entry" && t.entryId === String(fullEntry.id));
-      entryTabs.forEach(t => updateTab(t.id, { title: editedTitle }));
+      entryTabs.forEach(t => {
+        // For entry tabs with attachments, update with attachment title
+        if (t.attachmentId) {
+          const attachment = updated.attachments.find(a => String(a.id) === t.attachmentId);
+          if (attachment?.title) {
+            updateTab(t.id, { title: attachment.title });
+          }
+        } else {
+          // For entry tabs without attachment, update with entry title
+          updateTab(t.id, { title: editedTitle });
+        }
+      });
       // Invalidate to trigger refresh in other components (e.g., entry list, entry tabs)
       invalidateEntry();
+      // Invalidate attachments cache so expanded rows in entry table show updated names
+      invalidateAttachments();
       // Refresh entries list to update table/card views
       await refreshLibrary();
       setIsEditing(false);

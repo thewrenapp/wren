@@ -1,12 +1,12 @@
 pub mod commands;
 pub mod db;
+pub mod filename;
 pub mod pdf;
 pub mod state;
 
 use state::AppState;
-use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
-use tauri::menu::MenuItemKind;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -148,6 +148,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Entries
             commands::entries::get_entries,
+            commands::entries::get_entries_paged,
+            commands::entries::get_entry_counts,
             commands::entries::get_entry,
             commands::entries::create_entry,
             commands::entries::update_entry,
@@ -164,8 +166,10 @@ pub fn run() {
             commands::entries::get_item_types,
             commands::entries::get_attachment_types,
             commands::entries::show_entry_in_finder,
+            commands::entries::show_entries_in_finder,
             commands::entries::add_pdf_attachment,
             commands::entries::duplicate_entry,
+            commands::entries::repair_entry_attachments,
             // Schema introspection
             commands::schema::get_all_item_types,
             commands::schema::get_all_creator_types,

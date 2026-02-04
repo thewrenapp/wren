@@ -41,6 +41,7 @@ import { useLibraryStore, type EntrySummary } from '@/stores/libraryStore';
 import { useTabStore } from '@/stores/tabStore';
 import {
   showEntryInFinder,
+  showEntriesInFinder,
   addEntryToCollection,
   removeEntryFromCollection,
   deleteEntry,
@@ -69,10 +70,11 @@ interface EntryContextMenuProps {
 interface EntryContextMenuContentProps {
   entry: EntrySummary;
   onClose?: () => void;
+  onShowExportDialog?: (entryIds: number[]) => void;
 }
 
 // Standalone content component for controlled dropdown menus (used in EntryTable)
-export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuContentProps) {
+export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: EntryContextMenuContentProps) {
   const { openTab, tabs, closeTab } = useTabStore();
   const {
     collections,
@@ -90,9 +92,6 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
     activeFilter,
     refreshLibrary,
   } = useLibraryStore();
-
-  const [showExportDialog, setShowExportDialog] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
 
   // Use all selected entries for bulk operations when multiple are selected
   const targetIds =
@@ -120,9 +119,11 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
 
   const handleShowInFinder = async () => {
     try {
-      // Show all selected entries in Finder
-      for (const id of targetIds) {
-        await showEntryInFinder(id);
+      // Show all selected entries in Finder (batch operation for multiple files)
+      if (targetIds.length === 1) {
+        await showEntryInFinder(targetIds[0]);
+      } else {
+        await showEntriesInFinder(targetIds);
       }
     } catch (err) {
       console.error('Failed to show in Finder:', err);
@@ -352,29 +353,6 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
       await writeText(content);
     } catch (err) {
       console.error('Failed to copy BibTeX:', err);
-    }
-    onClose?.();
-  };
-
-  const handleExportBiblatexWithFiles = async (options: ExportOptions) => {
-    try {
-      setIsExporting(true);
-      const outputDir = await open({
-        directory: true,
-        title: 'Select Export Folder',
-      });
-      if (outputDir) {
-        const result = await exportToBiblatexWithFiles(targetIds, outputDir, options);
-        toast.success(
-          `Exported ${result.entriesExported} entries, ${result.filesExported} files, ${result.notesExported} notes`,
-        );
-        setShowExportDialog(false);
-      }
-    } catch (err) {
-      console.error('Failed to export to BibLaTeX:', err);
-      toast.error('Failed to export to BibLaTeX');
-    } finally {
-      setIsExporting(false);
     }
     onClose?.();
   };
@@ -465,10 +443,13 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
           <DropdownMenuSubContent className='w-48'>
             {tags.map((tag) => (
               <DropdownMenuItem key={tag.id} onClick={() => handleAddTag(tag.name)}>
-                <span
-                  className='w-2 h-2 rounded-full mr-2'
-                  style={{ backgroundColor: tag.color || '#6b7280' }}
-                />
+                {/* Only show color dot if tag has a color or is not imported */}
+                {(tag.color || !tag.isImported) && (
+                  <span
+                    className='w-2 h-2 rounded-full mr-2'
+                    style={{ backgroundColor: tag.color || '#6b7280' }}
+                  />
+                )}
                 {tag.name}
               </DropdownMenuItem>
             ))}
@@ -507,7 +488,7 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
             <FileCode className='h-4 w-4 mr-2' />
             BibTeX...
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setShowExportDialog(true)}>
+          <DropdownMenuItem onClick={() => onShowExportDialog?.(targetIds)}>
             <FolderOutput className='h-4 w-4 mr-2' />
             BibLaTeX with Files...
           </DropdownMenuItem>
@@ -522,14 +503,6 @@ export function EntryContextMenuContent({ entry, onClose }: EntryContextMenuCont
           </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
-
-      <ExportOptionsDialog
-        open={showExportDialog}
-        onClose={() => setShowExportDialog(false)}
-        onExport={handleExportBiblatexWithFiles}
-        entryCount={targetIds.length}
-        isExporting={isExporting}
-      />
 
       <DropdownMenuSeparator />
 
@@ -597,9 +570,11 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
 
   const handleShowInFinder = async () => {
     try {
-      // Show all selected entries in Finder
-      for (const id of targetIds) {
-        await showEntryInFinder(id);
+      // Show all selected entries in Finder (batch operation for multiple files)
+      if (targetIds.length === 1) {
+        await showEntryInFinder(targetIds[0]);
+      } else {
+        await showEntriesInFinder(targetIds);
       }
     } catch (err) {
       console.error('Failed to show in Finder:', err);
@@ -843,6 +818,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
   };
 
   return (
+    <>
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className='w-56'>
@@ -930,10 +906,13 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
             <ContextMenuSubContent className='w-48'>
               {tags.map((tag) => (
                 <ContextMenuItem key={tag.id} onClick={() => handleAddTag(tag.name)}>
-                  <span
-                    className='w-2 h-2 rounded-full mr-2'
-                    style={{ backgroundColor: tag.color || '#6b7280' }}
-                  />
+                  {/* Only show color dot if tag has a color or is not imported */}
+                  {(tag.color || !tag.isImported) && (
+                    <span
+                      className='w-2 h-2 rounded-full mr-2'
+                      style={{ backgroundColor: tag.color || '#6b7280' }}
+                    />
+                  )}
                   {tag.name}
                 </ContextMenuItem>
               ))}
@@ -1006,14 +985,15 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
           <ContextMenuShortcut>Del</ContextMenuShortcut>
         </ContextMenuItem>
       </ContextMenuContent>
-
-      <ExportOptionsDialog
-        open={showExportDialog}
-        onClose={() => setShowExportDialog(false)}
-        onExport={handleExportBiblatexWithFiles}
-        entryCount={targetIds.length}
-        isExporting={isExporting}
-      />
     </ContextMenu>
+
+    <ExportOptionsDialog
+      open={showExportDialog}
+      onClose={() => setShowExportDialog(false)}
+      onExport={handleExportBiblatexWithFiles}
+      entryCount={targetIds.length}
+      isExporting={isExporting}
+    />
+    </>
   );
 }

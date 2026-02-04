@@ -124,6 +124,7 @@ export interface EntrySummary {
   attachmentCount: number;
   hasPdf: boolean;
   hasNote: boolean;
+  hasWeblink: boolean;
   thumbnailPath?: string;
 }
 

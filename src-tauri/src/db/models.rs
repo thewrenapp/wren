@@ -202,6 +202,8 @@ pub struct EntrySummary {
     pub has_pdf: bool,
     #[serde(rename = "hasNote")]
     pub has_note: bool,
+    #[serde(rename = "hasWeblink")]
+    pub has_weblink: bool,
     #[serde(rename = "thumbnailPath")]
     pub thumbnail_path: Option<String>,
 }

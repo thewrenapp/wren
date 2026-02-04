@@ -1,6 +1,6 @@
 use crate::db::models::Setting;
 use crate::state::AppState;
-use sqlx::{Row, FromRow};
+use sqlx::FromRow;
 use tauri::State;
 
 #[derive(Debug, FromRow)]
@@ -56,4 +56,22 @@ pub async fn update_setting(
 #[tauri::command]
 pub async fn get_library_path(state: State<'_, AppState>) -> Result<String, String> {
     Ok(state.get_library_path_string().await)
+}
+
+/// Helper function to get a setting value by key (internal use, not a tauri command)
+pub async fn get_setting_value(pool: &sqlx::SqlitePool, key: &str) -> Option<String> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Helper function to check if a boolean setting is enabled
+pub async fn is_setting_enabled(pool: &sqlx::SqlitePool, key: &str) -> bool {
+    get_setting_value(pool, key)
+        .await
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
 }
