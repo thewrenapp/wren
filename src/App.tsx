@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { PDFPrintView } from "@/components/pdf/PDFPrintView";
 import { Toaster } from "@/components/ui/Toaster";
 import { DeleteConfirmationDialog } from "@/components/dialogs/DeleteConfirmationDialog";
 import { AdvancedSearchDialog } from "@/components/search/AdvancedSearchDialog";
@@ -7,7 +8,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useUIStore } from "@/stores/uiStore";
 
-function App() {
+function AppShell() {
   const { theme, showWelcomeOnStartup } = useSettingsStore();
   const { openTab, tabs } = useTabStore();
   const { setAdvancedSearchOpen } = useUIStore();
@@ -70,6 +71,17 @@ function App() {
       <AdvancedSearchDialog />
     </>
   );
+}
+
+function App() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const isPrintView = searchParams.get("print") === "1";
+
+  if (isPrintView) {
+    return <PDFPrintView />;
+  }
+
+  return <AppShell />;
 }
 
 export default App;

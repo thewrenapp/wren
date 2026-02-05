@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { GlobalWorkerOptions } from "pdfjs-dist";
 import { toast } from "@/stores/toastStore";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 // CSS imports in correct order
 import "pdfjs-dist/web/pdf_viewer.css";
@@ -81,7 +82,7 @@ interface HighlightRendererProps {
 }
 
 function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendererProps) {
-  const { highlight, viewportToScaled, screenshot, isScrolledTo, highlightBindings } =
+  const { highlight, viewportToPdfScaled, screenshot, isScrolledTo, highlightBindings, zoomScale } =
     useHighlightContainerContext<AppHighlight>();
   const { toggleEditInProgress } = usePdfHighlighterContext();
 
@@ -96,6 +97,9 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
       />
     );
   } else if (highlight.type === "freetext") {
+    // Scale font size with zoom level
+    const baseFontSize = parseFloat(highlight.fontSize || "14");
+    const scaledFontSize = `${Math.round(baseFontSize * zoomScale)}px`;
     component = (
       <FreetextHighlight
         highlight={highlight}
@@ -103,12 +107,13 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
         bounds={highlightBindings.textLayer}
         color={highlight.color}
         backgroundColor={highlight.backgroundColor}
-        fontSize={highlight.fontSize}
+        fontSize={scaledFontSize}
         onChange={(boundingRect) => {
           onEdit(highlight.id, {
             position: {
-              boundingRect: viewportToScaled(boundingRect),
+              boundingRect: viewportToPdfScaled(boundingRect),
               rects: [],
+              usePdfCoordinates: true,
             },
           });
           toggleEditInProgress(false);
@@ -130,8 +135,9 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
         onChange={(boundingRect) => {
           onEdit(highlight.id, {
             position: {
-              boundingRect: viewportToScaled(boundingRect),
+              boundingRect: viewportToPdfScaled(boundingRect),
               rects: [],
+              usePdfCoordinates: true,
             },
           });
         }}
@@ -159,8 +165,9 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
         onChange={(boundingRect) => {
           onEdit(highlight.id, {
             position: {
-              boundingRect: viewportToScaled(boundingRect),
+              boundingRect: viewportToPdfScaled(boundingRect),
               rects: [],
+              usePdfCoordinates: true,
             },
           });
         }}
@@ -180,8 +187,9 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
         onChange={(boundingRect) => {
           onEdit(highlight.id, {
             position: {
-              boundingRect: viewportToScaled(boundingRect),
+              boundingRect: viewportToPdfScaled(boundingRect),
               rects: [],
+              usePdfCoordinates: true,
             },
             content: { image: screenshot(boundingRect) },
           });
@@ -229,6 +237,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
   const [drawingColor, setDrawingColor] = useState("#000000");
   const [shapeColor, setShapeColor] = useState("#000000");
   const [darkMode, setDarkMode] = useState(false);
+  const [handTool, setHandTool] = useState(false);
 
   // Search state
   const [searchMatchCount, setSearchMatchCount] = useState(0);
@@ -407,6 +416,16 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     } catch (err) {
       console.error("Failed to toggle fullscreen:", err);
     }
+  }, []);
+
+  const toggleHandTool = useCallback(() => {
+    setHandTool((prev) => {
+      const next = !prev;
+      if (next) {
+        setToolMode(null);
+      }
+      return next;
+    });
   }, []);
 
   // Reset utils initialization flag when URL changes
@@ -906,11 +925,140 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         fitWidth();
         return;
       }
+
+      // Print: Cmd+P — open print window and trigger OS print dialog
+      if (isMeta && e.key === "p") {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          const baseUrl = window.location.origin;
+          const url = `${baseUrl}?print=1&file=${encodeURIComponent(filePath)}`;
+          const label = `print-${Date.now()}`;
+          const printWindow = new WebviewWindow(label, {
+            url,
+            title: "Print",
+            width: 900,
+            height: 700,
+            resizable: true,
+            visible: true,
+          });
+
+          printWindow.once("tauri://error", (event) => {
+            console.error("Failed to open print window:", event);
+            toast.error("Failed to open print dialog");
+          });
+        } catch (err: unknown) {
+          console.error("Failed to open print window:", err);
+          toast.error(`Failed to open print dialog: ${err}`);
+        }
+        return;
+      }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [zoomIn, zoomOut, fitWidth]);
+    // Use capture phase to intercept before webview's default CMD+P handler
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [zoomIn, zoomOut, fitWidth, filePath]);
+
+  // Hand tool - grab to pan
+  useEffect(() => {
+    if (!handTool) return;
+
+    const viewer = pdfHighlighterUtilsRef.current?.getViewer();
+    const container = (viewer?.container ||
+      containerRef.current?.querySelector(".PdfHighlighter")) as HTMLElement | null;
+    if (!container) return;
+
+    let isPanning = false;
+    let startX = 0;
+    let startY = 0;
+    let scrollLeft = 0;
+    let scrollTop = 0;
+
+    container.style.cursor = "grab";
+
+    container.style.cursor = "grab";
+
+    const handlePointerDown = (e: PointerEvent) => {
+      // Only pan on left click, and not on interactive elements
+      if (e.button !== 0 || !e.isPrimary) return;
+      const target = e.target as HTMLElement;
+      if (target.closest(".AreaHighlight, .FreetextHighlight, .DrawingHighlight, .ShapeHighlight")) return;
+
+      isPanning = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      scrollLeft = container.scrollLeft;
+      scrollTop = container.scrollTop;
+      container.style.cursor = "grabbing";
+      container.style.userSelect = "none";
+      try {
+        container.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore if pointer capture is not available
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!isPanning) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      container.scrollLeft = scrollLeft - dx;
+      container.scrollTop = scrollTop - dy;
+      e.preventDefault();
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+      if (!isPanning) return;
+      isPanning = false;
+      container.style.cursor = "grab";
+      container.style.userSelect = "";
+      try {
+        container.releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore if pointer capture is not available
+      }
+    };
+
+    container.addEventListener("pointerdown", handlePointerDown, true);
+    container.addEventListener("pointermove", handlePointerMove, true);
+    window.addEventListener("pointerup", handlePointerUp, true);
+
+    return () => {
+      container.style.cursor = "";
+      container.style.userSelect = "";
+      container.removeEventListener("pointerdown", handlePointerDown, true);
+      container.removeEventListener("pointermove", handlePointerMove, true);
+      window.removeEventListener("pointerup", handlePointerUp, true);
+    };
+  }, [handTool, viewerReady]);
+
+  // CMD/Ctrl + scroll wheel zoom
+  useEffect(() => {
+    const viewer = pdfHighlighterUtilsRef.current?.getViewer();
+    const container = (viewer?.container ||
+      containerRef.current?.querySelector(".PdfHighlighter")) as HTMLElement | null;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.deltaY < 0) {
+        zoomIn();
+      } else if (e.deltaY > 0) {
+        zoomOut();
+      }
+    };
+
+    const options: AddEventListenerOptions = { passive: false, capture: true };
+    container.addEventListener("wheel", handleWheel, options);
+    return () => container.removeEventListener("wheel", handleWheel, options);
+  }, [zoomIn, zoomOut, viewerReady]);
 
   // Search functions using PDF.js findController (provided by react-pdf-highlighter-plus)
   const handleSearch = useCallback((query: string, options: SearchOptions) => {
@@ -1057,6 +1205,8 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         onSearchClear={handleSearchClear}
         searchMatchCount={searchMatchCount}
         searchCurrentMatch={searchCurrentMatch}
+        handTool={handTool}
+        onToggleHandTool={toggleHandTool}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
       />

@@ -127,7 +127,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
     }
 
     if (targetAttachment?.attachmentType === "snapshot" && targetAttachment.filePath) {
-      return <HTMLViewer filePath={targetAttachment.filePath} title={targetAttachment.title} />;
+      return <HTMLViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} />;
     }
 
     if (targetAttachment?.attachmentType === "note") {

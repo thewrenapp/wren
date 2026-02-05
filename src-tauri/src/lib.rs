@@ -168,6 +168,7 @@ pub fn run() {
             commands::entries::get_attachment_types,
             commands::entries::show_entry_in_finder,
             commands::entries::show_entries_in_finder,
+            commands::entries::open_file_with_default_app,
             commands::entries::add_pdf_attachment,
             commands::entries::duplicate_entry,
             commands::entries::repair_entry_attachments,

@@ -578,6 +578,10 @@ export async function showEntriesInFinder(entryIds: number[]): Promise<void> {
   return invoke('show_entries_in_finder', { entryIds });
 }
 
+export async function openFileWithDefaultApp(filePath: string): Promise<void> {
+  return invoke('open_file_with_default_app', { filePath });
+}
+
 // =====================================================
 // Annotation Types
 // =====================================================

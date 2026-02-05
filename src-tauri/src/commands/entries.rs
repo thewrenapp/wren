@@ -3121,6 +3121,43 @@ pub async fn show_entries_in_finder(state: State<'_, AppState>, entry_ids: Vec<i
     Ok(())
 }
 
+/// Open a file in the system default app (used for printing attachments).
+#[tauri::command]
+pub async fn open_file_with_default_app(file_path: String) -> Result<(), String> {
+    let path = std::path::Path::new(&file_path);
+    if !path.exists() {
+        return Err("File not found".to_string());
+    }
+    if path.is_dir() {
+        return Err("Path is a directory".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &file_path])
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    Ok(())
+}
+
 // =====================================================
 // HELPER FUNCTIONS
 // =====================================================

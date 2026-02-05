@@ -1,0 +1,87 @@
+/* Styles injected into HTML viewer iframe for annotations and search */
+
+/* Text highlights */
+mark.html-annotation-highlight {
+  border-radius: 2px;
+  cursor: pointer;
+  mix-blend-mode: multiply;
+}
+mark.html-annotation-highlight:hover {
+  opacity: 0.7;
+}
+
+/* Area highlights */
+.html-area-highlight {
+  position: absolute;
+  border-radius: 3px;
+  cursor: pointer;
+  mix-blend-mode: multiply;
+  opacity: 0.35;
+}
+.html-area-highlight:hover {
+  opacity: 0.5;
+}
+
+/* Freetext notes */
+.html-freetext-note {
+  position: absolute;
+  min-width: 150px;
+  min-height: 80px;
+  background: #FFFFA5;
+  border: 1px solid #E6D85A;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.15);
+  cursor: move;
+  z-index: 100;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.html-freetext-note:hover {
+  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.25);
+}
+
+/* Rectangle shapes */
+.html-shape-rect {
+  position: absolute;
+  border-width: 2px;
+  border-style: solid;
+  border-radius: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.html-shape-rect:hover {
+  opacity: 0.7;
+}
+
+/* Drawing SVG */
+.html-drawing-svg {
+  position: absolute;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* Search highlights */
+mark.html-search-match {
+  background-color: #FFE28F;
+  border-radius: 2px;
+}
+mark.html-search-match.current {
+  background-color: #F97316;
+  color: white;
+}
+
+/* Dark mode adjustments */
+.dark mark.html-annotation-highlight {
+  mix-blend-mode: screen;
+}
+.dark .html-area-highlight {
+  mix-blend-mode: screen;
+}
+.dark .html-freetext-note {
+  background: #3D3D00;
+  border-color: #5C5C00;
+  color: #E5E5E5;
+}
