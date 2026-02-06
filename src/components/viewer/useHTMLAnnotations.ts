@@ -133,7 +133,28 @@ export function useHTMLAnnotations(
             nodeRange.surroundContents(mark);
             elements.push(mark);
           } catch {
-            // surroundContents may fail, skip this node
+            // surroundContents may fail on complex DOM; fall back to splitting text
+            try {
+              const startOffset = nodeRange.startOffset;
+              const endOffset = nodeRange.endOffset;
+              if (endOffset <= startOffset) continue;
+
+              const parent = textNode.parentNode;
+              if (!parent) continue;
+
+              const highlightNode = textNode.splitText(startOffset);
+              const afterNode = highlightNode.splitText(endOffset - startOffset);
+
+              const fallbackMark = iframeDoc.createElement("mark");
+              fallbackMark.className = "html-annotation-highlight";
+              fallbackMark.style.backgroundColor = highlight.color;
+              fallbackMark.dataset.highlightId = highlight.id;
+              fallbackMark.appendChild(highlightNode);
+              parent.insertBefore(fallbackMark, afterNode);
+              elements.push(fallbackMark);
+            } catch {
+              // If even fallback fails, skip this node
+            }
           }
         } catch {
           continue;
@@ -154,6 +175,9 @@ export function useHTMLAnnotations(
       const pos = deserializeSpatialPosition(highlight.position, iframeDoc);
       if (!pos) return [];
 
+      const left = pos.x;
+      const top = pos.y;
+
       const elements: HTMLElement[] = [];
 
       // Make body position:relative if not already
@@ -166,8 +190,8 @@ export function useHTMLAnnotations(
         const div = iframeDoc.createElement("div");
         div.className = "html-area-highlight";
         div.dataset.highlightId = highlight.id;
-        div.style.left = `${pos.x}px`;
-        div.style.top = `${pos.y}px`;
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
         div.style.width = `${pos.width}px`;
         div.style.height = `${pos.height}px`;
         div.style.backgroundColor = highlight.color;
@@ -177,8 +201,10 @@ export function useHTMLAnnotations(
         const div = iframeDoc.createElement("div");
         div.className = "html-freetext-note";
         div.dataset.highlightId = highlight.id;
-        div.style.left = `${pos.x}px`;
-        div.style.top = `${pos.y}px`;
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.backgroundColor = highlight.color;
+        div.style.borderColor = highlight.color;
         div.textContent = highlight.comment || "";
         iframeDoc.body.appendChild(div);
         elements.push(div);
@@ -186,8 +212,8 @@ export function useHTMLAnnotations(
         const div = iframeDoc.createElement("div");
         div.className = "html-shape-rect";
         div.dataset.highlightId = highlight.id;
-        div.style.left = `${pos.x}px`;
-        div.style.top = `${pos.y}px`;
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
         div.style.width = `${pos.width}px`;
         div.style.height = `${pos.height}px`;
         div.style.borderColor = highlight.color;
@@ -204,25 +230,29 @@ export function useHTMLAnnotations(
           const svg = iframeDoc.createElementNS("http://www.w3.org/2000/svg", "svg");
           svg.setAttribute("class", "html-drawing-svg");
           svg.dataset.highlightId = highlight.id;
-          svg.style.left = `${pos.x}px`;
-          svg.style.top = `${pos.y}px`;
+          svg.style.left = `${left}px`;
+          svg.style.top = `${top}px`;
           svg.style.width = `${pos.width}px`;
           svg.style.height = `${pos.height}px`;
-          svg.setAttribute("viewBox", `0 0 1 1`);
+          svg.setAttribute("viewBox", `0 0 ${pos.width} ${pos.height}`);
           svg.setAttribute("preserveAspectRatio", "none");
 
           for (const stroke of strokeData.strokes) {
             if (stroke.points.length < 2) continue;
 
-            const pathParts = [`M ${stroke.points[0].x} ${stroke.points[0].y}`];
+            const pathParts = [
+              `M ${stroke.points[0].x * pos.width} ${stroke.points[0].y * pos.height}`,
+            ];
             for (let i = 1; i < stroke.points.length; i++) {
-              pathParts.push(`L ${stroke.points[i].x} ${stroke.points[i].y}`);
+              pathParts.push(
+                `L ${stroke.points[i].x * pos.width} ${stroke.points[i].y * pos.height}`
+              );
             }
 
             const path = iframeDoc.createElementNS("http://www.w3.org/2000/svg", "path");
             path.setAttribute("d", pathParts.join(" "));
             path.setAttribute("stroke", stroke.color);
-            path.setAttribute("stroke-width", String(stroke.width / Math.max(pos.width, pos.height)));
+            path.setAttribute("stroke-width", String(stroke.width));
             path.setAttribute("fill", "none");
             path.setAttribute("stroke-linecap", "round");
             path.setAttribute("stroke-linejoin", "round");
@@ -456,7 +486,7 @@ export function useHTMLAnnotations(
           pageNumber: 1,
           positionJson: JSON.stringify(position),
           comment: text,
-          color: "#FFFFA5",
+          color: "#FFE28F",
         });
 
         const highlight: HTMLHighlight = {
@@ -465,7 +495,7 @@ export function useHTMLAnnotations(
           type: "freetext",
           position,
           comment: text,
-          color: "#FFFFA5",
+          color: "#FFE28F",
           sectionHeading: position.sectionHeading,
         };
 
@@ -474,6 +504,7 @@ export function useHTMLAnnotations(
         highlight.runtimeElements = elements;
 
         setHighlights((prev) => [...prev, highlight]);
+        toast.success("Note added");
       } catch (err) {
         console.error("Failed to create note:", err);
         toast.error("Failed to create note");
@@ -589,7 +620,28 @@ export function useHTMLAnnotations(
       if (!highlight) return;
 
       try {
-        await updateAnnotation(highlight.dbId, { color });
+        let updatedComment = highlight.comment;
+        if (highlight.type === "drawing" && highlight.comment) {
+          try {
+            const data = JSON.parse(highlight.comment) as {
+              strokes?: Array<{ points: Array<{ x: number; y: number }>; color: string; width: number }>;
+            };
+            if (data.strokes) {
+              data.strokes = data.strokes.map((stroke) => ({
+                ...stroke,
+                color,
+              }));
+              updatedComment = JSON.stringify(data);
+            }
+          } catch {
+            // ignore malformed comment json
+          }
+        }
+
+        await updateAnnotation(highlight.dbId, {
+          color,
+          comment: updatedComment,
+        });
 
         // Update runtime elements
         if (highlight.runtimeElements) {
@@ -598,14 +650,24 @@ export function useHTMLAnnotations(
               el.style.backgroundColor = color;
             } else if (highlight.type === "area") {
               el.style.backgroundColor = color;
+            } else if (highlight.type === "freetext") {
+              el.style.backgroundColor = color;
+              el.style.borderColor = color;
             } else if (highlight.type === "shape") {
               el.style.borderColor = color;
+            } else if (highlight.type === "drawing") {
+              const paths = el.querySelectorAll("path");
+              paths.forEach((path) => {
+                path.setAttribute("stroke", color);
+              });
             }
           }
         }
 
         setHighlights((prev) =>
-          prev.map((h) => (h.id === id ? { ...h, color } : h))
+          prev.map((h) =>
+            h.id === id ? { ...h, color, comment: updatedComment } : h
+          )
         );
       } catch (err) {
         console.error("Failed to update annotation:", err);
@@ -627,4 +689,35 @@ export function useHTMLAnnotations(
     renderAllHighlights,
     loading,
   };
+}
+
+function getDocumentScale(iframeDoc: Document): { scaleX: number; scaleY: number } {
+  const view = iframeDoc.defaultView;
+  const body = iframeDoc.body;
+  if (!view || !body) {
+    return { scaleX: 1, scaleY: 1 };
+  }
+
+  const transform = view.getComputedStyle(body).transform;
+  if (!transform || transform === "none") {
+    return { scaleX: 1, scaleY: 1 };
+  }
+
+  const matrixMatch = transform.match(/^matrix\(([^)]+)\)$/);
+  if (matrixMatch) {
+    const parts = matrixMatch[1].split(",").map((v) => parseFloat(v.trim()));
+    const scaleX = parts[0] || 1;
+    const scaleY = parts[3] || 1;
+    return { scaleX, scaleY };
+  }
+
+  const matrix3dMatch = transform.match(/^matrix3d\(([^)]+)\)$/);
+  if (matrix3dMatch) {
+    const parts = matrix3dMatch[1].split(",").map((v) => parseFloat(v.trim()));
+    const scaleX = parts[0] || 1;
+    const scaleY = parts[5] || 1;
+    return { scaleX, scaleY };
+  }
+
+  return { scaleX: 1, scaleY: 1 };
 }

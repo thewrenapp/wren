@@ -12,6 +12,8 @@ import { HTMLAnnotationPanel } from "./HTMLAnnotationPanel";
 import { HighlightPopup } from "@/components/pdf/HighlightPopup";
 import { cn } from "@/lib/utils";
 import { openFileWithDefaultApp } from "@/services/tauri/commands";
+import { HTML_HIGHLIGHT_COLORS, HTML_STROKE_COLORS } from "./annotationColors";
+import type { HTMLAnnotationType } from "./useHTMLAnnotations";
 
 interface HTMLViewerProps {
   filePath: string;
@@ -31,7 +33,9 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
 
   // Tool mode
   const [toolMode, setToolMode] = useState<ToolMode>(null);
+  const [editMode, setEditMode] = useState(false);
   const [highlightColor, setHighlightColor] = useState("#FFE28F");
+  const [areaHighlightColor, setAreaHighlightColor] = useState("#FFE28F");
   const [drawingColor, setDrawingColor] = useState("#000000");
   const [shapeColor, setShapeColor] = useState("#000000");
 
@@ -42,6 +46,7 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
   const [popupState, setPopupState] = useState<{
     highlightId: string;
     color: string;
+    type: HTMLAnnotationType;
     x: number;
     y: number;
   } | null>(null);
@@ -55,10 +60,33 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
 
   // Fullscreen
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteInputOpen, setNoteInputOpen] = useState(false);
+  const [noteInputPos, setNoteInputPos] = useState<{ x: number; y: number } | null>(null);
+  const [noteDocPos, setNoteDocPos] = useState<{ x: number; y: number } | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
+  const popupHoverRef = useRef(false);
+  const popupCloseTimerRef = useRef<number | null>(null);
+  const getBodyDocOffset = useCallback((doc: Document, zoomScale: number) => {
+    const bodyRect = doc.body.getBoundingClientRect();
+    return {
+      bodyOffsetLeft: bodyRect.left / zoomScale,
+      bodyOffsetTop: bodyRect.top / zoomScale,
+    };
+  }, []);
+  const getScrollOffsets = useCallback((doc: Document) => {
+    const docEl = doc.documentElement;
+    const body = doc.body;
+    return {
+      scrollLeft: docEl?.scrollLeft || body?.scrollLeft || 0,
+      scrollTop: docEl?.scrollTop || body?.scrollTop || 0,
+    };
+  }, []);
 
   // Store
   const {
@@ -115,7 +143,6 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
     if (!doc.body) return;
     doc.body.style.transformOrigin = "top left";
     doc.body.style.transform = `scale(${zoomScale})`;
-    doc.body.style.width = `${100 / zoomScale}%`;
   }, []);
 
   // Handle iframe load
@@ -231,6 +258,16 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
     return () => clearTimeout(timeoutId);
   }, [iframeDoc, annotations.loading, annotations.renderAllHighlights]);
 
+  // Re-render annotations after zoom changes to keep spatial overlays aligned
+  useEffect(() => {
+    if (!iframeDoc || annotations.loading) return;
+    const timeoutId = setTimeout(() => {
+      annotations.renderAllHighlights();
+    }, 50);
+
+    return () => clearTimeout(timeoutId);
+  }, [scale, iframeDoc, annotations.loading, annotations.renderAllHighlights]);
+
   // Keyboard shortcuts for zoom and print
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -277,6 +314,8 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [zoomIn, zoomOut, handleScaleChange, filePath]);
 
+  const popupEnabled = editMode && toolMode === null;
+
   // Handle text selection for highlight mode — depends on iframeDoc state
   // so listeners are re-attached when iframe becomes available
   useEffect(() => {
@@ -292,19 +331,20 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
     };
 
     // Handle click for freetext mode
-    const handleClick = (e: MouseEvent) => {
-      if (toolMode === "freetext") {
-        const iframeRect = iframeRef.current?.getBoundingClientRect();
-        if (!iframeRect) return;
+    const handleClick = (_e: MouseEvent) => {
+      // Freetext handled by overlay to avoid iframe click swallowing.
+    };
 
-        const x = (e.clientX - iframeRect.left) / scale;
-        const y = (e.clientY - iframeRect.top) / scale + (iframeDoc.documentElement.scrollTop || 0);
-
-        const text = prompt("Enter note text:");
-        if (text) {
-          annotations.addFreetextNote(x, y, text);
-        }
-      }
+    const handleMouseMove = (e: MouseEvent) => {
+      const contentRect = contentRef.current?.getBoundingClientRect();
+      const iframeRect = iframeRef.current?.getBoundingClientRect();
+      if (!contentRect) return;
+      if (!iframeRect) return;
+      if (popupHoverRef.current) return;
+      lastMousePosRef.current = {
+        x: e.clientX + iframeRect.left - contentRect.left,
+        y: e.clientY + iframeRect.top - contentRect.top,
+      };
     };
 
     // Handle hover for highlight popup
@@ -312,46 +352,109 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
       const target = e.target as HTMLElement;
       const highlightEl = target.closest("[data-highlight-id]") as HTMLElement | null;
 
-      if (highlightEl) {
+      if (highlightEl && popupEnabled) {
+        if (popupCloseTimerRef.current) {
+          window.clearTimeout(popupCloseTimerRef.current);
+          popupCloseTimerRef.current = null;
+        }
         const highlightId = highlightEl.dataset.highlightId!;
         const highlight = annotations.highlights.find((h) => h.id === highlightId);
         if (highlight) {
-          const rect = highlightEl.getBoundingClientRect();
+          const contentRect = contentRef.current?.getBoundingClientRect();
           const iframeRect = iframeRef.current?.getBoundingClientRect();
-          if (iframeRect) {
-            setPopupState({
-              highlightId,
-              color: highlight.color,
-              x: rect.left - iframeRect.left + rect.width / 2,
-              y: rect.top - iframeRect.top - 10,
-            });
-          }
+          const rect = highlightEl.getBoundingClientRect();
+          if (!contentRect || !iframeRect) return;
+          const x = rect.left + iframeRect.left - contentRect.left + rect.width / 2;
+          const y = rect.top + iframeRect.top - contentRect.top - 8;
+          setPopupState({
+            highlightId,
+            color: highlight.color,
+            type: highlight.type,
+            x,
+            y,
+          });
         }
       }
     };
 
     const handleMouseOut = (e: MouseEvent) => {
       const target = e.relatedTarget as HTMLElement | null;
-      if (!target?.closest("[data-highlight-id]")) {
-        setPopupState(null);
+      if (popupHoverRef.current) return;
+      if (target?.closest("[data-highlight-id]")) return;
+
+      if (popupCloseTimerRef.current) {
+        window.clearTimeout(popupCloseTimerRef.current);
       }
+      popupCloseTimerRef.current = window.setTimeout(() => {
+        if (!popupHoverRef.current) {
+          setPopupState(null);
+        }
+      }, 150);
     };
 
     iframeDoc.addEventListener("mouseup", handleMouseUp);
-    iframeDoc.addEventListener("click", handleClick);
+    iframeDoc.addEventListener("click", handleClick, { capture: true });
     iframeDoc.addEventListener("mouseover", handleMouseOver);
     iframeDoc.addEventListener("mouseout", handleMouseOut);
+    iframeDoc.addEventListener("mousemove", handleMouseMove);
 
     return () => {
       iframeDoc.removeEventListener("mouseup", handleMouseUp);
-      iframeDoc.removeEventListener("click", handleClick);
+      iframeDoc.removeEventListener("click", handleClick, { capture: true });
       iframeDoc.removeEventListener("mouseover", handleMouseOver);
       iframeDoc.removeEventListener("mouseout", handleMouseOut);
+      iframeDoc.removeEventListener("mousemove", handleMouseMove);
+      if (popupCloseTimerRef.current) {
+        window.clearTimeout(popupCloseTimerRef.current);
+        popupCloseTimerRef.current = null;
+      }
     };
-  }, [iframeDoc, toolMode, highlightColor, scale, annotations]);
+  }, [iframeDoc, toolMode, highlightColor, scale, annotations, popupEnabled]);
+
+  const handleFreetextClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (toolMode !== "freetext") return;
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const iframeDoc = iframeRef.current?.contentDocument;
+      if (!iframeDoc) return;
+
+      const rect = overlayRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const xViewport = e.clientX - rect.left;
+      const yViewport = e.clientY - rect.top;
+      const { scrollLeft, scrollTop } = getScrollOffsets(iframeDoc);
+      const { bodyOffsetLeft, bodyOffsetTop } = getBodyDocOffset(iframeDoc, scale);
+      const docX = xViewport / scale + scrollLeft - bodyOffsetLeft;
+      const docY = yViewport / scale + scrollTop - bodyOffsetTop;
+
+      setNoteDocPos({ x: docX, y: docY });
+      setNoteInputPos({ x: xViewport, y: yViewport });
+      setNoteDraft("");
+      setNoteInputOpen(true);
+    },
+    [toolMode, scale, getScrollOffsets, getBodyDocOffset]
+  );
+
+  const handleNoteSave = useCallback(() => {
+    const text = noteDraft.trim();
+    if (!text || !noteDocPos) {
+      setNoteInputOpen(false);
+      return;
+    }
+
+    annotations.addFreetextNote(noteDocPos.x, noteDocPos.y, text);
+    setNoteInputOpen(false);
+  }, [noteDraft, noteDocPos, annotations]);
 
   // Overlay mouse handlers for area/rectangle/drawing
-  const spatialToolActive = toolMode === "area" || toolMode === "rectangle" || toolMode === "drawing";
+  const spatialToolActive =
+    toolMode === "area" ||
+    toolMode === "rectangle" ||
+    toolMode === "drawing";
 
   const handleOverlayMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -381,6 +484,38 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
 
   const handleOverlayMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      if (popupHoverRef.current) return;
+      if (popupEnabled && !isDrawing) {
+        const iframeDoc = iframeRef.current?.contentDocument;
+        const iframeRect = iframeRef.current?.getBoundingClientRect();
+        const contentRect = contentRef.current?.getBoundingClientRect();
+        if (iframeDoc && iframeRect && contentRect) {
+          const x = e.clientX - iframeRect.left;
+          const y = e.clientY - iframeRect.top;
+          const el = iframeDoc.elementFromPoint(x, y) as HTMLElement | null;
+          const highlightEl = el?.closest("[data-highlight-id]") as HTMLElement | null;
+          if (highlightEl) {
+            const highlightId = highlightEl.dataset.highlightId!;
+            const highlight = annotations.highlights.find((h) => h.id === highlightId);
+            if (highlight) {
+              lastMousePosRef.current = {
+                x: e.clientX - contentRect.left,
+                y: e.clientY - contentRect.top,
+              };
+              setPopupState({
+                highlightId,
+                color: highlight.color,
+                type: highlight.type,
+                x: lastMousePosRef.current.x,
+                y: lastMousePosRef.current.y - 8,
+              });
+            }
+          } else {
+            setPopupState(null);
+          }
+        }
+      }
+
       if (!isDrawing) return;
 
       const rect = overlayRef.current?.getBoundingClientRect();
@@ -399,7 +534,7 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
         setDrawCurrent({ x, y });
       }
     },
-    [isDrawing, toolMode, currentStroke, scale]
+    [popupEnabled, isDrawing, toolMode, currentStroke, scale, annotations.highlights]
   );
 
   const handleOverlayMouseUp = useCallback(() => {
@@ -408,6 +543,8 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
 
     const iframeDoc = iframeRef.current?.contentDocument;
     if (!iframeDoc) return;
+    const { scrollLeft, scrollTop } = getScrollOffsets(iframeDoc);
+    const { bodyOffsetLeft, bodyOffsetTop } = getBodyDocOffset(iframeDoc, scale);
 
     if (toolMode === "drawing" && currentStroke && currentStroke.points.length >= 2) {
       // Complete drawing stroke — accumulate strokes
@@ -416,7 +553,14 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
       setCurrentStroke(null);
 
       // Auto-save drawing after each stroke
-      const allPoints = newStrokes.flatMap((s) => s.points);
+      const docStrokes = newStrokes.map((s) => ({
+        ...s,
+        points: s.points.map((p) => ({
+          x: p.x + scrollLeft - bodyOffsetLeft,
+          y: p.y + scrollTop - bodyOffsetTop,
+        })),
+      }));
+      const allPoints = docStrokes.flatMap((s) => s.points);
       const minX = Math.min(...allPoints.map((p) => p.x));
       const minY = Math.min(...allPoints.map((p) => p.y));
       const maxX = Math.max(...allPoints.map((p) => p.x));
@@ -425,7 +569,7 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
       const height = maxY - minY + 10;
 
       // Normalize strokes as percentages
-      const normalizedStrokes = newStrokes.map((s) => ({
+      const normalizedStrokes = docStrokes.map((s) => ({
         ...s,
         points: s.points.map((p) => ({
           x: (p.x - minX + 5) / width,
@@ -448,19 +592,16 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
       drawStart &&
       drawCurrent
     ) {
-      const minX = Math.min(drawStart.x, drawCurrent.x) / scale;
-      const minY = Math.min(drawStart.y, drawCurrent.y) / scale;
+      const minX = Math.min(drawStart.x, drawCurrent.x) / scale + scrollLeft - bodyOffsetLeft;
+      const minY = Math.min(drawStart.y, drawCurrent.y) / scale + scrollTop - bodyOffsetTop;
       const w = Math.abs(drawCurrent.x - drawStart.x) / scale;
       const h = Math.abs(drawCurrent.y - drawStart.y) / scale;
 
-      // Add iframe scroll offset
-      const scrollTop = iframeDoc.documentElement.scrollTop || 0;
-
       if (w > 10 && h > 10) {
         if (toolMode === "area") {
-          annotations.addAreaHighlight(minX, minY + scrollTop, w, h, highlightColor);
+          annotations.addAreaHighlight(minX, minY, w, h, areaHighlightColor);
         } else {
-          annotations.addShapeHighlight(minX, minY + scrollTop, w, h, shapeColor, {
+          annotations.addShapeHighlight(minX, minY, w, h, shapeColor, {
             shapeType: "rectangle",
             strokeColor: shapeColor,
             strokeWidth: 2,
@@ -480,6 +621,7 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
     drawingStrokes,
     drawingColor,
     highlightColor,
+    areaHighlightColor,
     shapeColor,
     scale,
     annotations,
@@ -527,8 +669,12 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
         onScaleChange={handleScaleChange}
         highlightColor={highlightColor}
         onColorChange={setHighlightColor}
+        areaHighlightColor={areaHighlightColor}
+        onAreaColorChange={setAreaHighlightColor}
         toolMode={toolMode}
         onToolModeChange={setToolMode}
+        editMode={editMode}
+        onEditModeChange={setEditMode}
         drawingColor={drawingColor}
         onDrawingColorChange={setDrawingColor}
         shapeColor={shapeColor}
@@ -598,7 +744,7 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
         )}
 
         {/* Content area */}
-        <div className="flex-1 relative overflow-hidden">
+        <div ref={contentRef} className="flex-1 relative overflow-hidden">
           {/* Loading spinner */}
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10">
@@ -618,7 +764,7 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
                 setError("Failed to load HTML content");
               }}
               title={title || "HTML Viewer"}
-              sandbox="allow-same-origin"
+              sandbox="allow-same-origin allow-scripts"
             />
           )}
 
@@ -646,10 +792,10 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
                       width: Math.abs(drawCurrent.x - drawStart.x),
                       height: Math.abs(drawCurrent.y - drawStart.y),
                       borderColor:
-                        toolMode === "area" ? highlightColor : shapeColor,
+                        toolMode === "area" ? areaHighlightColor : shapeColor,
                       backgroundColor:
                         toolMode === "area"
-                          ? `${highlightColor}33`
+                          ? `${areaHighlightColor}33`
                           : "transparent",
                     }}
                   />
@@ -698,6 +844,47 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
             </div>
           )}
 
+          {/* Overlay for freetext notes */}
+          {toolMode === "freetext" && (
+            <div
+              ref={overlayRef}
+              className="absolute inset-0 z-20"
+              style={{ cursor: "text" }}
+              onClick={handleFreetextClick}
+              onMouseMove={(e) => {
+                if (!popupEnabled) return;
+                const iframeDoc = iframeRef.current?.contentDocument;
+                const iframeRect = iframeRef.current?.getBoundingClientRect();
+                const contentRect = contentRef.current?.getBoundingClientRect();
+                if (iframeDoc && iframeRect && contentRect) {
+                  const x = e.clientX - iframeRect.left;
+                  const y = e.clientY - iframeRect.top;
+                  const el = iframeDoc.elementFromPoint(x, y) as HTMLElement | null;
+                  const highlightEl = el?.closest("[data-highlight-id]") as HTMLElement | null;
+                  if (highlightEl) {
+                    const highlightId = highlightEl.dataset.highlightId!;
+                    const highlight = annotations.highlights.find((h) => h.id === highlightId);
+                    if (highlight) {
+                      lastMousePosRef.current = {
+                        x: e.clientX - contentRect.left,
+                        y: e.clientY - contentRect.top,
+                      };
+                      setPopupState({
+                        highlightId,
+                        color: highlight.color,
+                        type: highlight.type,
+                        x: lastMousePosRef.current.x,
+                        y: lastMousePosRef.current.y - 8,
+                      });
+                    }
+                  } else {
+                    setPopupState(null);
+                  }
+                }
+              }}
+            />
+          )}
+
           {/* Highlight popup */}
           {popupState && (
             <div
@@ -707,9 +894,32 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
                 top: popupState.y,
                 transform: "translate(-50%, -100%)",
               }}
+              onMouseEnter={() => {
+                popupHoverRef.current = true;
+                if (popupCloseTimerRef.current) {
+                  window.clearTimeout(popupCloseTimerRef.current);
+                  popupCloseTimerRef.current = null;
+                }
+              }}
+              onMouseLeave={() => {
+                popupHoverRef.current = false;
+                if (popupCloseTimerRef.current) {
+                  window.clearTimeout(popupCloseTimerRef.current);
+                }
+                popupCloseTimerRef.current = window.setTimeout(() => {
+                  if (!popupHoverRef.current) {
+                    setPopupState(null);
+                  }
+                }, 150);
+              }}
             >
               <HighlightPopup
                 currentColor={popupState.color}
+                colors={
+                  popupState.type === "shape" || popupState.type === "drawing"
+                    ? HTML_STROKE_COLORS
+                    : HTML_HIGHLIGHT_COLORS
+                }
                 onColorChange={(color) => {
                   annotations.updateHighlightColor(popupState.highlightId, color);
                   setPopupState((prev) =>
@@ -721,6 +931,50 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
                   setPopupState(null);
                 }}
               />
+            </div>
+          )}
+
+          {/* Note input */}
+          {noteInputOpen && noteInputPos && (
+            <div
+              className="absolute z-40 bg-background border rounded-md shadow-md p-2 w-56"
+              style={{
+                left: noteInputPos.x,
+                top: noteInputPos.y,
+                transform: "translate(8px, 8px)",
+              }}
+            >
+              <div className="text-[10px] text-muted-foreground mb-1">Add note</div>
+              <textarea
+                className="w-full h-20 text-xs p-1 border rounded-sm resize-none focus:outline-none"
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    handleNoteSave();
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setNoteInputOpen(false);
+                  }
+                }}
+                autoFocus
+              />
+              <div className="flex justify-end gap-1 mt-1">
+                <button
+                  className="text-[10px] px-2 py-0.5 rounded border"
+                  onClick={() => setNoteInputOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="text-[10px] px-2 py-0.5 rounded border bg-primary text-primary-foreground"
+                  onClick={handleNoteSave}
+                >
+                  Save
+                </button>
+              </div>
             </div>
           )}
         </div>

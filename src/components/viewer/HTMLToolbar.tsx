@@ -42,24 +42,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { HTML_HIGHLIGHT_COLORS, HTML_STROKE_COLORS } from "./annotationColors";
 
-const HIGHLIGHT_COLORS = [
-  { name: "Yellow", value: "#FFE28F" },
-  { name: "Red", value: "#FF8A8A" },
-  { name: "Green", value: "#A8E6A1" },
-  { name: "Blue", value: "#8EC8FF" },
-  { name: "Purple", value: "#D8B4FE" },
-  { name: "Orange", value: "#FFBD70" },
-];
-
-const STROKE_COLORS = [
-  { name: "Black", value: "#000000" },
-  { name: "Red", value: "#EF4444" },
-  { name: "Blue", value: "#3B82F6" },
-  { name: "Green", value: "#22C55E" },
-  { name: "Purple", value: "#A855F7" },
-  { name: "Orange", value: "#F97316" },
-];
+const HIGHLIGHT_COLORS = HTML_HIGHLIGHT_COLORS;
+const STROKE_COLORS = HTML_STROKE_COLORS;
 
 export type ToolMode = "highlight" | "area" | "freetext" | "drawing" | "rectangle" | null;
 
@@ -76,8 +62,12 @@ interface HTMLToolbarProps {
   onScaleChange: (scale: number) => void;
   highlightColor: string;
   onColorChange: (color: string) => void;
+  areaHighlightColor: string;
+  onAreaColorChange: (color: string) => void;
   toolMode: ToolMode;
   onToolModeChange: (mode: ToolMode) => void;
+  editMode: boolean;
+  onEditModeChange: (enabled: boolean) => void;
   drawingColor: string;
   onDrawingColorChange: (color: string) => void;
   shapeColor: string;
@@ -106,8 +96,12 @@ export function HTMLToolbar({
   onScaleChange,
   highlightColor,
   onColorChange,
+  areaHighlightColor,
+  onAreaColorChange,
   toolMode,
   onToolModeChange,
+  editMode,
+  onEditModeChange,
   drawingColor,
   onDrawingColorChange,
   shapeColor,
@@ -129,7 +123,6 @@ export function HTMLToolbar({
   onOpenExternal,
 }: HTMLToolbarProps) {
   const scalePercent = Math.round(scale * 100);
-  const [editMode, setEditMode] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [highlightAll, setHighlightAll] = useState(true);
@@ -158,8 +151,8 @@ export function HTMLToolbar({
     if (editMode) {
       onToolModeChange(null);
     }
-    setEditMode(!editMode);
-  }, [editMode, onToolModeChange]);
+    onEditModeChange(!editMode);
+  }, [editMode, onToolModeChange, onEditModeChange]);
 
   const performSearch = useCallback(
     (query: string) => {
@@ -503,7 +496,7 @@ export function HTMLToolbar({
                   onClick={() => onToolModeChange(toolMode === "area" ? null : "area")}
                 >
                   <BoxSelect className="h-4 w-4" />
-                  <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-1 rounded-full" style={{ backgroundColor: highlightColor }} />
+                  <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-1 rounded-full" style={{ backgroundColor: areaHighlightColor }} />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Area Highlight</TooltipContent>
@@ -520,9 +513,9 @@ export function HTMLToolbar({
                   {HIGHLIGHT_COLORS.map((color) => (
                     <button
                       key={color.value}
-                      className={cn("w-6 h-6 rounded-full transition-transform hover:scale-110", highlightColor === color.value && "ring-2 ring-foreground ring-offset-1")}
+                      className={cn("w-6 h-6 rounded-full transition-transform hover:scale-110", areaHighlightColor === color.value && "ring-2 ring-foreground ring-offset-1")}
                       style={{ backgroundColor: color.value }}
-                      onClick={() => onColorChange(color.value)}
+                      onClick={() => onAreaColorChange(color.value)}
                       title={color.name}
                     />
                   ))}

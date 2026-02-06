@@ -60,6 +60,7 @@ interface AppHighlight extends Highlight {
   color?: string;
   backgroundColor?: string;
   fontSize?: string;
+  fontFamily?: string;
   // Shape properties
   shapeType?: ShapeType;
   strokeColor?: string;
@@ -84,6 +85,7 @@ interface HighlightRendererProps {
   onDelete: (highlightId: string) => void;
   onEdit: (highlightId: string, edit: Partial<AppHighlight>) => void;
   isEditable: boolean;
+  showTipEnabled: boolean;
   selectionRects: DOMRect[];
 }
 
@@ -92,41 +94,12 @@ function HighlightRenderer({
   onDelete,
   onEdit,
   isEditable,
+  showTipEnabled,
   selectionRects,
 }: HighlightRendererProps) {
   const { highlight, viewportToPdfScaled, screenshot, isScrolledTo, highlightBindings, zoomScale } =
     useHighlightContainerContext<AppHighlight>();
   const { toggleEditInProgress } = usePdfHighlighterContext();
-  const DEBUG_OVERLAP = false;
-  const isDimmed =
-    highlight.type === "text" &&
-    selectionRects.length > 0 &&
-    highlightBindings.textLayer &&
-    highlight.position?.rects?.some((rect) => {
-      const layerRect = highlightBindings.textLayer.getBoundingClientRect();
-      const highlightRect = new DOMRect(rect.left, rect.top, rect.width, rect.height);
-      return selectionRects
-        .map(
-          (selRect) =>
-            new DOMRect(
-              selRect.left - layerRect.left,
-              selRect.top - layerRect.top,
-              selRect.width,
-              selRect.height,
-            ),
-        )
-        .some(
-          (selRect) =>
-            selRect.left < highlightRect.right &&
-            selRect.right > highlightRect.left &&
-            selRect.top < highlightRect.bottom &&
-            selRect.bottom > highlightRect.top,
-        );
-    });
-  if (DEBUG_OVERLAP) {
-    void 0;
-  }
-
   let component;
 
   if (highlight.type === "text") {
@@ -135,7 +108,7 @@ function HighlightRenderer({
         highlight={highlight}
         isScrolledTo={isScrolledTo}
         highlightColor={highlight.highlightColor || DEFAULT_TEXT_HIGHLIGHT_COLOR}
-        style={isDimmed ? { opacity: 0.12, filter: "saturate(0.55)" } : undefined}
+        highlightStyle={"highlight"}
       />
     );
   } else if (highlight.type === "freetext") {
@@ -163,6 +136,14 @@ function HighlightRenderer({
         onTextChange={(newText) => {
           onEdit(highlight.id, { content: { text: newText } });
         }}
+        onStyleChange={isEditable ? (style) => {
+          onEdit(highlight.id, {
+            ...(style.color !== undefined && { color: style.color }),
+            ...(style.backgroundColor !== undefined && { backgroundColor: style.backgroundColor }),
+            ...(style.fontSize !== undefined && { fontSize: style.fontSize }),
+            ...(style.fontFamily !== undefined && { fontFamily: style.fontFamily }),
+          });
+        } : undefined}
         onEditStart={isEditable ? () => toggleEditInProgress(true) : undefined}
         onEditEnd={isEditable ? () => toggleEditInProgress(false) : undefined}
         onDelete={isEditable ? () => onDelete(highlight.id) : undefined}
@@ -213,6 +194,12 @@ function HighlightRenderer({
             },
           });
         }}
+        onStyleChange={isEditable ? (style) => {
+          onEdit(highlight.id, {
+            ...(style.strokeColor !== undefined && { strokeColor: style.strokeColor }),
+            ...(style.strokeWidth !== undefined && { strokeWidth: style.strokeWidth }),
+          });
+        } : undefined}
         onEditStart={isEditable ? () => toggleEditInProgress(true) : undefined}
         onEditEnd={isEditable ? () => toggleEditInProgress(false) : undefined}
         onDelete={isEditable ? () => onDelete(highlight.id) : undefined}
@@ -243,23 +230,41 @@ function HighlightRenderer({
     );
   }
 
-  // Only show popup tip for text and area highlights
-  const showTip = isEditable && (highlight.type === "text" || highlight.type === "area");
+  // Show popup tip for text, area, and shape highlights
+  const showTip = highlight.type === "text" || highlight.type === "area" || highlight.type === "shape";
+
+  const SHAPE_COLORS = [
+    { name: "Black", value: "#000000" },
+    { name: "Red", value: "#EF4444" },
+    { name: "Blue", value: "#3B82F6" },
+    { name: "Green", value: "#22C55E" },
+    { name: "Purple", value: "#A855F7" },
+    { name: "Orange", value: "#F97316" },
+  ];
 
   const highlightTip: Tip = {
     position: highlight.position,
-    content: (
+    content: showTip ? (
       <HighlightPopup
         currentColor={
-          highlight.highlightColor ||
-          (highlight.type === "area"
-            ? DEFAULT_AREA_HIGHLIGHT_COLOR
-            : DEFAULT_TEXT_HIGHLIGHT_COLOR)
+          highlight.type === "shape"
+            ? highlight.strokeColor || "#000000"
+            : highlight.highlightColor ||
+              (highlight.type === "area"
+                ? DEFAULT_AREA_HIGHLIGHT_COLOR
+                : DEFAULT_TEXT_HIGHLIGHT_COLOR)
         }
-        onColorChange={(newColor) => onColorChange(highlight.id, newColor)}
+        colors={highlight.type === "shape" ? SHAPE_COLORS : undefined}
+        onColorChange={(newColor) => {
+          if (highlight.type === "shape") {
+            onEdit(highlight.id, { strokeColor: newColor });
+          } else {
+            onColorChange(highlight.id, newColor);
+          }
+        }}
         onDelete={() => onDelete(highlight.id)}
       />
-    ),
+    ) : null,
   };
 
   return (
@@ -284,6 +289,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
   const [toolMode, setToolMode] = useState<ToolMode>(null);
   const [mode, setMode] = useState<ViewerMode>("pan");
   const [selectionRects, setSelectionRects] = useState<DOMRect[]>([]);
+  const [isSelecting, setIsSelecting] = useState(false);
   const [drawingColor, setDrawingColor] = useState("#000000");
   const [shapeColor, setShapeColor] = useState("#000000");
   const [darkMode, setDarkMode] = useState(false);
@@ -411,7 +417,8 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     };
   }, []);
 
-  const isSelectMode = mode === "edit" && toolMode === null;
+  const isTextSelectionMode = mode === "edit" && (toolMode === null || toolMode === "highlight");
+  const isSelectMode = isTextSelectionMode;
 
   // Track active text selection and dim only overlapping text highlights (select mode)
   useEffect(() => {
@@ -419,12 +426,12 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     if (!container) return;
 
     const handlePointerDown = () => {
-      if (!isSelectMode) return;
+      if (!isTextSelectionMode) return;
       selectingActiveRef.current = true;
     };
 
     const handlePointerMove = () => {
-      if (!isSelectMode || !selectingActiveRef.current) return;
+      if (!isTextSelectionMode || !selectingActiveRef.current) return;
       const selection = window.getSelection();
       const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
       if (!range || !container.contains(range.commonAncestorContainer)) {
@@ -435,26 +442,50 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         setSelectionRects([]);
         return;
       }
-      setSelectionRects(Array.from(range.getClientRects()));
+      const rects = Array.from(range.getClientRects());
+      setSelectionRects(rects.length > 0 ? rects : [new DOMRect(0, 0, 1, 1)]);
     };
 
     const handlePointerUp = () => {
-      if (!isSelectMode) return;
+      if (!isTextSelectionMode) return;
       selectingActiveRef.current = false;
-      setSelectionRects([]);
+      // Keep selection rects until selection is cleared.
+    };
+
+    const handleSelectionChange = () => {
+      if (!isTextSelectionMode) return;
+      const selection = window.getSelection();
+      const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+      if (
+        !range ||
+        !selection ||
+        selection.isCollapsed ||
+        selection.toString().trim().length === 0 ||
+        !container.contains(range.commonAncestorContainer)
+      ) {
+        setSelectionRects([]);
+        setIsSelecting(false);
+        return;
+      }
+      const rects = Array.from(range.getClientRects());
+      setSelectionRects(rects.length > 0 ? rects : [new DOMRect(0, 0, 1, 1)]);
+      setIsSelecting(true);
     };
 
     container.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("pointermove", handlePointerMove, true);
     window.addEventListener("pointerup", handlePointerUp, true);
+    document.addEventListener("selectionchange", handleSelectionChange);
 
     return () => {
       container.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("pointermove", handlePointerMove, true);
       window.removeEventListener("pointerup", handlePointerUp, true);
+      document.removeEventListener("selectionchange", handleSelectionChange);
       setSelectionRects([]);
+      setIsSelecting(false);
     };
-  }, [isSelectMode, highlights]);
+  }, [isTextSelectionMode, highlights]);
 
   // Copy selected text handler - Cmd+C / Ctrl+C
   useEffect(() => {
@@ -696,6 +727,25 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     const fallbackColor =
       highlightType === "area" ? DEFAULT_AREA_HIGHLIGHT_COLOR : DEFAULT_TEXT_HIGHLIGHT_COLOR;
 
+    // Parse freetext style from JSON color field
+    if (highlightType === "freetext" && annotation.color?.startsWith("{")) {
+      try {
+        const style = JSON.parse(annotation.color);
+        return {
+          id: String(annotation.id),
+          type: "freetext" as AppHighlight["type"],
+          position,
+          content: { text: textContent },
+          backgroundColor: style.bg || "#FFFFA5",
+          color: style.fg || "#000000",
+          fontSize: style.fs || "14px",
+          fontFamily: style.ff,
+        };
+      } catch {
+        // Fall through to default
+      }
+    }
+
     return {
       id: String(annotation.id),
       type: highlightType as AppHighlight["type"],
@@ -777,7 +827,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
             pageNumber: position.boundingRect.pageNumber,
             positionJson: JSON.stringify(position),
             selectedText: "",
-            color: "#FFFFA5",
+            color: JSON.stringify({ bg: "#FFFFA5", fg: "#000000", fs: "14px" }),
           });
           setHighlights((prev) =>
             prev.map((h) =>
@@ -844,7 +894,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         strokeWidth: shape.strokeWidth,
       };
       setHighlights((prev) => [...prev, newHighlight]);
-      setToolMode(null);
+      // Keep rectangle mode active until user exits (Esc or tool toggle)
 
       (async () => {
         try {
@@ -909,12 +959,47 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
       }
 
       try {
-        const updates: { positionJson?: string; comment?: string } = {};
+        const updates: { positionJson?: string; comment?: string; color?: string } = {};
         if (edit.position) {
           updates.positionJson = JSON.stringify(edit.position);
         }
-        if (edit.content?.text) {
+        if (edit.content?.text !== undefined) {
           updates.comment = edit.content.text;
+        }
+        // Persist drawing content (image + strokes) as JSON in comment field
+        if (edit.content?.image !== undefined || edit.content?.strokes !== undefined) {
+          const current = highlights.find((h) => h.id === highlightId);
+          if (current?.type === "drawing") {
+            updates.comment = JSON.stringify({
+              image: edit.content?.image ?? current.content?.image,
+              strokes: edit.content?.strokes ?? current.content?.strokes,
+            });
+          }
+        }
+        // Persist shape style changes as JSON in comment field
+        if (edit.strokeColor !== undefined || edit.strokeWidth !== undefined) {
+          const current = highlights.find((h) => h.id === highlightId);
+          if (current?.type === "shape" && current.content?.shape) {
+            const updatedShape = {
+              ...current.content.shape,
+              strokeColor: edit.strokeColor ?? current.strokeColor,
+              strokeWidth: edit.strokeWidth ?? current.strokeWidth,
+            };
+            updates.comment = JSON.stringify(updatedShape);
+            updates.color = updatedShape.strokeColor;
+          }
+        }
+        // Persist freetext style changes as JSON in the color field
+        if (edit.color !== undefined || edit.backgroundColor !== undefined || edit.fontSize !== undefined || edit.fontFamily !== undefined) {
+          const current = highlights.find((h) => h.id === highlightId);
+          if (current?.type === "freetext") {
+            updates.color = JSON.stringify({
+              bg: edit.backgroundColor ?? current.backgroundColor ?? "#FFFFA5",
+              fg: edit.color ?? current.color ?? "#000000",
+              fs: edit.fontSize ?? current.fontSize ?? "14px",
+              ff: edit.fontFamily ?? current.fontFamily,
+            });
+          }
         }
         if (Object.keys(updates).length > 0) {
           await updateAnnotation(parseInt(highlightId, 10), updates);
@@ -923,7 +1008,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         // Failed to update
       }
     },
-    []
+    [highlights]
   );
 
   // Delete highlight
@@ -1284,6 +1369,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
       ref={containerRef}
       data-viewer-mode={mode}
       data-tool-mode={toolMode ?? "none"}
+      data-selecting={isSelecting ? "true" : "false"}
       className="pdf-viewer-container flex h-full flex-col bg-muted/30"
     >
       <PDFToolbar
@@ -1480,6 +1566,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
                       onDelete={handleDelete}
                       onEdit={handleEdit}
                       isEditable={mode === "edit"}
+                      showTipEnabled={mode === "edit"}
                       selectionRects={selectionRects}
                     />
                   </PdfHighlighter>

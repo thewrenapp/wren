@@ -3,8 +3,8 @@ import { Rnd } from "react-rnd";
 import { getPageFromElement } from "../lib/pdfjs-dom";
 import type { DrawingStroke, LTWHP, ViewportHighlight } from "../types";
 
-// Drawing style presets (same as toolbar)
-const DRAWING_COLORS = ["#000000", "#FF0000", "#0000FF", "#00FF00", "#FFFF00"];
+// Drawing style presets (matches PDFToolbar STROKE_COLORS)
+const DRAWING_COLORS = ["#000000", "#EF4444", "#3B82F6", "#22C55E", "#A855F7", "#F97316"];
 const STROKE_WIDTHS = [
   { label: "Thin", value: 1 },
   { label: "Medium", value: 3 },

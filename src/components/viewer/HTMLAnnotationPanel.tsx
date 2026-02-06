@@ -285,16 +285,27 @@ export function HTMLAnnotationPanel({
               </div>
               <div className="space-y-0.5">
                 {annotationsBySection[section].map((annotation) => {
-                  const text = annotation.selectedText || annotation.comment || "";
+                  const text =
+                    annotation.type === "text" || annotation.type === "freetext"
+                      ? annotation.selectedText || annotation.comment || ""
+                      : "";
                   const preview = text.length > 80 ? text.slice(0, 80) + "..." : text;
 
                   return (
                     <ContextMenu key={annotation.id}>
                       <ContextMenuTrigger asChild>
-                        <button
+                        <div
+                          role="button"
+                          tabIndex={0}
                           onClick={() => handleAnnotationClick(annotation)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              handleAnnotationClick(annotation);
+                            }
+                          }}
                           className={cn(
-                            "w-full text-left px-1.5 py-1 rounded transition-colors",
+                            "group w-full text-left px-1.5 py-1 rounded transition-colors",
                             "hover:bg-muted/50",
                             selectedId === annotation.id && "bg-muted"
                           )}
@@ -331,8 +342,21 @@ export function HTMLAnnotationPanel({
                                 </p>
                               )}
                             </div>
+                            {onDelete && (
+                              <button
+                                type="button"
+                                className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                                title="Delete"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDelete(annotation.id);
+                                }}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           </div>
-                        </button>
+                        </div>
                       </ContextMenuTrigger>
                       <ContextMenuContent>
                         <ContextMenuItem

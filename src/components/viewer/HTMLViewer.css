@@ -59,7 +59,7 @@ mark.html-annotation-highlight:hover {
 /* Drawing SVG */
 .html-drawing-svg {
   position: absolute;
-  pointer-events: none;
+  pointer-events: auto;
   overflow: visible;
 }
 

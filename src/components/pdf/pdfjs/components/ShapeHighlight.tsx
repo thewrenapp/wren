@@ -133,13 +133,14 @@ const DefaultDeleteIcon = () => (
   </svg>
 );
 
-// Default color presets for shapes
+// Default color presets for shapes (matches PDFToolbar STROKE_COLORS)
 const DEFAULT_COLOR_PRESETS = [
   "#000000", // Black
-  "#FF0000", // Red
-  "#0000FF", // Blue
-  "#00AA00", // Green
-  "#FF6600", // Orange
+  "#EF4444", // Red
+  "#3B82F6", // Blue
+  "#22C55E", // Green
+  "#A855F7", // Purple
+  "#F97316", // Orange
 ];
 
 // Stroke width options

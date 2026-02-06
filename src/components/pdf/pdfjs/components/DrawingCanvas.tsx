@@ -85,6 +85,7 @@ export const DrawingCanvas = ({
   const isDrawingRef = useRef(false);
   const [pageNumber, setPageNumber] = useState<number | null>(null);
   const [pageElement, setPageElement] = useState<HTMLElement | null>(null);
+  const pageRectRef = useRef<DOMRect | null>(null);
 
   // Find which page the user is drawing on
   const findPageFromPoint = useCallback(
@@ -95,17 +96,22 @@ export const DrawingCanvas = ({
         const pageView = viewer.getPageView(i);
         if (!pageView?.div) continue;
 
-        const rect = pageView.div.getBoundingClientRect();
+        const pageNode = pageView.div as HTMLElement;
+        const pageRect = pageNode.getBoundingClientRect();
+        const textLayerNode = pageView.textLayer?.div as HTMLElement | undefined;
+        const baseRect = textLayerNode
+          ? textLayerNode.getBoundingClientRect()
+          : pageRect;
         if (
-          clientX >= rect.left &&
-          clientX <= rect.right &&
-          clientY >= rect.top &&
-          clientY <= rect.bottom
+          clientX >= pageRect.left &&
+          clientX <= pageRect.right &&
+          clientY >= pageRect.top &&
+          clientY <= pageRect.bottom
         ) {
           return {
             pageNumber: i + 1,
-            element: pageView.div as HTMLElement,
-            rect,
+            element: textLayerNode ?? pageNode,
+            rect: baseRect,
           };
         }
       }
@@ -172,14 +178,24 @@ export const DrawingCanvas = ({
       if (pageNumber === null) {
         setPageNumber(pageInfo.pageNumber);
         setPageElement(pageInfo.element);
+        pageRectRef.current = pageInfo.rect;
 
-        // Resize canvas to match page
+        // Resize canvas to match page and align within the PDF viewer container
         const canvas = canvasRef.current;
         if (canvas) {
-          canvas.width = pageInfo.rect.width;
-          canvas.height = pageInfo.rect.height;
-          canvas.style.left = `${pageInfo.rect.left}px`;
-          canvas.style.top = `${pageInfo.rect.top}px`;
+          const node = pageInfo.element;
+          canvas.width = node.clientWidth;
+          canvas.height = node.clientHeight;
+          const container = viewer.container as HTMLElement | undefined;
+          const containerRect = container ? container.getBoundingClientRect() : null;
+          const scrollTop = container?.scrollTop || 0;
+          const scrollLeft = container?.scrollLeft || 0;
+          const left = containerRect ? pageInfo.rect.left - containerRect.left + scrollLeft : 0;
+          const top = containerRect ? pageInfo.rect.top - containerRect.top + scrollTop : 0;
+          canvas.style.left = `${left}px`;
+          canvas.style.top = `${top}px`;
+
+          void 0;
         }
       } else if (pageInfo.pageNumber !== pageNumber) {
         // User trying to draw on different page - ignore
@@ -188,9 +204,11 @@ export const DrawingCanvas = ({
       }
 
       isDrawingRef.current = true;
+      const baseRect = pageRectRef.current;
+      if (!baseRect) return;
       const pos = {
-        x: clientX - pageInfo.rect.left,
-        y: clientY - pageInfo.rect.top,
+        x: clientX - baseRect.left,
+        y: clientY - baseRect.top,
       };
       setCurrentStroke({ points: [pos], color: strokeColor, width: strokeWidth });
     },
@@ -200,9 +218,9 @@ export const DrawingCanvas = ({
   // Handle mouse/touch move
   const handleMove = useCallback(
     (clientX: number, clientY: number) => {
-      if (!isDrawingRef.current || !pageElement) return;
-
-      const rect = pageElement.getBoundingClientRect();
+      if (!isDrawingRef.current) return;
+      const rect = pageRectRef.current;
+      if (!rect) return;
       const pos = {
         x: clientX - rect.left,
         y: clientY - rect.top,
@@ -294,11 +312,12 @@ export const DrawingCanvas = ({
     setCurrentStroke(null);
     setPageNumber(null);
     setPageElement(null);
+    pageRectRef.current = null;
   };
 
   // Complete drawing
   const handleDone = () => {
-    if (strokes.length === 0 || pageNumber === null || !pageElement || !viewer) {
+    if (strokes.length === 0 || pageNumber === null || !viewer) {
       console.log("DrawingCanvas: No strokes to save");
       onCancel();
       return;
@@ -407,7 +426,7 @@ export const DrawingCanvas = ({
         style={{
           width: pageElement ? pageElement.getBoundingClientRect().width : "100%",
           height: pageElement ? pageElement.getBoundingClientRect().height : "100%",
-          position: "fixed",
+          position: "absolute",
         }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -417,6 +436,9 @@ export const DrawingCanvas = ({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       />
+      <div className="DrawingCanvas__hint">
+        Free draw active. Press Escape to cancel.
+      </div>
       <div className="DrawingCanvas__controls">
         <button
           type="button"

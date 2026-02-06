@@ -5,6 +5,20 @@
   display: none !important;
 }
 
+/* Show drawing hint similar to shape hint */
+.DrawingCanvas__hint {
+  position: fixed !important;
+  bottom: 20px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  padding: 6px 12px !important;
+  font-size: 12px !important;
+  border-radius: 4px !important;
+  background: rgba(0, 0, 0, 0.7) !important;
+  color: #fff !important;
+  z-index: 10 !important;
+}
+
 /* Style shape controls to be minimal - just hint */
 .ShapeCanvas__controls .ShapeCanvas__cancelButton {
   display: none !important;
@@ -24,8 +38,7 @@
 
 /* Style the freetext/note box */
 .FreetextHighlight__container {
-  background-color: #FFFFA5 !important;
-  border: 1px solid #D4C84A !important;
+  border: none !important;
   box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.2) !important;
   border-radius: 3px !important;
   min-width: 120px !important;
@@ -34,9 +47,9 @@
 
 .FreetextHighlight__container textarea {
   background: transparent !important;
-  font-size: 14px !important;
+  font-size: inherit !important;
   padding: 8px !important;
-  color: #000000 !important;
+  color: inherit !important;
   resize: both !important;
 }
 
@@ -66,13 +79,20 @@
   cursor: grabbing !important;
 }
 
-/* Disable annotation interactivity in pan mode or when no tool is active */
+/* Disable annotation interactivity in pan mode */
 .pdf-viewer-container[data-viewer-mode="pan"] .PdfHighlighter__highlight-layer,
-.pdf-viewer-container[data-viewer-mode="pan"] .PdfHighlighter__highlight-layer *,
-.pdf-viewer-container[data-viewer-mode="edit"][data-tool-mode="none"] .PdfHighlighter__highlight-layer,
-.pdf-viewer-container[data-viewer-mode="edit"][data-tool-mode="none"] .PdfHighlighter__highlight-layer * {
+.pdf-viewer-container[data-viewer-mode="pan"] .PdfHighlighter__highlight-layer * {
   pointer-events: none !important;
 }
 
-/* Only dim text highlights while actively selecting */
-/* Only dim overlapping highlights via inline styles */
+/* Allow text selection to pass through highlights while selecting */
+.pdf-viewer-container[data-selecting="true"] .PdfHighlighter__highlight-layer,
+.pdf-viewer-container[data-selecting="true"] .PdfHighlighter__highlight-layer * {
+  pointer-events: none !important;
+}
+
+/* Dim text highlights while actively selecting so native blue selection dominates */
+.pdf-viewer-container[data-selecting="true"] .TextHighlight__part,
+.pdf-viewer-container[data-selecting="true"] .AreaHighlight__part {
+  opacity: 0.3 !important;
+}

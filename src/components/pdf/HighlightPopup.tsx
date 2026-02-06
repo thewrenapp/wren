@@ -12,18 +12,22 @@ const HIGHLIGHT_COLORS = [
 
 interface HighlightPopupProps {
   currentColor?: string;
+  colors?: { name: string; value: string }[];
   onColorChange: (color: string) => void;
   onDelete: () => void;
 }
 
 export function HighlightPopup({
   currentColor,
+  colors,
   onColorChange,
   onDelete,
 }: HighlightPopupProps) {
+  const palette = colors && colors.length > 0 ? colors : HIGHLIGHT_COLORS;
+
   return (
     <div className="flex items-center gap-1 rounded-lg border bg-popover p-1.5 shadow-lg">
-      {HIGHLIGHT_COLORS.map((color) => (
+      {palette.map((color) => (
         <button
           key={color.value}
           className={`w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 ${

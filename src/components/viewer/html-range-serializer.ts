@@ -258,27 +258,22 @@ export function serializeSpatialPosition(
   height: number,
   iframeDoc: Document
 ): HTMLSpatialPosition {
-  const anchor = findNearestBlockElement(x, y, iframeDoc);
-  const anchorXPath = anchor ? getXPath(anchor, iframeDoc) : "/html/body";
+  const { scrollLeft, scrollTop } = getScrollOffsets(iframeDoc);
+  const { scaleX, scaleY } = getDocumentScale(iframeDoc);
 
-  let offsetX = x;
-  let offsetY = y;
+  const viewportX = (x - scrollLeft) * scaleX;
+  const viewportY = (y - scrollTop) * scaleY;
 
-  if (anchor) {
-    const rect = anchor.getBoundingClientRect();
-    offsetX = x - rect.left;
-    offsetY = y - rect.top;
-  }
-
+  const anchor = findNearestBlockElement(viewportX, viewportY, iframeDoc);
   const heading = anchor
     ? findNearestHeading(anchor, iframeDoc)
     : null;
 
   return {
     type: "spatial",
-    anchorXPath,
-    anchorOffsetX: offsetX,
-    anchorOffsetY: offsetY,
+    anchorXPath: "/html/body",
+    anchorOffsetX: x,
+    anchorOffsetY: y,
     width,
     height,
     pageNumber: 1,
@@ -293,6 +288,9 @@ export function deserializeSpatialPosition(
   position: HTMLSpatialPosition,
   iframeDoc: Document
 ): { x: number; y: number; width: number; height: number } | null {
+  const { scrollLeft, scrollTop } = getScrollOffsets(iframeDoc);
+  const { scaleX, scaleY } = getDocumentScale(iframeDoc);
+
   const anchor = resolveXPath(position.anchorXPath, iframeDoc);
   if (!anchor || !(anchor instanceof Element || anchor instanceof HTMLElement)) {
     // Fallback to raw offsets from body
@@ -304,10 +302,19 @@ export function deserializeSpatialPosition(
     };
   }
 
+  if (anchor === iframeDoc.body) {
+    return {
+      x: position.anchorOffsetX,
+      y: position.anchorOffsetY,
+      width: position.width,
+      height: position.height,
+    };
+  }
+
   const rect = (anchor as Element).getBoundingClientRect();
   return {
-    x: rect.left + position.anchorOffsetX,
-    y: rect.top + position.anchorOffsetY,
+    x: rect.left / scaleX + scrollLeft + position.anchorOffsetX,
+    y: rect.top / scaleY + scrollTop + position.anchorOffsetY,
     width: position.width,
     height: position.height,
   };
@@ -365,8 +372,8 @@ export function findNearestHeading(
  * Find the closest block-level element at given coordinates.
  */
 export function findNearestBlockElement(
-  x: number,
-  y: number,
+  viewportX: number,
+  viewportY: number,
   iframeDoc: Document
 ): Element | null {
   const blockElements = new Set([
@@ -387,7 +394,7 @@ export function findNearestBlockElement(
     "DETAILS",
   ]);
 
-  let element = iframeDoc.elementFromPoint(x, y);
+  let element = iframeDoc.elementFromPoint(viewportX, viewportY);
 
   while (element && element !== iframeDoc.body) {
     if (blockElements.has(element.tagName)) {
@@ -397,4 +404,43 @@ export function findNearestBlockElement(
   }
 
   return iframeDoc.body;
+}
+
+function getScrollOffsets(iframeDoc: Document): { scrollLeft: number; scrollTop: number } {
+  const scrollEl = iframeDoc.scrollingElement || iframeDoc.documentElement;
+  return {
+    scrollLeft: scrollEl?.scrollLeft || 0,
+    scrollTop: scrollEl?.scrollTop || 0,
+  };
+}
+
+function getDocumentScale(iframeDoc: Document): { scaleX: number; scaleY: number } {
+  const view = iframeDoc.defaultView;
+  const body = iframeDoc.body;
+  if (!view || !body) {
+    return { scaleX: 1, scaleY: 1 };
+  }
+
+  const transform = view.getComputedStyle(body).transform;
+  if (!transform || transform === "none") {
+    return { scaleX: 1, scaleY: 1 };
+  }
+
+  const matrixMatch = transform.match(/^matrix\(([^)]+)\)$/);
+  if (matrixMatch) {
+    const parts = matrixMatch[1].split(",").map((v) => parseFloat(v.trim()));
+    const scaleX = parts[0] || 1;
+    const scaleY = parts[3] || 1;
+    return { scaleX, scaleY };
+  }
+
+  const matrix3dMatch = transform.match(/^matrix3d\(([^)]+)\)$/);
+  if (matrix3dMatch) {
+    const parts = matrix3dMatch[1].split(",").map((v) => parseFloat(v.trim()));
+    const scaleX = parts[0] || 1;
+    const scaleY = parts[5] || 1;
+    return { scaleX, scaleY };
+  }
+
+  return { scaleX: 1, scaleY: 1 };
 }
