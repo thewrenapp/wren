@@ -1,0 +1,84 @@
+/* EPUBViewer custom styles */
+
+/* epub.js annotation highlight styles */
+.epub-hl {
+  fill: currentColor;
+  fill-opacity: 0.3;
+  mix-blend-mode: multiply;
+}
+
+/* Search match highlighting */
+mark.epub-search-match {
+  background-color: #FFE28F;
+  color: inherit;
+  padding: 0;
+  border-radius: 1px;
+}
+
+mark.epub-search-match.current {
+  background-color: #F97316;
+  color: white;
+}
+
+/* Area highlight in epub iframe */
+.epub-area-highlight {
+  mix-blend-mode: multiply;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.epub-area-highlight:hover {
+  opacity: 0.5 !important;
+}
+
+/* Freetext note in epub iframe */
+.epub-freetext-note {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+
+.epub-freetext-note:hover {
+  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Shape rectangle in epub iframe */
+.epub-shape-rect {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.epub-shape-rect:hover {
+  border-width: 3px !important;
+}
+
+/* Drawing SVG in epub iframe */
+.epub-drawing-svg {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* Force hand cursor while panning */
+.epub-viewer-container[data-viewer-mode="pan"] .epub-content-area {
+  cursor: grab;
+}
+
+.epub-viewer-container[data-viewer-mode="pan"] .epub-content-area:active {
+  cursor: grabbing;
+}
+
+/* Disable annotation interactivity in pan mode */
+.epub-viewer-container[data-viewer-mode="pan"] [data-epub-highlight-id] {
+  pointer-events: none !important;
+}
+
+/* Allow text selection to pass through highlights while selecting */
+.epub-viewer-container[data-selecting="true"] [data-epub-highlight-id] {
+  pointer-events: none !important;
+}
+
+/* Dim text highlights while actively selecting */
+.epub-viewer-container[data-selecting="true"] .epub-hl {
+  opacity: 0.3 !important;
+}

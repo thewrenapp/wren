@@ -974,7 +974,8 @@ INSERT OR IGNORE INTO attachment_types (id, name, display_name, icon) VALUES
     (5, 'image', 'Image', 'image'),
     (6, 'video', 'Video', 'video'),
     (7, 'audio', 'Audio', 'headphones'),
-    (8, 'generic', 'File', 'file');
+    (8, 'generic', 'File', 'file'),
+    (9, 'epub', 'EPUB Document', 'book-open');
 
 -- Link types
 INSERT OR IGNORE INTO link_types (id, name, display_name, inverse_name) VALUES

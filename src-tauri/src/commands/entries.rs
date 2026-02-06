@@ -2876,6 +2876,274 @@ pub async fn add_pdf_attachment(
     get_attachment(state, attachment_id).await
 }
 
+/// Determine attachment type from file extension
+fn get_attachment_type_from_extension(path: &str) -> &'static str {
+    let path_lower = path.to_lowercase();
+    if path_lower.ends_with(".pdf") {
+        "pdf"
+    } else if path_lower.ends_with(".html") || path_lower.ends_with(".htm") {
+        "snapshot"
+    } else if path_lower.ends_with(".png") || path_lower.ends_with(".jpg")
+        || path_lower.ends_with(".jpeg") || path_lower.ends_with(".gif")
+        || path_lower.ends_with(".webp") || path_lower.ends_with(".svg")
+        || path_lower.ends_with(".bmp") || path_lower.ends_with(".tiff")
+    {
+        "image"
+    } else if path_lower.ends_with(".epub") {
+        "epub"
+    } else if path_lower.ends_with(".md") || path_lower.ends_with(".txt") {
+        "note"
+    } else if path_lower.ends_with(".mp4") || path_lower.ends_with(".mov")
+        || path_lower.ends_with(".avi") || path_lower.ends_with(".mkv")
+        || path_lower.ends_with(".webm")
+    {
+        "video"
+    } else if path_lower.ends_with(".mp3") || path_lower.ends_with(".wav")
+        || path_lower.ends_with(".flac") || path_lower.ends_with(".aac")
+        || path_lower.ends_with(".ogg")
+    {
+        "audio"
+    } else {
+        "generic"
+    }
+}
+
+/// Add any file as attachment to an existing entry (auto-detects type)
+#[tauri::command]
+pub async fn add_file_attachment(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    entry_id: i64,
+    file_path: String,
+) -> Result<Attachment, String> {
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    use std::path::PathBuf;
+    use crate::filename;
+    use crate::commands::settings::is_setting_enabled;
+
+    let source_path = PathBuf::from(&file_path);
+    if !source_path.exists() {
+        return Err(format!("File not found: {}", file_path));
+    }
+
+    // macOS can store some file types (e.g. .epub) as directory packages.
+    // If the path is a directory, zip it into a temp file first using ditto.
+    let effective_source: PathBuf;
+    let temp_zip: Option<PathBuf>;
+    if source_path.is_dir() {
+        tracing::info!("Source is a directory package, archiving with ditto: {:?}", file_path);
+        let tmp = std::env::temp_dir().join(format!("wren-attach-{}.zip", Uuid::new_v4()));
+        let output = std::process::Command::new("ditto")
+            .args(["-c", "-k", "--sequesterRsrc"])
+            .arg(&source_path)
+            .arg(&tmp)
+            .output()
+            .map_err(|e| format!("Failed to archive directory package: {}", e))?;
+        if !output.status.success() {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!(
+                "Failed to archive directory package: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        effective_source = tmp.clone();
+        temp_zip = Some(tmp);
+    } else {
+        effective_source = source_path.clone();
+        temp_zip = None;
+    }
+
+    // Cleanup helper: remove temp zip on any early return
+    let cleanup = || {
+        if let Some(ref p) = temp_zip {
+            let _ = fs::remove_file(p);
+        }
+    };
+
+    // Auto-detect attachment type from extension (use original path for extension detection)
+    let attachment_type = get_attachment_type_from_extension(&file_path);
+
+    // For PDFs, delegate to the specialized handler (includes text extraction)
+    if attachment_type == "pdf" {
+        cleanup();
+        return add_pdf_attachment(state, app_handle, entry_id, file_path).await;
+    }
+
+    // Get entry key for folder structure
+    let entry_key: String = match sqlx::query_scalar("SELECT key FROM entries WHERE id = ?")
+        .bind(entry_id)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(key) => key,
+        Err(e) => { cleanup(); return Err(format!("Entry not found: {}", e)); }
+    };
+
+    // Get file size from metadata
+    let file_meta = match fs::metadata(&effective_source) {
+        Ok(m) => m,
+        Err(e) => { cleanup(); return Err(format!("Failed to read file metadata: {}", e)); }
+    };
+    let file_size = file_meta.len() as i64;
+
+    // Calculate hash using streaming reader
+    let file_hash = {
+        use std::io::Read;
+        let mut file = match fs::File::open(&effective_source) {
+            Ok(f) => f,
+            Err(e) => { cleanup(); return Err(format!("Failed to open file: {}", e)); }
+        };
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            let bytes_read = match file.read(&mut buffer) {
+                Ok(n) => n,
+                Err(e) => { cleanup(); return Err(format!("Failed to read file: {}", e)); }
+            };
+            if bytes_read == 0 { break; }
+            hasher.update(&buffer[..bytes_read]);
+        }
+        hex::encode(hasher.finalize())
+    };
+
+    // Create destination path
+    let dest_dir = {
+        let library_path = state.library_path.read().await;
+        library_path.join("files").join(&entry_key)
+    };
+
+    fs::create_dir_all(&dest_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
+
+    // Get original filename
+    let original_file_name = source_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| format!("attachment-{}", Uuid::new_v4()));
+
+    // Check if auto-rename is enabled
+    let auto_rename = is_setting_enabled(&state.db, "auto_rename_files").await;
+
+    let final_file_name = if auto_rename {
+        let entry_row = sqlx::query("SELECT title, date FROM entries WHERE id = ?")
+            .bind(entry_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| format!("Failed to fetch entry: {}", e))?;
+
+        let entry_title: String = entry_row.get("title");
+        let entry_date: Option<String> = entry_row.get("date");
+
+        let creator_rows = sqlx::query(
+            r#"
+            SELECT ec.first_name, ec.last_name, ec.name, ct.name as creator_type, ec.sort_order
+            FROM entry_creators ec
+            JOIN creator_types ct ON ec.creator_type_id = ct.id
+            WHERE ec.entry_id = ?
+            ORDER BY ec.sort_order
+            "#
+        )
+        .bind(entry_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| format!("Failed to fetch creators: {}", e))?;
+
+        let creators: Vec<crate::db::models::Creator> = creator_rows
+            .iter()
+            .map(|row| crate::db::models::Creator {
+                id: None,
+                creator_type: row.get("creator_type"),
+                creator_type_display: None,
+                first_name: row.get("first_name"),
+                last_name: row.get("last_name"),
+                name: row.get("name"),
+                sort_order: row.get("sort_order"),
+            })
+            .collect();
+
+        let year = entry_date
+            .as_ref()
+            .and_then(|d| filename::extract_year(d));
+
+        let extension = source_path
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let generated = filename::generate_filename(
+            &entry_title,
+            &creators,
+            year.as_deref(),
+            &extension,
+        );
+
+        if generated.is_empty() {
+            original_file_name
+        } else {
+            generated
+        }
+    } else {
+        original_file_name
+    };
+
+    // Resolve any filename conflicts
+    let dest_path = filename::resolve_conflict(&dest_dir, &final_file_name);
+
+    // Copy file to library (use effective_source which may be a temp zip for directory packages)
+    match fs::copy(&effective_source, &dest_path) {
+        Ok(_) => {},
+        Err(e) => { cleanup(); return Err(format!("Failed to copy file: {}", e)); }
+    }
+    cleanup(); // Remove temp zip if any
+
+    let dest_path_str = dest_path.to_string_lossy().to_string();
+
+    // Get attachment type ID
+    let attachment_type_id: i64 =
+        sqlx::query_scalar("SELECT id FROM attachment_types WHERE name = ?")
+            .bind(attachment_type)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| format!("Unknown attachment type '{}': {}", attachment_type, e))?;
+
+    // Get title from final filename (without extension)
+    let title = dest_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Attachment".to_string());
+
+    // Create attachment record
+    let attachment_key = Uuid::new_v4().to_string();
+    let result = sqlx::query(
+        r#"
+        INSERT INTO attachments (key, entry_id, attachment_type_id, title, file_path, file_hash, file_size)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
+        "#,
+    )
+    .bind(&attachment_key)
+    .bind(entry_id)
+    .bind(attachment_type_id)
+    .bind(&title)
+    .bind(&dest_path_str)
+    .bind(&file_hash)
+    .bind(file_size)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| format!("Failed to create attachment: {}", e))?;
+
+    let attachment_id: i64 = result.get("id");
+    tracing::info!(
+        "Added {} attachment {} to entry {} (filename: {})",
+        attachment_type,
+        attachment_id,
+        entry_id,
+        dest_path.file_name().unwrap_or_default().to_string_lossy()
+    );
+
+    get_attachment(state, attachment_id).await
+}
+
 // =====================================================
 // TAG / COLLECTION OPERATIONS
 // =====================================================

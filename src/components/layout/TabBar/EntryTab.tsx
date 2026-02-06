@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/resizable";
 import { PDFViewer } from "@/components/pdf/PDFViewer";
 import { HTMLViewer } from "@/components/viewer/HTMLViewer";
+import { EPUBViewer } from "@/components/epub/EPUBViewer";
 import { EntryInfoPanel } from "@/components/layout/RightPane/EntryInfoPanel";
 import { useUIStore } from "@/stores/uiStore";
 import { useLibraryStore } from "@/stores/libraryStore";
@@ -89,10 +90,15 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
     );
   }
 
-  // If no specific attachment or not found, default to first PDF
+  // If no specific attachment or not found, default to first viewable attachment
   if (!targetAttachment) {
     targetAttachment = entry.attachments?.find(
       (a: Attachment) => a.attachmentType === "pdf"
+    );
+  }
+  if (!targetAttachment) {
+    targetAttachment = entry.attachments?.find(
+      (a: Attachment) => a.attachmentType === "epub"
     );
   }
 
@@ -111,6 +117,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
     tags: entry.tags,
     attachmentCount: entry.attachmentCount,
     hasPdf: entry.attachments?.some(a => a.attachmentType === "pdf") || false,
+    hasEpub: entry.attachments?.some(a => a.attachmentType === "epub") || false,
     hasNote: entry.attachments?.some(a => a.attachmentType === "note") || false,
     hasWeblink: entry.attachments?.some(a => a.attachmentType === "weblink") || false,
   };
@@ -128,6 +135,10 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
 
     if (targetAttachment?.attachmentType === "snapshot" && targetAttachment.filePath) {
       return <HTMLViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} />;
+    }
+
+    if (targetAttachment?.attachmentType === "epub" && targetAttachment.filePath) {
+      return <EPUBViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} />;
     }
 
     if (targetAttachment?.attachmentType === "note") {

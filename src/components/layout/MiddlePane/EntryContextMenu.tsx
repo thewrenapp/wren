@@ -17,6 +17,7 @@ import {
   FileJson,
   FileCode,
   FolderOutput,
+  Paperclip,
 } from 'lucide-react';
 import {
   ContextMenu,
@@ -46,6 +47,7 @@ import {
   removeEntryFromCollection,
   deleteEntry,
   addPdfAttachment,
+  addFileAttachment,
   createAttachment,
   getTrashCount,
   exportToCslJson,
@@ -254,6 +256,39 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
     onClose?.();
   };
 
+  const handleAddFileAttachment = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          {
+            name: 'Supported Files',
+            extensions: [
+              'epub', 'pdf', 'html', 'htm',
+              'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff',
+              'mp4', 'mov', 'avi', 'mkv', 'webm',
+              'mp3', 'wav', 'flac', 'aac', 'ogg',
+              'md', 'txt',
+            ],
+          },
+        ],
+      });
+      if (selected) {
+        console.log('File dialog returned:', selected, typeof selected);
+        const filePath = typeof selected === 'string' ? selected : (selected as any).path ?? String(selected);
+        console.log('Resolved file path:', filePath);
+        await addFileAttachment(entry.id, filePath);
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.success('File attached');
+      }
+    } catch (err) {
+      console.error('Failed to add file attachment:', err);
+      toast.error('Failed to attach file');
+    }
+    onClose?.();
+  };
+
   const handleCreateNote = async () => {
     try {
       const note = await createAttachment({
@@ -387,6 +422,10 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
               <DropdownMenuItem onClick={handleCreateNote}>
                 <FileText className='h-4 w-4 mr-2' />
                 Note
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleAddFileAttachment}>
+                <Paperclip className='h-4 w-4 mr-2' />
+                File...
               </DropdownMenuItem>
               <DropdownMenuItem disabled>
                 <Link className='h-4 w-4 mr-2' />
@@ -698,6 +737,35 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
     }
   };
 
+  const handleAddFileAttachment = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          {
+            name: 'Supported Files',
+            extensions: [
+              'epub', 'pdf', 'html', 'htm',
+              'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff',
+              'mp4', 'mov', 'avi', 'mkv', 'webm',
+              'mp3', 'wav', 'flac', 'aac', 'ogg',
+              'md', 'txt',
+            ],
+          },
+        ],
+      });
+      if (selected) {
+        await addFileAttachment(entry.id, selected);
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.success('File attached');
+      }
+    } catch (err) {
+      console.error('Failed to add file attachment:', err);
+      toast.error('Failed to attach file');
+    }
+  };
+
   const handleCreateNote = async () => {
     try {
       const note = await createAttachment({
@@ -850,6 +918,10 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
                 <ContextMenuItem onClick={handleCreateNote}>
                   <FileText className='h-4 w-4 mr-2' />
                   Note
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleAddFileAttachment}>
+                  <Paperclip className='h-4 w-4 mr-2' />
+                  File...
                 </ContextMenuItem>
                 <ContextMenuItem disabled>
                   <Link className='h-4 w-4 mr-2' />

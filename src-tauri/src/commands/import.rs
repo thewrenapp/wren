@@ -1607,6 +1607,8 @@ fn get_attachment_type_from_mimetype(mimetype: &str, path: &str) -> &'static str
         "snapshot"
     } else if mimetype_lower.contains("image") || path_lower.ends_with(".png") || path_lower.ends_with(".jpg") || path_lower.ends_with(".jpeg") {
         "image"
+    } else if mimetype_lower.contains("epub") || path_lower.ends_with(".epub") {
+        "epub"
     } else if mimetype_lower.contains("text") || path_lower.ends_with(".md") || path_lower.ends_with(".txt") {
         "note"
     } else {

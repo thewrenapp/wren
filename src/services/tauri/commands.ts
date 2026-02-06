@@ -328,6 +328,10 @@ export async function addPdfAttachment(entryId: number, filePath: string): Promi
   return invoke('add_pdf_attachment', { entryId, filePath });
 }
 
+export async function addFileAttachment(entryId: number, filePath: string): Promise<Attachment> {
+  return invoke('add_file_attachment', { entryId, filePath });
+}
+
 // =====================================================
 // Collection Commands
 // =====================================================

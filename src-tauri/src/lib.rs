@@ -170,6 +170,7 @@ pub fn run() {
             commands::entries::show_entries_in_finder,
             commands::entries::open_file_with_default_app,
             commands::entries::add_pdf_attachment,
+            commands::entries::add_file_attachment,
             commands::entries::duplicate_entry,
             commands::entries::repair_entry_attachments,
             // Schema introspection

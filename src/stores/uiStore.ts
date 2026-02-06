@@ -66,6 +66,7 @@ interface UIState {
   infoPaneOpen: boolean;
   pdfLeftPanelOpen: boolean;
   htmlLeftPanelOpen: boolean;
+  epubLeftPanelOpen: boolean;
 
   // Command palette
   commandPaletteOpen: boolean;
@@ -123,6 +124,8 @@ interface UIState {
   togglePdfLeftPanel: () => void;
   setHtmlLeftPanelOpen: (open: boolean) => void;
   toggleHtmlLeftPanel: () => void;
+  setEpubLeftPanelOpen: (open: boolean) => void;
+  toggleEpubLeftPanel: () => void;
   setActiveFilter: (filter: UIState['activeFilter']) => void;
 
   // Tag display actions
@@ -166,6 +169,7 @@ export const useUIStore = create<UIState>()(
       infoPaneOpen: true,
       pdfLeftPanelOpen: true,
       htmlLeftPanelOpen: true,
+      epubLeftPanelOpen: true,
       commandPaletteOpen: false,
       commandPaletteMode: 'default',
       settingsOpen: false,
@@ -252,6 +256,10 @@ export const useUIStore = create<UIState>()(
 
       toggleHtmlLeftPanel: () => set((state) => ({ htmlLeftPanelOpen: !state.htmlLeftPanelOpen })),
 
+      setEpubLeftPanelOpen: (open) => set({ epubLeftPanelOpen: open }),
+
+      toggleEpubLeftPanel: () => set((state) => ({ epubLeftPanelOpen: !state.epubLeftPanelOpen })),
+
       setActiveFilter: (filter) => set({ activeFilter: filter }),
 
       // Tag display actions
@@ -327,6 +335,7 @@ export const useUIStore = create<UIState>()(
         infoPaneOpen: state.infoPaneOpen,
         pdfLeftPanelOpen: state.pdfLeftPanelOpen,
         htmlLeftPanelOpen: state.htmlLeftPanelOpen,
+        epubLeftPanelOpen: state.epubLeftPanelOpen,
         columns: state.columns,
       }),
     },
