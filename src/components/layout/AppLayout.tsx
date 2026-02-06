@@ -24,12 +24,7 @@ type ImportDetailProgress = {
 };
 
 export function AppLayout() {
-  const {
-    setLibraryLayout,
-    settingsOpen,
-    setSettingsOpen,
-    commandPaletteMode,
-  } = useUIStore();
+  const { setLibraryLayout, settingsOpen, setSettingsOpen, commandPaletteMode } = useUIStore();
   const { tabs, openTab, updateTab } = useTabStore();
   const { showWelcomeOnStartup } = useSettingsStore();
   const hasInitialized = useRef(false);
@@ -134,7 +129,7 @@ export function AppLayout() {
           <DragDropProvider onExpandCollections={handleExpandCollections}>
             <div className='flex flex-1 min-h-0'>
               {/* Library sidebar - fixed width */}
-              <div className='w-[220px] shrink-0 bg-sidebar border-r border-border'>
+              <div className='w-[200px] shrink-0 bg-sidebar border-r border-border'>
                 <LibrarySidebar expandCollectionsRef={expandCollectionsRef} />
               </div>
 

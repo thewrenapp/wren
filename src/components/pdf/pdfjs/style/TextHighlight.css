@@ -1,0 +1,199 @@
+.TextHighlight {
+  position: absolute;
+}
+
+.TextHighlight__parts {
+  opacity: 1;
+}
+
+.TextHighlight__part {
+  cursor: pointer;
+  position: absolute;
+  background: transparent;
+  transition: background 0.3s;
+}
+
+.TextHighlight--scrolledTo .TextHighlight__part {
+  background: #ff4141;
+}
+
+/* Toolbar wrapper - creates hover bridge between toolbar and highlight */
+.TextHighlight__toolbar-wrapper {
+  z-index: 10;
+}
+
+/* Toolbar - appears on hover */
+.TextHighlight__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.TextHighlight__toolbar--visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.TextHighlight__style-button,
+.TextHighlight__delete-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: white;
+  border-radius: 3px;
+  padding: 0;
+  transition: background 0.2s;
+}
+
+.TextHighlight__style-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.TextHighlight__delete-button:hover {
+  background: rgba(255, 100, 100, 0.6);
+}
+
+/* Style Panel */
+.TextHighlight__style-panel {
+  margin-top: 4px;
+  background: rgba(0, 0, 0, 0.9);
+  border-radius: 6px;
+  padding: 8px;
+  min-width: 180px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.TextHighlight__style-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.TextHighlight__style-row:last-child {
+  margin-bottom: 0;
+}
+
+.TextHighlight__style-row label {
+  color: #ccc;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-right: 8px;
+}
+
+/* Style type buttons (highlight, underline, strikethrough) */
+.TextHighlight__style-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.TextHighlight__style-type-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid #666;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #f5f5f5;
+  transition: all 0.2s;
+}
+
+.TextHighlight__style-type-button:hover {
+  border-color: #b958ff;
+}
+
+.TextHighlight__style-type-button.active {
+  color: #b958ff;
+  border-color: #b958ff;
+  background: rgba(185, 88, 255, 0.2);
+}
+
+/* Color options */
+.TextHighlight__color-options {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.TextHighlight__color-presets {
+  display: flex;
+  gap: 4px;
+}
+
+.TextHighlight__color-preset {
+  width: 18px;
+  height: 18px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.2s, border-color 0.2s;
+  padding: 0;
+}
+
+.TextHighlight__color-preset:hover {
+  transform: scale(1.15);
+}
+
+.TextHighlight__color-preset.active {
+  border-color: #b958ff;
+}
+
+.TextHighlight__color-options input[type="color"] {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+}
+
+.TextHighlight__color-options input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.TextHighlight__color-options input[type="color"]::-webkit-color-swatch {
+  border: 1px solid #666;
+  border-radius: 4px;
+}
+
+/* Underline style */
+.TextHighlight__part--underline {
+  background: transparent !important;
+  border-bottom: 2px solid currentColor;
+}
+
+/* Strikethrough style */
+.TextHighlight__part.TextHighlight__part--strikethrough {
+  background: transparent !important;
+  overflow: visible;
+}
+
+.TextHighlight__part.TextHighlight__part--strikethrough::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  background-color: currentColor;
+  transform: translateY(-50%);
+  pointer-events: none;
+  z-index: 1;
+}

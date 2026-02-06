@@ -7,7 +7,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 // CSS imports in correct order
 import "pdfjs-dist/web/pdf_viewer.css";
-import "react-pdf-highlighter-plus/style/style.css";
+import "@/components/pdf/pdfjs/style/style.css";
 import "./PDFViewer.css";
 
 import {
@@ -31,7 +31,7 @@ import {
   type DrawingStroke,
   type ShapeData,
   type ShapeType,
-} from "react-pdf-highlighter-plus";
+} from "@/components/pdf/pdfjs";
 
 import { ChevronLeft } from "lucide-react";
 import { PDFToolbar, type SearchOptions } from "./PDFToolbar";
@@ -73,18 +73,59 @@ interface PDFViewerProps {
 
 // Tool modes
 type ToolMode = "highlight" | "area" | "freetext" | "drawing" | "rectangle" | null;
+type ViewerMode = "pan" | "edit";
+
+const DEFAULT_TEXT_HIGHLIGHT_COLOR = "#FFE28F";
+const DEFAULT_AREA_HIGHLIGHT_COLOR = "#FFE28F";
 
 // Highlight container with click-to-show-popup
 interface HighlightRendererProps {
   onColorChange: (highlightId: string, color: string) => void;
   onDelete: (highlightId: string) => void;
   onEdit: (highlightId: string, edit: Partial<AppHighlight>) => void;
+  isEditable: boolean;
+  selectionRects: DOMRect[];
 }
 
-function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendererProps) {
+function HighlightRenderer({
+  onColorChange,
+  onDelete,
+  onEdit,
+  isEditable,
+  selectionRects,
+}: HighlightRendererProps) {
   const { highlight, viewportToPdfScaled, screenshot, isScrolledTo, highlightBindings, zoomScale } =
     useHighlightContainerContext<AppHighlight>();
   const { toggleEditInProgress } = usePdfHighlighterContext();
+  const DEBUG_OVERLAP = false;
+  const isDimmed =
+    highlight.type === "text" &&
+    selectionRects.length > 0 &&
+    highlightBindings.textLayer &&
+    highlight.position?.rects?.some((rect) => {
+      const layerRect = highlightBindings.textLayer.getBoundingClientRect();
+      const highlightRect = new DOMRect(rect.left, rect.top, rect.width, rect.height);
+      return selectionRects
+        .map(
+          (selRect) =>
+            new DOMRect(
+              selRect.left - layerRect.left,
+              selRect.top - layerRect.top,
+              selRect.width,
+              selRect.height,
+            ),
+        )
+        .some(
+          (selRect) =>
+            selRect.left < highlightRect.right &&
+            selRect.right > highlightRect.left &&
+            selRect.top < highlightRect.bottom &&
+            selRect.bottom > highlightRect.top,
+        );
+    });
+  if (DEBUG_OVERLAP) {
+    void 0;
+  }
 
   let component;
 
@@ -93,7 +134,8 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
       <TextHighlight
         highlight={highlight}
         isScrolledTo={isScrolledTo}
-        highlightColor={highlight.highlightColor}
+        highlightColor={highlight.highlightColor || DEFAULT_TEXT_HIGHLIGHT_COLOR}
+        style={isDimmed ? { opacity: 0.12, filter: "saturate(0.55)" } : undefined}
       />
     );
   } else if (highlight.type === "freetext") {
@@ -121,9 +163,9 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
         onTextChange={(newText) => {
           onEdit(highlight.id, { content: { text: newText } });
         }}
-        onEditStart={() => toggleEditInProgress(true)}
-        onEditEnd={() => toggleEditInProgress(false)}
-        onDelete={() => onDelete(highlight.id)}
+        onEditStart={isEditable ? () => toggleEditInProgress(true) : undefined}
+        onEditEnd={isEditable ? () => toggleEditInProgress(false) : undefined}
+        onDelete={isEditable ? () => onDelete(highlight.id) : undefined}
       />
     );
   } else if (highlight.type === "drawing") {
@@ -146,9 +188,9 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
             content: { image: newImage, strokes: newStrokes },
           });
         }}
-        onEditStart={() => toggleEditInProgress(true)}
-        onEditEnd={() => toggleEditInProgress(false)}
-        onDelete={() => onDelete(highlight.id)}
+        onEditStart={isEditable ? () => toggleEditInProgress(true) : undefined}
+        onEditEnd={isEditable ? () => toggleEditInProgress(false) : undefined}
+        onDelete={isEditable ? () => onDelete(highlight.id) : undefined}
       />
     );
   } else if (highlight.type === "shape") {
@@ -171,9 +213,9 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
             },
           });
         }}
-        onEditStart={() => toggleEditInProgress(true)}
-        onEditEnd={() => toggleEditInProgress(false)}
-        onDelete={() => onDelete(highlight.id)}
+        onEditStart={isEditable ? () => toggleEditInProgress(true) : undefined}
+        onEditEnd={isEditable ? () => toggleEditInProgress(false) : undefined}
+        onDelete={isEditable ? () => onDelete(highlight.id) : undefined}
       />
     );
   } else {
@@ -182,7 +224,7 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
       <AreaHighlight
         highlight={highlight}
         isScrolledTo={isScrolledTo}
-        highlightColor={highlight.highlightColor}
+        highlightColor={highlight.highlightColor || DEFAULT_AREA_HIGHLIGHT_COLOR}
         bounds={highlightBindings.textLayer}
         onChange={(boundingRect) => {
           onEdit(highlight.id, {
@@ -195,20 +237,25 @@ function HighlightRenderer({ onColorChange, onDelete, onEdit }: HighlightRendere
           });
           toggleEditInProgress(false);
         }}
-        onEditStart={() => toggleEditInProgress(true)}
-        onDelete={() => onDelete(highlight.id)}
+        onEditStart={isEditable ? () => toggleEditInProgress(true) : undefined}
+        onDelete={isEditable ? () => onDelete(highlight.id) : undefined}
       />
     );
   }
 
   // Only show popup tip for text and area highlights
-  const showTip = highlight.type === "text" || highlight.type === "area";
+  const showTip = isEditable && (highlight.type === "text" || highlight.type === "area");
 
   const highlightTip: Tip = {
     position: highlight.position,
     content: (
       <HighlightPopup
-        currentColor={highlight.highlightColor}
+        currentColor={
+          highlight.highlightColor ||
+          (highlight.type === "area"
+            ? DEFAULT_AREA_HIGHLIGHT_COLOR
+            : DEFAULT_TEXT_HIGHLIGHT_COLOR)
+        }
         onColorChange={(newColor) => onColorChange(highlight.id, newColor)}
         onDelete={() => onDelete(highlight.id)}
       />
@@ -230,14 +277,16 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
   const [pdfUrl, setPdfUrl] = useState<string>("");
   const [scale, setScale] = useState<PdfScaleValue | undefined>(undefined);
   const [displayScale, setDisplayScale] = useState<number>(1);
-  const [highlightColor, setHighlightColor] = useState("#FFE28F");
+  const [highlightColor, setHighlightColor] = useState(DEFAULT_TEXT_HIGHLIGHT_COLOR);
+  const [areaHighlightColor, setAreaHighlightColor] = useState(DEFAULT_AREA_HIGHLIGHT_COLOR);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [toolMode, setToolMode] = useState<ToolMode>(null);
+  const [mode, setMode] = useState<ViewerMode>("pan");
+  const [selectionRects, setSelectionRects] = useState<DOMRect[]>([]);
   const [drawingColor, setDrawingColor] = useState("#000000");
   const [shapeColor, setShapeColor] = useState("#000000");
   const [darkMode, setDarkMode] = useState(false);
-  const [handTool, setHandTool] = useState(false);
 
   // Search state
   const [searchMatchCount, setSearchMatchCount] = useState(0);
@@ -250,6 +299,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const selectingActiveRef = useRef(false);
 
   // Saved selection ref for Cmd+C copy
   const savedSelectionRef = useRef<string>("");
@@ -361,6 +411,51 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     };
   }, []);
 
+  const isSelectMode = mode === "edit" && toolMode === null;
+
+  // Track active text selection and dim only overlapping text highlights (select mode)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handlePointerDown = () => {
+      if (!isSelectMode) return;
+      selectingActiveRef.current = true;
+    };
+
+    const handlePointerMove = () => {
+      if (!isSelectMode || !selectingActiveRef.current) return;
+      const selection = window.getSelection();
+      const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+      if (!range || !container.contains(range.commonAncestorContainer)) {
+        setSelectionRects([]);
+        return;
+      }
+      if (selection.isCollapsed || selection.toString().trim().length === 0) {
+        setSelectionRects([]);
+        return;
+      }
+      setSelectionRects(Array.from(range.getClientRects()));
+    };
+
+    const handlePointerUp = () => {
+      if (!isSelectMode) return;
+      selectingActiveRef.current = false;
+      setSelectionRects([]);
+    };
+
+    container.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("pointermove", handlePointerMove, true);
+    window.addEventListener("pointerup", handlePointerUp, true);
+
+    return () => {
+      container.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("pointermove", handlePointerMove, true);
+      window.removeEventListener("pointerup", handlePointerUp, true);
+      setSelectionRects([]);
+    };
+  }, [isSelectMode, highlights]);
+
   // Copy selected text handler - Cmd+C / Ctrl+C
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
@@ -418,15 +513,25 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     }
   }, []);
 
-  const toggleHandTool = useCallback(() => {
-    setHandTool((prev) => {
-      const next = !prev;
-      if (next) {
-        setToolMode(null);
-      }
-      return next;
-    });
+  const handleModeChange = useCallback((nextMode: ViewerMode) => {
+    setMode(nextMode);
+    // Clear any active text selection when switching modes
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+    }
+    if (nextMode !== "edit") {
+      setToolMode(null);
+    }
   }, []);
+
+  const handleToolModeChange = useCallback((nextTool: ToolMode) => {
+    if (nextTool) {
+      setMode("edit");
+    }
+    setToolMode(nextTool);
+  }, []);
+
 
   // Reset utils initialization flag when URL changes
   useEffect(() => {
@@ -588,13 +693,15 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
 
     // Use selectedText or comment for content
     const textContent = annotation.selectedText || annotation.comment || "";
+    const fallbackColor =
+      highlightType === "area" ? DEFAULT_AREA_HIGHLIGHT_COLOR : DEFAULT_TEXT_HIGHLIGHT_COLOR;
 
     return {
       id: String(annotation.id),
       type: highlightType as AppHighlight["type"],
       position,
       content: { text: textContent },
-      highlightColor: annotation.color,
+      highlightColor: annotation.color || fallbackColor,
       selectedText: textContent,
     };
   }
@@ -604,20 +711,20 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
   // Create text or area highlight based on selection type
   const handleSelection = useCallback(
     (selection: GhostHighlight & { makeGhostHighlight: () => GhostHighlight }) => {
-      const ghost = selection.makeGhostHighlight();
-      const { position, content, type } = ghost;
+      const { position, content, type } = selection;
       const tempId = getNextId();
 
       // Determine if this is an area or text highlight
       const isArea = type === "area" || toolMode === "area";
       const highlightType = isArea ? "area" : "text";
+      const nextColor = isArea ? areaHighlightColor : highlightColor;
 
       const optimisticHighlight: AppHighlight = {
         id: tempId,
         type: highlightType,
         position,
         content,
-        highlightColor: highlightColor,
+        highlightColor: nextColor,
         selectedText: content?.text,
       };
 
@@ -631,7 +738,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
             pageNumber: position.boundingRect.pageNumber,
             positionJson: JSON.stringify(position),
             selectedText: content?.text,
-            color: highlightColor,
+            color: nextColor,
           });
 
           setHighlights((prev) =>
@@ -644,7 +751,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         }
       })();
     },
-    [attachmentId, highlightColor, toolMode]
+    [attachmentId, areaHighlightColor, highlightColor, toolMode]
   );
 
   // Create freetext note
@@ -962,7 +1069,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
 
   // Hand tool - grab to pan
   useEffect(() => {
-    if (!handTool) return;
+    if (mode !== "pan") return;
 
     const viewer = pdfHighlighterUtilsRef.current?.getViewer();
     const container = (viewer?.container ||
@@ -976,8 +1083,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     let scrollTop = 0;
 
     container.style.cursor = "grab";
-
-    container.style.cursor = "grab";
+    container.classList.add("PdfHighlighter--hand-tool");
 
     const handlePointerDown = (e: PointerEvent) => {
       // Only pan on left click, and not on interactive elements
@@ -1029,11 +1135,12 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     return () => {
       container.style.cursor = "";
       container.style.userSelect = "";
+      container.classList.remove("PdfHighlighter--hand-tool");
       container.removeEventListener("pointerdown", handlePointerDown, true);
       container.removeEventListener("pointermove", handlePointerMove, true);
       window.removeEventListener("pointerup", handlePointerUp, true);
     };
-  }, [handTool, viewerReady]);
+  }, [mode, viewerReady]);
 
   // CMD/Ctrl + scroll wheel zoom
   useEffect(() => {
@@ -1060,7 +1167,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     return () => container.removeEventListener("wheel", handleWheel, options);
   }, [zoomIn, zoomOut, viewerReady]);
 
-  // Search functions using PDF.js findController (provided by react-pdf-highlighter-plus)
+  // Search functions using PDF.js findController (provided by local pdfjs viewer)
   const handleSearch = useCallback((query: string, options: SearchOptions) => {
     const findController = pdfHighlighterUtilsRef.current?.getFindController();
     if (!findController) {
@@ -1173,7 +1280,12 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
   }
 
   return (
-    <div ref={containerRef} className="pdf-viewer-container flex h-full flex-col bg-muted/30">
+    <div
+      ref={containerRef}
+      data-viewer-mode={mode}
+      data-tool-mode={toolMode ?? "none"}
+      className="pdf-viewer-container flex h-full flex-col bg-muted/30"
+    >
       <PDFToolbar
         scale={displayScale}
         onZoomIn={zoomIn}
@@ -1183,13 +1295,17 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         onScaleChange={handleScaleChange}
         highlightColor={highlightColor}
         onColorChange={setHighlightColor}
+        areaHighlightColor={areaHighlightColor}
+        onAreaColorChange={setAreaHighlightColor}
         currentPage={currentPage}
         totalPages={totalPages}
         onPageChange={goToPage}
         onPrevPage={prevPage}
         onNextPage={nextPage}
         toolMode={toolMode}
-        onToolModeChange={setToolMode}
+        onToolModeChange={handleToolModeChange}
+        mode={mode}
+        onModeChange={handleModeChange}
         drawingColor={drawingColor}
         onDrawingColorChange={setDrawingColor}
         shapeColor={shapeColor}
@@ -1205,8 +1321,6 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         onSearchClear={handleSearchClear}
         searchMatchCount={searchMatchCount}
         searchCurrentMatch={searchCurrentMatch}
-        handTool={handTool}
-        onToggleHandTool={toggleHandTool}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
       />
@@ -1333,22 +1447,28 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
                       }
                     }}
                     // Text and Area highlight modes
-                    textSelectionColor={(toolMode === "highlight" || toolMode === "area") ? highlightColor : undefined}
-                    onSelection={(toolMode === "highlight" || toolMode === "area") ? handleSelection : undefined}
+                    textSelectionColor={
+                      mode === "edit" && toolMode === "highlight"
+                        ? highlightColor
+                        : isSelectMode
+                          ? "rgba(59, 130, 246, 0.8)"
+                          : undefined
+                    }
+                    onSelection={mode === "edit" && (toolMode === "highlight" || toolMode === "area") ? handleSelection : undefined}
                     // Area highlight mode
-                    enableAreaSelection={() => toolMode === "area"}
-                    areaSelectionMode={toolMode === "area"}
+                    enableAreaSelection={() => mode === "edit" && toolMode === "area"}
+                    areaSelectionMode={mode === "edit" && toolMode === "area"}
                     // Freetext mode
-                    enableFreetextCreation={() => toolMode === "freetext"}
+                    enableFreetextCreation={() => mode === "edit" && toolMode === "freetext"}
                     onFreetextClick={handleFreetextClick}
                     // Drawing mode
-                    enableDrawingMode={toolMode === "drawing"}
+                    enableDrawingMode={mode === "edit" && toolMode === "drawing"}
                     onDrawingComplete={handleDrawingComplete}
                     onDrawingCancel={() => setToolMode(null)}
                     drawingStrokeColor={drawingColor}
                     drawingStrokeWidth={3}
                     // Shape mode (rectangle)
-                    enableShapeMode={toolMode === "rectangle" ? "rectangle" : null}
+                    enableShapeMode={mode === "edit" && toolMode === "rectangle" ? "rectangle" : null}
                     onShapeComplete={handleShapeComplete}
                     onShapeCancel={() => setToolMode(null)}
                     shapeStrokeColor={shapeColor}
@@ -1359,6 +1479,8 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
                       onColorChange={handleColorChange}
                       onDelete={handleDelete}
                       onEdit={handleEdit}
+                      isEditable={mode === "edit"}
+                      selectionRects={selectionRects}
                     />
                   </PdfHighlighter>
                 </div>

@@ -54,3 +54,25 @@
 .DrawingHighlight {
   pointer-events: auto !important;
 }
+
+/* Force hand cursor while panning */
+.PdfHighlighter--hand-tool,
+.PdfHighlighter--hand-tool * {
+  cursor: grab !important;
+}
+
+.PdfHighlighter--hand-tool:active,
+.PdfHighlighter--hand-tool:active * {
+  cursor: grabbing !important;
+}
+
+/* Disable annotation interactivity in pan mode or when no tool is active */
+.pdf-viewer-container[data-viewer-mode="pan"] .PdfHighlighter__highlight-layer,
+.pdf-viewer-container[data-viewer-mode="pan"] .PdfHighlighter__highlight-layer *,
+.pdf-viewer-container[data-viewer-mode="edit"][data-tool-mode="none"] .PdfHighlighter__highlight-layer,
+.pdf-viewer-container[data-viewer-mode="edit"][data-tool-mode="none"] .PdfHighlighter__highlight-layer * {
+  pointer-events: none !important;
+}
+
+/* Only dim text highlights while actively selecting */
+/* Only dim overlapping highlights via inline styles */

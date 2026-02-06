@@ -21,7 +21,6 @@ import {
   Search,
   X,
   Pencil as EditIcon,
-  Hand,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,6 +63,7 @@ const STROKE_COLORS = [
 ];
 
 type ToolMode = "highlight" | "area" | "freetext" | "drawing" | "rectangle" | null;
+type ViewerMode = "pan" | "edit";
 
 export interface SearchOptions {
   highlightAll: boolean;
@@ -80,6 +80,8 @@ interface PDFToolbarProps {
   onScaleChange: (scale: number) => void;
   highlightColor: string;
   onColorChange: (color: string) => void;
+  areaHighlightColor: string;
+  onAreaColorChange: (color: string) => void;
   currentPage: number;
   totalPages: number;
   onPageChange: (page: number) => void;
@@ -87,6 +89,8 @@ interface PDFToolbarProps {
   onNextPage: () => void;
   toolMode: ToolMode;
   onToolModeChange: (mode: ToolMode) => void;
+  mode: ViewerMode;
+  onModeChange: (mode: ViewerMode) => void;
   drawingColor: string;
   onDrawingColorChange: (color: string) => void;
   shapeColor: string;
@@ -103,9 +107,6 @@ interface PDFToolbarProps {
   onSearchClear?: () => void;
   searchMatchCount?: number;
   searchCurrentMatch?: number;
-  // Hand tool
-  handTool?: boolean;
-  onToggleHandTool?: () => void;
   // Fullscreen props
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
@@ -120,6 +121,8 @@ export function PDFToolbar({
   onScaleChange,
   highlightColor,
   onColorChange,
+  areaHighlightColor,
+  onAreaColorChange,
   currentPage,
   totalPages,
   onPageChange,
@@ -127,6 +130,8 @@ export function PDFToolbar({
   onNextPage,
   toolMode,
   onToolModeChange,
+  mode,
+  onModeChange,
   drawingColor,
   onDrawingColorChange,
   shapeColor,
@@ -142,13 +147,10 @@ export function PDFToolbar({
   onSearchClear,
   searchMatchCount = 0,
   searchCurrentMatch = 0,
-  handTool = false,
-  onToggleHandTool,
   isFullscreen = false,
   onToggleFullscreen,
 }: PDFToolbarProps) {
   const scalePercent = typeof scale === "number" ? Math.round(scale * 100) : 100;
-  const [editMode, setEditMode] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [highlightAll, setHighlightAll] = useState(true);
@@ -174,13 +176,15 @@ export function PDFToolbar({
     return () => observer.disconnect();
   }, []);
 
-  // When edit mode is toggled off, reset tool mode to null
+  // Toggle edit mode; exiting edit clears tool selection.
   const handleEditModeToggle = useCallback(() => {
-    if (editMode) {
+    if (mode === "edit") {
       onToolModeChange(null);
+      onModeChange("pan");
+      return;
     }
-    setEditMode(!editMode);
-  }, [editMode, onToolModeChange]);
+    onModeChange("edit");
+  }, [mode, onModeChange, onToolModeChange]);
 
   // Perform search with current options
   const performSearch = useCallback((query: string) => {
@@ -501,36 +505,19 @@ export function PDFToolbar({
               </PopoverContent>
             </Popover>
 
-            <div className="w-px h-4 bg-border mx-1" />
-
-            {/* Hand tool toggle */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn("h-7 w-7", handTool && "bg-accent text-accent-foreground")}
-                  onClick={onToggleHandTool}
-                >
-                  <Hand className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{handTool ? "Switch to select" : "Hand tool (pan)"}</TooltipContent>
-            </Tooltip>
-
             {/* Edit mode toggle */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={cn("h-7 w-7", editMode && "bg-accent text-accent-foreground")}
+                  className={cn("h-7 w-7", mode === "edit" && "bg-accent text-accent-foreground")}
                   onClick={handleEditModeToggle}
                 >
                   <EditIcon className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{editMode ? "Exit edit mode" : "Edit"}</TooltipContent>
+              <TooltipContent>{mode === "edit" ? "Exit edit mode" : "Edit"}</TooltipContent>
             </Tooltip>
 
             <div className="w-px h-4 bg-border mx-1" />
@@ -552,7 +539,7 @@ export function PDFToolbar({
         </div>
 
         {/* Edit Toolbar - shown when edit mode is on */}
-        {editMode && (
+        {mode === "edit" && (
           <div className="flex items-center justify-center gap-1 px-3 py-1.5 border-t bg-muted/30">
             {/* Text Highlight tool with color dropdown */}
             <Tooltip>
@@ -611,7 +598,7 @@ export function PDFToolbar({
                   <BoxSelect className="h-4 w-4" />
                   <span
                     className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-1 rounded-full"
-                    style={{ backgroundColor: highlightColor }}
+                    style={{ backgroundColor: areaHighlightColor }}
                   />
                 </Button>
               </TooltipTrigger>
@@ -631,10 +618,10 @@ export function PDFToolbar({
                       key={color.value}
                       className={cn(
                         "w-6 h-6 rounded-full transition-transform hover:scale-110",
-                        highlightColor === color.value && "ring-2 ring-foreground ring-offset-1"
+                        areaHighlightColor === color.value && "ring-2 ring-foreground ring-offset-1"
                       )}
                       style={{ backgroundColor: color.value }}
-                      onClick={() => onColorChange(color.value)}
+                      onClick={() => onAreaColorChange(color.value)}
                       title={color.name}
                     />
                   ))}

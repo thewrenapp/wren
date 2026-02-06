@@ -1,0 +1,106 @@
+.PdfHighlighter {
+  position: absolute;
+  overflow: auto;
+  width: 100%;
+  height: 100%;
+  /* background-color is now controlled via inline style for theming */
+}
+
+/* Style the scrollbar */
+.PdfHighlighter::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.PdfHighlighter::-webkit-scrollbar-thumb {
+  background-color: #9f9f9f;
+  border-radius: 5px;
+}
+
+.PdfHighlighter::-webkit-scrollbar-thumb:hover {
+  background-color: #d1d1d1;
+}
+
+.PdfHighlighter::-webkit-scrollbar-track {
+  background-color: #2c2c2c;
+  border-radius: 5px;
+}
+
+.PdfHighlighter::-webkit-scrollbar-track-piece {
+  background-color: #2c2c2c;
+}
+
+.PdfHighlighter__tip-container {
+  z-index: 6;
+  position: absolute;
+}
+
+.PdfHighlighter--disable-selection {
+  user-select: none;
+  pointer-events: none;
+}
+
+.PdfHighlighter--freetext-mode {
+  cursor: crosshair;
+}
+
+.PdfHighlighter--freetext-mode .pdfViewer,
+.PdfHighlighter--freetext-mode .textLayer {
+  cursor: crosshair;
+}
+
+.PdfHighlighter--image-mode {
+  cursor: crosshair;
+}
+
+.PdfHighlighter--image-mode .pdfViewer,
+.PdfHighlighter--image-mode .textLayer {
+  cursor: crosshair;
+}
+
+.PdfHighlighter--drawing-mode {
+  cursor: crosshair;
+}
+
+.PdfHighlighter--drawing-mode .pdfViewer,
+.PdfHighlighter--drawing-mode .textLayer {
+  cursor: crosshair;
+}
+
+.PdfHighlighter--area-mode {
+  cursor: crosshair;
+}
+
+.PdfHighlighter--area-mode .pdfViewer,
+.PdfHighlighter--area-mode .textLayer {
+  cursor: crosshair;
+}
+
+/* Ensure highlight layer covers the entire text layer and acts as proper
+   containing block for absolutely-positioned highlights (area, freetext,
+   drawing, shape). Without this, the highlight-layer is a flex item with
+   zero dimensions, and highlight positioning depends on the static-position
+   calculation which can be fragile across different PDF.js versions. */
+.PdfHighlighter__highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.PdfHighlighter__highlight-layer > * {
+  pointer-events: auto;
+}
+
+/* Dark mode - softer inversion for comfortable reading
+   Uses 0.9 intensity by default for a dark gray (~#1a1a1a) instead of pure black.
+   The brightness adjustment helps maintain readability.
+   Note: These are fallback values - actual intensity is controlled via inline styles
+   when darkModeInvertIntensity is customized in the theme prop. */
+.PdfHighlighter--dark .page {
+  filter: invert(0.9) hue-rotate(180deg) brightness(1.05);
+}
+
+/* Double-invert highlights to preserve their original colors */
+.PdfHighlighter--dark .PdfHighlighter__highlight-layer {
+  filter: invert(0.9) hue-rotate(180deg) brightness(0.95);
+}
