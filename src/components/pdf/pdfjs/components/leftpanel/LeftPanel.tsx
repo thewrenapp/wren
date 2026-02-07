@@ -187,7 +187,7 @@ export interface LeftPanelProps {
 export const LeftPanel: React.FC<LeftPanelProps> = ({
   pdfDocument,
   viewer = null,
-  linkService = null,
+  linkService: _linkService = null,
   eventBus = null,
   goToPage: goToPageProp,
   isOpen: controlledIsOpen,

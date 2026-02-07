@@ -120,6 +120,7 @@ export function useThumbnails(options: UseThumbnailsOptions): UseThumbnailsResul
         await page.render({
           canvasContext: context,
           viewport: scaledViewport,
+          canvas,
         }).promise;
 
         // Use JPEG for smaller file size (~50% smaller than PNG)

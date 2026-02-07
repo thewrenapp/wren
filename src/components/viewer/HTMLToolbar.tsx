@@ -2,8 +2,8 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   ZoomIn,
   ZoomOut,
-  Maximize,
-  Minimize,
+  Maximize2,
+  Minimize2,
   Highlighter,
   ChevronDown,
   ChevronUp,
@@ -20,6 +20,7 @@ import {
   Pencil as EditIcon,
   RefreshCw,
   ExternalLink,
+  Printer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,6 +88,7 @@ interface HTMLToolbarProps {
   onToggleFullscreen?: () => void;
   onRefresh?: () => void;
   onOpenExternal?: () => void;
+  onPrint?: () => void;
 }
 
 export function HTMLToolbar({
@@ -121,6 +123,7 @@ export function HTMLToolbar({
   onToggleFullscreen,
   onRefresh,
   onOpenExternal,
+  onPrint,
 }: HTMLToolbarProps) {
   const scalePercent = Math.round(scale * 100);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -238,9 +241,9 @@ export function HTMLToolbar({
         className="flex flex-col border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
       >
         {/* Main Toolbar */}
-        <div className="flex items-center justify-between px-3 py-1.5">
+        <div className="flex items-center justify-between px-3 py-1.5 overflow-hidden min-w-0">
           {/* Left: Panel toggle + Zoom controls */}
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center gap-0.5 min-w-0">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleLeftPanel}>
@@ -305,7 +308,7 @@ export function HTMLToolbar({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen}>
-                      {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+                      {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>{isFullscreen ? "Exit fullscreen" : "Fullscreen"}</TooltipContent>
@@ -342,7 +345,7 @@ export function HTMLToolbar({
           </div>
 
           {/* Right: Search, Edit toggle, Panel toggle */}
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center gap-0.5 min-w-0">
             {/* Search popover */}
             <Popover open={searchOpen} onOpenChange={setSearchOpen}>
               <PopoverTrigger asChild>
@@ -410,6 +413,18 @@ export function HTMLToolbar({
                 </div>
               </PopoverContent>
             </Popover>
+
+            {/* Print - hidden in compact mode */}
+            {!isCompact && onPrint && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onPrint}>
+                    <Printer className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Print ({"\u2318"}P)</TooltipContent>
+              </Tooltip>
+            )}
 
             <div className="w-px h-4 bg-border mx-1" />
 

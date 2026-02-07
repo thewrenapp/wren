@@ -7,12 +7,32 @@ import {
 import { PDFViewer } from "@/components/pdf/PDFViewer";
 import { HTMLViewer } from "@/components/viewer/HTMLViewer";
 import { EPUBViewer } from "@/components/epub/EPUBViewer";
+import { ImageViewer } from "@/components/viewer/ImageViewer";
 import { EntryInfoPanel } from "@/components/layout/RightPane/EntryInfoPanel";
+import { ExternalLink } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/uiStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useTabStore } from "@/stores/tabStore";
-import { getEntry, type Entry, type Attachment } from "@/services/tauri/commands";
+import { getEntry, openFileWithDefaultApp, type Entry, type Attachment } from "@/services/tauri/commands";
+import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { toast } from "@/stores/toastStore";
+
+/** Auto-opens a file in the system default app on mount, then closes the tab */
+function AutoOpenFile({ filePath, entryId }: { filePath: string; entryId: string }) {
+  useEffect(() => {
+    openFileWithDefaultApp(filePath)
+      .catch((err) => toast.error(`Failed to open file: ${err}`))
+      .finally(() => {
+        // Close this tab since the file is handled externally
+        const { tabs, closeTab } = useTabStore.getState();
+        const tab = tabs.find(t => t.type === "entry" && t.entryId === entryId);
+        if (tab) closeTab(tab.id);
+      });
+  }, [filePath, entryId]);
+
+  return null;
+}
 
 interface EntryTabProps {
   entryId: string;
@@ -91,14 +111,19 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
   }
 
   // If no specific attachment or not found, default to first viewable attachment
+  const viewableTypes = ["pdf", "epub", "snapshot", "image"];
   if (!targetAttachment) {
-    targetAttachment = entry.attachments?.find(
-      (a: Attachment) => a.attachmentType === "pdf"
-    );
+    for (const type of viewableTypes) {
+      targetAttachment = entry.attachments?.find(
+        (a: Attachment) => a.attachmentType === type
+      );
+      if (targetAttachment) break;
+    }
   }
+  // Fall back to first attachment with a file path
   if (!targetAttachment) {
     targetAttachment = entry.attachments?.find(
-      (a: Attachment) => a.attachmentType === "epub"
+      (a: Attachment) => a.filePath
     );
   }
 
@@ -141,6 +166,10 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
       return <EPUBViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} />;
     }
 
+    if (targetAttachment?.attachmentType === "image" && targetAttachment.filePath) {
+      return <ImageViewer filePath={targetAttachment.filePath} title={targetAttachment.title} />;
+    }
+
     if (targetAttachment?.attachmentType === "note") {
       return (
         <div className="flex-1 flex items-center justify-center text-muted-foreground">
@@ -150,6 +179,33 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
           </div>
         </div>
       );
+    }
+
+    // Weblink: show link with button to open in browser
+    if (targetAttachment?.attachmentType === "weblink" && targetAttachment.filePath) {
+      const url = targetAttachment.filePath;
+      return (
+        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <div className="text-center space-y-3">
+            <ExternalLink className="h-10 w-10 mx-auto opacity-40" />
+            <p className="font-medium">{targetAttachment.title || entry.title}</p>
+            <p className="text-xs opacity-60 max-w-md truncate">{url}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => shellOpen(url).catch(() => toast.error("Failed to open link"))}
+            >
+              <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+              Open in Browser
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    // Other file types with a file path: auto-open in system default app
+    if (targetAttachment?.filePath) {
+      return <AutoOpenFile filePath={targetAttachment.filePath} entryId={entryId} />;
     }
 
     return (

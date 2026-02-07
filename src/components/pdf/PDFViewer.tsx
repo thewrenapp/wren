@@ -94,8 +94,8 @@ function HighlightRenderer({
   onDelete,
   onEdit,
   isEditable,
-  showTipEnabled,
-  selectionRects,
+  showTipEnabled: _showTipEnabled,
+  selectionRects: _selectionRects,
 }: HighlightRendererProps) {
   const { highlight, viewportToPdfScaled, screenshot, isScrolledTo, highlightBindings, zoomScale } =
     useHighlightContainerContext<AppHighlight>();
@@ -438,7 +438,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         setSelectionRects([]);
         return;
       }
-      if (selection.isCollapsed || selection.toString().trim().length === 0) {
+      if (selection!.isCollapsed || selection!.toString().trim().length === 0) {
         setSelectionRects([]);
         return;
       }
@@ -1082,6 +1082,24 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     options: { highlightAll: true, matchCase: false, wholeWords: false },
   });
 
+  // Print: open a new window with just the PDF, then trigger system print dialog
+  const handlePrint = useCallback(() => {
+    const baseUrl = window.location.origin;
+    const url = `${baseUrl}?print=1&file=${encodeURIComponent(filePath)}`;
+    const printWin = new WebviewWindow("print-view", {
+      url,
+      title: "Print",
+      width: 900,
+      height: 700,
+      resizable: true,
+      visible: true,
+    });
+    printWin.once("tauri://error", (event) => {
+      console.error("Failed to open print window:", event);
+      toast.error("Failed to open print dialog");
+    });
+  }, [filePath]);
+
   // PDF-specific keyboard shortcuts (Cmd++/-/0 for zoom)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1118,31 +1136,11 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         return;
       }
 
-      // Print: Cmd+P — open print window and trigger OS print dialog
+      // Print: Cmd+P — open print window with PDF
       if (isMeta && e.key === "p") {
         e.preventDefault();
         e.stopPropagation();
-        try {
-          const baseUrl = window.location.origin;
-          const url = `${baseUrl}?print=1&file=${encodeURIComponent(filePath)}`;
-          const label = `print-${Date.now()}`;
-          const printWindow = new WebviewWindow(label, {
-            url,
-            title: "Print",
-            width: 900,
-            height: 700,
-            resizable: true,
-            visible: true,
-          });
-
-          printWindow.once("tauri://error", (event) => {
-            console.error("Failed to open print window:", event);
-            toast.error("Failed to open print dialog");
-          });
-        } catch (err: unknown) {
-          console.error("Failed to open print window:", err);
-          toast.error(`Failed to open print dialog: ${err}`);
-        }
+        handlePrint();
         return;
       }
     };
@@ -1150,7 +1148,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     // Use capture phase to intercept before webview's default CMD+P handler
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [zoomIn, zoomOut, fitWidth, filePath]);
+  }, [zoomIn, zoomOut, fitWidth, filePath, handlePrint]);
 
   // Hand tool - grab to pan
   useEffect(() => {
@@ -1409,6 +1407,7 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
         searchCurrentMatch={searchCurrentMatch}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
+        onPrint={handlePrint}
       />
 
       <div className="relative flex-1 overflow-hidden flex h-full">

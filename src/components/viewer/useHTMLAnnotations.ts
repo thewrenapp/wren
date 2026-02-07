@@ -691,33 +691,3 @@ export function useHTMLAnnotations(
   };
 }
 
-function getDocumentScale(iframeDoc: Document): { scaleX: number; scaleY: number } {
-  const view = iframeDoc.defaultView;
-  const body = iframeDoc.body;
-  if (!view || !body) {
-    return { scaleX: 1, scaleY: 1 };
-  }
-
-  const transform = view.getComputedStyle(body).transform;
-  if (!transform || transform === "none") {
-    return { scaleX: 1, scaleY: 1 };
-  }
-
-  const matrixMatch = transform.match(/^matrix\(([^)]+)\)$/);
-  if (matrixMatch) {
-    const parts = matrixMatch[1].split(",").map((v) => parseFloat(v.trim()));
-    const scaleX = parts[0] || 1;
-    const scaleY = parts[3] || 1;
-    return { scaleX, scaleY };
-  }
-
-  const matrix3dMatch = transform.match(/^matrix3d\(([^)]+)\)$/);
-  if (matrix3dMatch) {
-    const parts = matrix3dMatch[1].split(",").map((v) => parseFloat(v.trim()));
-    const scaleX = parts[0] || 1;
-    const scaleY = parts[5] || 1;
-    return { scaleX, scaleY };
-  }
-
-  return { scaleX: 1, scaleY: 1 };
-}

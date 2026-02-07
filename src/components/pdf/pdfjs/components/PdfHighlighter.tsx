@@ -1,6 +1,6 @@
 import debounce from "lodash.debounce";
 import { PDFDocumentProxy } from "pdfjs-dist";
-import React, {
+import {
   CSSProperties,
   PointerEventHandler,
   ReactNode,

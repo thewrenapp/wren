@@ -1,4 +1,4 @@
-import React, { CSSProperties, MouseEvent, ReactNode, useState, useCallback, useEffect, useRef } from "react";
+import { CSSProperties, MouseEvent, ReactNode, useState, useCallback, useEffect, useRef } from "react";
 import { Rnd } from "react-rnd";
 import { getPageFromElement } from "../lib/pdfjs-dom";
 import type { DrawingStroke, LTWHP, ViewportHighlight } from "../types";

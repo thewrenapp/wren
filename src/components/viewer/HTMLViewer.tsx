@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { readTextFile } from "@tauri-apps/plugin-fs";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/uiStore";
@@ -227,6 +228,23 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
     }
   }, [filePath]);
 
+  // Print: open a print window with the HTML content
+  const handlePrint = useCallback(() => {
+    const baseUrl = window.location.origin;
+    const url = `${baseUrl}?print=1&type=html&file=${encodeURIComponent(filePath)}`;
+    const printWin = new WebviewWindow("print-view", {
+      url,
+      title: "Print",
+      width: 900,
+      height: 700,
+      resizable: true,
+      visible: true,
+    });
+    printWin.once("tauri://error", (event) => {
+      console.error("Failed to open print window:", event);
+    });
+  }, [filePath]);
+
   // Fullscreen toggle
   const toggleFullscreen = useCallback(() => {
     if (!containerRef.current) return;
@@ -300,19 +318,18 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
         return;
       }
 
-      // Print: Cmd+P — open in system default app
+      // Print: Cmd+P
       if (isMeta && e.key === "p") {
         e.preventDefault();
-        openFileWithDefaultApp(filePath).catch((err: unknown) =>
-          console.error("Failed to open for print:", err)
-        );
+        e.stopPropagation();
+        handlePrint();
         return;
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [zoomIn, zoomOut, handleScaleChange, filePath]);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [zoomIn, zoomOut, handleScaleChange, handlePrint]);
 
   const popupEnabled = editMode && toolMode === null;
 
@@ -694,6 +711,7 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
         onToggleFullscreen={toggleFullscreen}
         onRefresh={handleRefresh}
         onOpenExternal={handleOpenExternal}
+        onPrint={handlePrint}
       />
 
       {/* Main content area */}

@@ -5,7 +5,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Maximize,
-  Minimize,
+  Maximize2,
+  Minimize2,
   ArrowLeftToLine,
   Highlighter,
   ChevronDown,
@@ -21,6 +22,7 @@ import {
   Search,
   X,
   Pencil as EditIcon,
+  Printer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -110,6 +112,9 @@ interface PDFToolbarProps {
   // Fullscreen props
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  /** Hide the edit mode toggle and edit toolbar */
+  hideEditMode?: boolean;
+  onPrint?: () => void;
 }
 
 export function PDFToolbar({
@@ -149,6 +154,8 @@ export function PDFToolbar({
   searchCurrentMatch = 0,
   isFullscreen = false,
   onToggleFullscreen,
+  hideEditMode = false,
+  onPrint,
 }: PDFToolbarProps) {
   const scalePercent = typeof scale === "number" ? Math.round(scale * 100) : 100;
   const [searchOpen, setSearchOpen] = useState(false);
@@ -257,9 +264,9 @@ export function PDFToolbar({
     <TooltipProvider delayDuration={300}>
       <div ref={toolbarRef} className="flex flex-col border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         {/* Main Toolbar */}
-        <div className="flex items-center justify-between px-3 py-1.5">
+        <div className="flex items-center justify-between px-3 py-1.5 overflow-hidden min-w-0">
           {/* Left: Panel toggle + Zoom controls */}
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center gap-0.5 min-w-0">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleLeftPanel}>
@@ -345,7 +352,7 @@ export function PDFToolbar({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen}>
-                      {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+                      {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>{isFullscreen ? "Exit fullscreen" : "Fullscreen"}</TooltipContent>
@@ -398,7 +405,7 @@ export function PDFToolbar({
           </div>
 
           {/* Right: Search, Edit toggle, Panel toggle */}
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center gap-0.5 min-w-0">
             {/* Search popover */}
             <Popover open={searchOpen} onOpenChange={setSearchOpen}>
               <PopoverTrigger asChild>
@@ -505,20 +512,34 @@ export function PDFToolbar({
               </PopoverContent>
             </Popover>
 
+            {/* Print - hidden in compact mode */}
+            {!isCompact && onPrint && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onPrint}>
+                    <Printer className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Print (⌘P)</TooltipContent>
+              </Tooltip>
+            )}
+
             {/* Edit mode toggle */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn("h-7 w-7", mode === "edit" && "bg-accent text-accent-foreground")}
-                  onClick={handleEditModeToggle}
-                >
-                  <EditIcon className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{mode === "edit" ? "Exit edit mode" : "Edit"}</TooltipContent>
-            </Tooltip>
+            {!hideEditMode && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn("h-7 w-7", mode === "edit" && "bg-accent text-accent-foreground")}
+                    onClick={handleEditModeToggle}
+                  >
+                    <EditIcon className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{mode === "edit" ? "Exit edit mode" : "Edit"}</TooltipContent>
+              </Tooltip>
+            )}
 
             <div className="w-px h-4 bg-border mx-1" />
 
@@ -539,7 +560,7 @@ export function PDFToolbar({
         </div>
 
         {/* Edit Toolbar - shown when edit mode is on */}
-        {mode === "edit" && (
+        {!hideEditMode && mode === "edit" && (
           <div className="flex items-center justify-center gap-1 px-3 py-1.5 border-t bg-muted/30">
             {/* Text Highlight tool with color dropdown */}
             <Tooltip>

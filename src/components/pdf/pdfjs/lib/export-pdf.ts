@@ -636,10 +636,10 @@ export async function exportPdf(
   } else {
     pdfBytes =
       pdfSource instanceof Uint8Array
-        ? pdfSource.buffer.slice(
+        ? (pdfSource.buffer.slice(
             pdfSource.byteOffset,
             pdfSource.byteOffset + pdfSource.byteLength
-          )
+          ) as ArrayBuffer)
         : pdfSource;
   }
 

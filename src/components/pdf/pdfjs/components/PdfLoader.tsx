@@ -1,4 +1,4 @@
-import React, { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 
 import { GlobalWorkerOptions, OnProgressParameters, getDocument, version, type PDFDocumentLoadingTask, type PDFDocumentProxy } from "pdfjs-dist";
 import { DocumentInitParameters, TypedArray } from "pdfjs-dist/types/src/display/api";

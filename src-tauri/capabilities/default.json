@@ -2,10 +2,12 @@
   "$schema": "https://schema.tauri.app/config/2/capability.json",
   "identifier": "default",
   "description": "Default capabilities for Wren",
-  "windows": ["main"],
+  "windows": ["main", "print-view"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "core:webview:allow-create-webview-window",
+    "core:webview:allow-print",
     "shell:allow-open",
     "dialog:allow-open",
     "dialog:allow-save",

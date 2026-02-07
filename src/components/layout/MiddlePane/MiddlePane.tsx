@@ -58,6 +58,7 @@ import {
   permanentDeleteEntry,
   previewBiblatexImport,
   importBiblatexWithFiles,
+  openFileWithDefaultApp,
   type BiblatexPreviewResult,
 } from '@/services/tauri';
 import { ImportPreviewDialog } from '@/components/dialogs/ImportPreviewDialog';
@@ -486,11 +487,16 @@ export function MiddlePane() {
       targetAttachment = attachments.find((a) => a.attachmentType === 'pdf');
     } else {
       // For "all", "recent", "untagged", collections, etc.
-      // Priority: PDF > Note > Weblink
-      targetAttachment =
-        attachments.find((a) => a.attachmentType === 'pdf') ||
-        attachments.find((a) => a.attachmentType === 'note') ||
-        attachments.find((a) => a.attachmentType === 'weblink');
+      // Priority: PDF > EPUB > Snapshot > Image > Note > Weblink > any file
+      const viewableTypes = ['pdf', 'epub', 'snapshot', 'image', 'note', 'weblink'];
+      for (const type of viewableTypes) {
+        targetAttachment = attachments.find((a) => a.attachmentType === type);
+        if (targetAttachment) break;
+      }
+      // Fall back to first attachment with a file path
+      if (!targetAttachment) {
+        targetAttachment = attachments.find((a) => a.filePath);
+      }
     }
 
     if (targetAttachment) {
@@ -502,16 +508,29 @@ export function MiddlePane() {
           console.error('Failed to open URL:', err);
         }
       } else {
-        // Open PDF or note in app tab
-        openTab({
-          type: 'entry',
-          title: targetAttachment.title || entry.title,
-          entryId: String(entry.id),
-          attachmentId: String(targetAttachment.id),
-        });
+        // Check if this is a viewable type (can render in-app)
+        const inAppTypes = ['pdf', 'epub', 'snapshot', 'image', 'note'];
+        if (inAppTypes.includes(targetAttachment.attachmentType)) {
+          // Open in app tab
+          openTab({
+            type: 'entry',
+            title: targetAttachment.title || entry.title,
+            entryId: String(entry.id),
+            attachmentId: String(targetAttachment.id),
+          });
+        } else if (targetAttachment.filePath) {
+          // Non-viewable file type: open directly in system default app
+          openFileWithDefaultApp(targetAttachment.filePath).catch((err) => {
+            console.error('Failed to open file:', err);
+            toast.error(`Failed to open file: ${err}`);
+          });
+        } else {
+          // No file path, open entry tab as fallback
+          openTab({ type: 'entry', title: entry.title, entryId: String(entry.id) });
+        }
       }
     } else {
-      // No matching attachment, just open entry details
+      // No attachments at all, open entry details
       openTab({ type: 'entry', title: entry.title, entryId: String(entry.id) });
     }
   };
@@ -534,13 +553,22 @@ export function MiddlePane() {
         console.error('Failed to open URL:', err);
       }
     } else {
-      // Open PDF or note in app tab
-      openTab({
-        type: 'entry',
-        title: attachment.title || entry.title,
-        entryId: String(entry.id),
-        attachmentId: String(attachmentId),
-      });
+      const inAppTypes = ['pdf', 'epub', 'snapshot', 'image', 'note'];
+      if (inAppTypes.includes(attachment.attachmentType)) {
+        // Open viewable attachment in app tab
+        openTab({
+          type: 'entry',
+          title: attachment.title || entry.title,
+          entryId: String(entry.id),
+          attachmentId: String(attachmentId),
+        });
+      } else if (attachment.filePath) {
+        // Non-viewable: open directly in system default app
+        openFileWithDefaultApp(attachment.filePath).catch((err) => {
+          console.error('Failed to open file:', err);
+          toast.error(`Failed to open file: ${err}`);
+        });
+      }
     }
   };
 
