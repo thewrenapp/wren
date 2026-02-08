@@ -173,6 +173,11 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add markdown_path column to attachments table
+    let _ = sqlx::query("ALTER TABLE attachments ADD COLUMN markdown_path TEXT")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 

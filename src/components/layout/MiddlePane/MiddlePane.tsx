@@ -12,15 +12,13 @@ import {
   RotateCcw,
   Trash2,
   Check,
-  FileType,
-  StickyNote,
   CheckSquare,
   Square,
   XSquare,
   Tag,
-  Paperclip,
-  Globe,
 } from 'lucide-react';
+import { sidebarIcons } from '@/lib/icons';
+import { IconPaperclip, IconWorld } from '@tabler/icons-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { open as openInBrowser } from '@tauri-apps/plugin-shell';
 import { Button } from '@/components/ui/button';
@@ -517,6 +515,7 @@ export function MiddlePane() {
             title: targetAttachment.title || entry.title,
             entryId: String(entry.id),
             attachmentId: String(targetAttachment.id),
+            data: { attachmentType: targetAttachment.attachmentType },
           });
         } else if (targetAttachment.filePath) {
           // Non-viewable file type: open directly in system default app
@@ -561,6 +560,7 @@ export function MiddlePane() {
           title: attachment.title || entry.title,
           entryId: String(entry.id),
           attachmentId: String(attachmentId),
+          data: { attachmentType: attachment.attachmentType },
         });
       } else if (attachment.filePath) {
         // Non-viewable: open directly in system default app
@@ -643,7 +643,7 @@ export function MiddlePane() {
                   Select All
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleSelectPdfs}>
-                  <FileType className='h-4 w-4 mr-2' />
+                  <sidebarIcons.pdfs className='h-4 w-4 mr-2 text-red-500' />
                   Select PDFs
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleSelectUntagged}>
@@ -652,19 +652,19 @@ export function MiddlePane() {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={handleSelectNoAttachments}>
-                  <Paperclip className='h-4 w-4 mr-2' />
+                  <IconPaperclip className='h-4 w-4 mr-2 text-muted-foreground' />
                   Select No Attachments
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleSelectNoPdfs}>
-                  <FileType className='h-4 w-4 mr-2' />
+                  <sidebarIcons.pdfs className='h-4 w-4 mr-2 text-red-500' />
                   Select No PDFs
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleSelectNoNotes}>
-                  <StickyNote className='h-4 w-4 mr-2' />
+                  <sidebarIcons.notes className='h-4 w-4 mr-2 text-amber-500' />
                   Select No Notes
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleSelectNoWeblinks}>
-                  <Globe className='h-4 w-4 mr-2' />
+                  <IconWorld className='h-4 w-4 mr-2 text-blue-500' />
                   Select No Weblinks
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -859,13 +859,13 @@ export function MiddlePane() {
               </>
             ) : activeFilter === 'pdfs' ? (
               <>
-                <FileType className='h-8 w-8 mx-auto mb-2 opacity-50' />
+                <sidebarIcons.pdfs className='h-8 w-8 mx-auto mb-2 opacity-50 text-red-500' />
                 <p className='text-sm font-medium'>No PDFs</p>
                 <p className='text-xs'>Import PDF files to see them here</p>
               </>
             ) : activeFilter === 'notes' ? (
               <>
-                <StickyNote className='h-8 w-8 mx-auto mb-2 opacity-50' />
+                <sidebarIcons.notes className='h-8 w-8 mx-auto mb-2 opacity-50 text-amber-500' />
                 <p className='text-sm font-medium'>No notes</p>
                 <p className='text-xs'>Create notes on your entries</p>
               </>

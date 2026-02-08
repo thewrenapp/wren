@@ -80,12 +80,3 @@ fn decode_utf16be(bytes: &[u8]) -> Option<String> {
 
     String::from_utf16(&chars).ok()
 }
-
-/// Extract text content from PDF for indexing
-/// This is a basic implementation - full text extraction can be slow for large PDFs
-pub fn extract_text(path: &Path) -> Result<String> {
-    let output = pdf_extract::extract_text(path)
-        .with_context(|| format!("Failed to extract text from PDF: {}", path.display()))?;
-
-    Ok(output)
-}

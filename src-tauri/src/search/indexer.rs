@@ -14,6 +14,8 @@ pub struct IndexingResult {
     pub method: ExtractionMethod,
     /// Optional message
     pub message: Option<String>,
+    /// Extracted text content (so callers can save markdown without re-extracting)
+    pub extracted_text: Option<String>,
 }
 
 /// Data for indexing an entry's metadata
@@ -91,8 +93,12 @@ pub async fn index_attachment_content(
             indexed: false,
             method: extraction.method,
             message: extraction.message.or(Some("No text content".to_string())),
+            extracted_text: None,
         });
     }
+
+    // Keep a copy of the text for callers (e.g., to save as markdown)
+    let text_for_caller = extraction.text.clone();
 
     let doc = doc!(
         fields.entry_id => attachment.entry_id,
@@ -116,6 +122,7 @@ pub async fn index_attachment_content(
         indexed: true,
         method: extraction.method,
         message: extraction.message,
+        extracted_text: Some(text_for_caller),
     })
 }
 

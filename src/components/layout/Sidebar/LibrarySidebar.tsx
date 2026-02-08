@@ -1,8 +1,4 @@
 import {
-  FileText,
-  Files,
-  Clock,
-  Tag,
   FolderOpen,
   ChevronDown,
   ChevronRight,
@@ -15,13 +11,14 @@ import {
   FileCode,
   Copy,
   Pencil,
-  Copy as CopyIcon,
   Settings2,
-  Search,
   X,
   Check,
   BookmarkX,
+  Tag,
 } from 'lucide-react';
+import { sidebarIcons } from '@/lib/icons';
+import { IconSearch } from '@tabler/icons-react';
 import { useState, useEffect, useMemo, type MutableRefObject } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
@@ -949,7 +946,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             <ContextMenuTrigger asChild>
               <div className='w-full overflow-hidden'>
                 <SidebarItem
-                  icon={<Files className='h-4 w-4' />}
+                  icon={<sidebarIcons.allItems className='h-4 w-4' />}
                   label='All Items'
                   count={entryCounts.total}
                   active={activeFilter === 'all'}
@@ -990,7 +987,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             <ContextMenuTrigger asChild>
               <div className='w-full overflow-hidden'>
                 <SidebarItem
-                  icon={<FileText className='h-4 w-4' />}
+                  icon={<sidebarIcons.pdfs className='h-4 w-4 text-red-500' />}
                   label='PDFs'
                   count={pdfCount}
                   active={activeFilter === 'pdfs'}
@@ -1031,7 +1028,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             <ContextMenuTrigger asChild>
               <div className='w-full overflow-hidden'>
                 <SidebarItem
-                  icon={<FileText className='h-4 w-4' />}
+                  icon={<sidebarIcons.notes className='h-4 w-4 text-amber-500' />}
                   label='Notes'
                   count={noteCount}
                   active={activeFilter === 'notes'}
@@ -1073,7 +1070,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
               <ContextMenuTrigger asChild>
                 <div className='w-full overflow-hidden'>
                   <SidebarItem
-                    icon={<Trash2 className='h-4 w-4 text-pink-600' />}
+                    icon={<sidebarIcons.trash className='h-4 w-4 text-pink-600' />}
                     label='Trash'
                     count={trashCount}
                     active={activeFilter === 'trash'}
@@ -1102,7 +1099,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             <ContextMenuTrigger asChild>
               <div className='w-full overflow-hidden'>
                 <SidebarItem
-                  icon={<Clock className='h-4 w-4' />}
+                  icon={<sidebarIcons.recent className='h-4 w-4' />}
                   label='Recently Added'
                   count={recentCount}
                   active={activeFilter === 'recent' && !activeSavedSearchId}
@@ -1147,7 +1144,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             <ContextMenuTrigger asChild>
               <div className='w-full overflow-hidden'>
                 <SidebarItem
-                  icon={<Tag className='h-4 w-4' />}
+                  icon={<sidebarIcons.untagged className='h-4 w-4' />}
                   label='Untagged'
                   count={entryCounts.untagged}
                   active={activeFilter === 'untagged' && !activeSavedSearchId}
@@ -1189,7 +1186,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             </ContextMenuContent>
           </ContextMenu>
           <SidebarItem
-            icon={<CopyIcon className='h-4 w-4' />}
+            icon={<sidebarIcons.duplicates className='h-4 w-4' />}
             label='Duplicates'
             count={duplicateCount}
             active={activeFilter === 'duplicates' && !activeSavedSearchId}
@@ -1201,7 +1198,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
               <ContextMenuTrigger asChild>
                 <div className='w-full overflow-hidden'>
                   <SidebarItem
-                    icon={<Search className='h-4 w-4 text-blue-500' />}
+                    icon={<IconSearch className='h-4 w-4 text-blue-500' />}
                     label={search.name}
                     active={activeSavedSearchId === search.id}
                     onClick={() => handleSavedSearchSelect(search.id, search.name)}
@@ -1413,7 +1410,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             <div className='px-2 py-1.5 space-y-2'>
               {/* Search input */}
               <div className='relative'>
-                <Search className='absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground' />
+                <IconSearch className='absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground' />
                 <Input
                   placeholder='Search tags...'
                   value={tagSearchQuery}

@@ -1,41 +1,20 @@
 import { useState, useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { checkOllamaStatus, reindexLibrary } from "@/services/tauri/commands";
+import { reindexLibrary } from "@/services/tauri/commands";
 import { Loader2 } from "lucide-react";
 
 export function AISearchSection() {
   const {
     embeddingModel,
     setEmbeddingModel,
-    skipOcr,
-    setSkipOcr,
-    ollamaEnabled,
-    ollamaEndpoint,
-    ollamaVisionModel,
-    setOllamaEnabled,
-    setOllamaEndpoint,
-    setOllamaVisionModel,
+    enableOcr,
+    setEnableOcr,
   } = useSettingsStore();
 
-  const [isTestingConnection, setIsTestingConnection] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<{
-    success: boolean;
-    message: string;
-  } | null>(null);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isReindexing, setIsReindexing] = useState(false);
   const [reindexProgress, setReindexProgress] = useState<{
     current: number;
@@ -117,43 +96,13 @@ export function AISearchSection() {
     };
   }, []);
 
-  // Fetch available models when Ollama is enabled or endpoint changes
-  useEffect(() => {
-    if (ollamaEnabled && ollamaEndpoint) {
-      fetchAvailableModels();
-    }
-  }, [ollamaEnabled, ollamaEndpoint]);
-
-  const fetchAvailableModels = async () => {
-    setIsLoadingModels(true);
-    try {
-      const status = await checkOllamaStatus(ollamaEndpoint);
-      if (status.connected) {
-        setAvailableModels(status.models);
-        // If current model is not in the list and there are models available, select the first one
-        if (status.models.length > 0 && !status.models.includes(ollamaVisionModel)) {
-          setOllamaVisionModel(status.models[0]);
-        }
-      } else {
-        setAvailableModels([]);
-      }
-    } catch {
-      setAvailableModels([]);
-    } finally {
-      setIsLoadingModels(false);
-    }
-  };
-
   const handleRebuildIndex = async () => {
     setIsReindexing(true);
     setReindexStatus(null);
     setReindexProgress(null);
     try {
       await reindexLibrary({
-        skipOcr,
-        ollamaEnabled: skipOcr ? false : ollamaEnabled,
-        ollamaEndpoint,
-        ollamaModel: ollamaVisionModel,
+        enableOcr,
       });
       // Success is handled by the reindex:complete event listener
     } catch (err) {
@@ -163,41 +112,6 @@ export function AISearchSection() {
         message: `Failed to rebuild index: ${err}`,
       });
       setIsReindexing(false);
-    }
-  };
-
-  const handleTestConnection = async () => {
-    setIsTestingConnection(true);
-    setConnectionStatus(null);
-    try {
-      const status = await checkOllamaStatus(ollamaEndpoint);
-      if (status.connected) {
-        setAvailableModels(status.models);
-        // Auto-select first model if current is not available
-        if (status.models.length > 0 && !status.models.includes(ollamaVisionModel)) {
-          setOllamaVisionModel(status.models[0]);
-        }
-        setConnectionStatus({
-          success: true,
-          message: status.models.length > 0
-            ? `Connected! ${status.models.length} model(s) available.`
-            : "Connected, but no multimodal models found.",
-        });
-      } else {
-        setAvailableModels([]);
-        setConnectionStatus({
-          success: false,
-          message: "Could not connect to Ollama",
-        });
-      }
-    } catch (err) {
-      setAvailableModels([]);
-      setConnectionStatus({
-        success: false,
-        message: `Connection failed: ${err}`,
-      });
-    } finally {
-      setIsTestingConnection(false);
     }
   };
 
@@ -238,108 +152,28 @@ export function AISearchSection() {
         </div>
       </section>
 
-      {/* Document OCR */}
+      {/* Document Extraction */}
       <section className="space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          Document OCR
+          Document Extraction
         </h3>
         <p className="text-xs text-muted-foreground">
-          Extract text from scanned PDFs using OCR. Disable to skip scanned PDFs entirely (faster indexing).
+          Text is extracted from PDFs, EPUB, HTML, images, and other document formats using kreuzberg.
         </p>
 
         <label className="flex items-center gap-3 cursor-pointer">
           <Checkbox
-            checked={skipOcr}
-            onCheckedChange={(checked) => setSkipOcr(checked === true)}
+            checked={enableOcr}
+            onCheckedChange={(checked) => setEnableOcr(checked === true)}
           />
           <div>
-            <span className="text-sm">Skip OCR for scanned PDFs</span>
+            <span className="text-sm">Enable OCR for scanned documents</span>
             <p className="text-xs text-muted-foreground">
-              Only index text-based PDFs. Scanned documents will be skipped.
+              Uses Tesseract OCR (bundled) to extract text from scanned PDFs and images.
+              Disable for faster indexing if you only have text-based documents.
             </p>
           </div>
         </label>
-
-        {!skipOcr && (
-          <>
-            <label className="flex items-center gap-3 cursor-pointer">
-              <Checkbox
-                checked={ollamaEnabled}
-                onCheckedChange={(checked) => setOllamaEnabled(checked === true)}
-              />
-              <div>
-                <span className="text-sm">Use Ollama for better OCR</span>
-                <p className="text-xs text-muted-foreground">
-                  Uses Ollama vision models. Falls back to traditional OCR if disabled.
-                </p>
-              </div>
-            </label>
-          </>
-        )}
-
-        {!skipOcr && ollamaEnabled && (
-          <div className="space-y-4 pl-7">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Ollama Endpoint</label>
-              <Input
-                value={ollamaEndpoint}
-                onChange={(e) => setOllamaEndpoint(e.target.value)}
-                placeholder="http://localhost:11434"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Vision Model</label>
-              {isLoadingModels ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading models...
-                </div>
-              ) : availableModels.length > 0 ? (
-                <Select
-                  value={ollamaVisionModel}
-                  onValueChange={setOllamaVisionModel}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableModels.map((model) => (
-                      <SelectItem key={model} value={model}>
-                        {model}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  No multimodal models found. Install a vision model in Ollama (e.g., <code className="bg-muted px-1 rounded">ollama pull llava</code>)
-                </p>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleTestConnection}
-                disabled={isTestingConnection}
-              >
-                {isTestingConnection && (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                )}
-                Test Connection
-              </Button>
-              {connectionStatus && (
-                <span
-                  className={`text-xs ${connectionStatus.success ? "text-green-600" : "text-destructive"}`}
-                >
-                  {connectionStatus.message}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
       </section>
 
       {/* Indexing */}
@@ -356,7 +190,7 @@ export function AISearchSection() {
 
           <label className="flex items-center gap-3 cursor-pointer">
             <Checkbox defaultChecked />
-            <span className="text-sm">Index document content for full-text search (PDF, Markdown, HTML, Text)</span>
+            <span className="text-sm">Index document content for full-text search</span>
           </label>
         </div>
 
@@ -439,7 +273,8 @@ export function AISearchSection() {
           )}
           {!isReindexing && (
             <p className="text-xs text-muted-foreground">
-              Recreates the full-text search index from scratch. Use this if search results seem incorrect.
+              Recreates the full-text search index from scratch. Also extracts and saves
+              markdown versions of all documents. Use this if search results seem incorrect.
             </p>
           )}
         </div>

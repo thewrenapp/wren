@@ -2,7 +2,7 @@ use serde::Serialize;
 use sqlx::FromRow;
 use tauri::State;
 
-use crate::search::extractor::ExtractionConfig;
+use crate::search::extractor::{is_worth_saving, markdown_path_for, save_markdown, ExtractionConfig};
 use crate::search::searcher::FullSearchResult;
 use crate::state::AppState;
 
@@ -23,7 +23,7 @@ pub struct ReindexProgress {
     pub file_name: Option<String>,
     /// Current step: "metadata", "extracting", "indexing", "annotations"
     pub step: String,
-    /// Method being used: "pdf-extract", "ollama", "ocr", "direct"
+    /// Method being used: "kreuzberg", "direct"
     pub method: Option<String>,
     /// Status: "processing", "success", "skipped", "failed"
     pub status: String,
@@ -66,6 +66,11 @@ struct AnnotationRow {
     comment: Option<String>,
 }
 
+#[derive(Debug, FromRow)]
+struct MarkdownPathRow {
+    markdown_path: Option<String>,
+}
+
 // =====================================================
 // TAURI COMMANDS
 // =====================================================
@@ -87,21 +92,181 @@ pub async fn full_text_search(
         .map_err(|e| e.to_string())
 }
 
+/// Get markdown content for an attachment
+#[tauri::command]
+pub async fn get_markdown_content(
+    state: State<'_, AppState>,
+    attachment_id: i64,
+) -> Result<Option<String>, String> {
+    let row: Option<MarkdownPathRow> = sqlx::query_as(
+        "SELECT markdown_path FROM attachments WHERE id = ?",
+    )
+    .bind(attachment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let markdown_path = match row.and_then(|r| r.markdown_path) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    // Resolve path relative to library
+    let library_path = state.library_path.read().await;
+    let full_path = library_path.join(&markdown_path);
+
+    if full_path.exists() {
+        let content = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
+        Ok(Some(content))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Reindex a single attachment (re-extract text, update index, save/clear markdown)
+#[tauri::command]
+pub async fn reindex_attachment(
+    state: State<'_, AppState>,
+    attachment_id: i64,
+    enable_ocr: Option<bool>,
+    force_ocr: Option<bool>,
+) -> Result<(), String> {
+    let config = ExtractionConfig {
+        enable_ocr: enable_ocr.unwrap_or(true),
+        force_ocr: force_ocr.unwrap_or(false),
+    };
+
+    // Get attachment info
+    #[derive(Debug, FromRow)]
+    struct AttachmentInfoRow {
+        id: i64,
+        entry_id: i64,
+        entry_key: String,
+        file_path: Option<String>,
+        attachment_type: String,
+        entry_title: Option<String>,
+    }
+
+    let attachment: AttachmentInfoRow = sqlx::query_as(
+        r#"
+        SELECT a.id, a.entry_id, e.key as entry_key, a.file_path,
+               at.name as attachment_type, e.title as entry_title
+        FROM attachments a
+        JOIN entries e ON a.entry_id = e.id
+        JOIN attachment_types at ON a.attachment_type_id = at.id
+        WHERE a.id = ?
+        "#,
+    )
+    .bind(attachment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "Attachment not found".to_string())?;
+
+    let file_path = attachment
+        .file_path
+        .ok_or_else(|| "Attachment has no file path".to_string())?;
+
+    let library_path = state.library_path.read().await;
+    let full_path = library_path.join(&file_path);
+
+    if !full_path.exists() {
+        return Err(format!("File not found: {}", full_path.display()));
+    }
+
+    // Delete existing index document for this attachment
+    state
+        .search_index
+        .delete_attachment(attachment_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Re-extract and index
+    let attachment_data = crate::search::indexer::AttachmentData {
+        entry_id: attachment.entry_id,
+        entry_key: attachment.entry_key,
+        attachment_id: attachment.id,
+        title: attachment.entry_title,
+        file_path: full_path.to_string_lossy().to_string(),
+        content_source: attachment.attachment_type,
+    };
+
+    match state
+        .search_index
+        .index_attachment_content(&attachment_data, &config)
+        .await
+    {
+        Ok(result) => {
+            let worth_saving = result
+                .extracted_text
+                .as_ref()
+                .map_or(false, |t| is_worth_saving(t));
+            if worth_saving {
+                if let Some(ref text) = result.extracted_text {
+                    if let Ok(md_path) = save_markdown(&full_path, text) {
+                        let relative_md = md_path
+                            .strip_prefix(&*library_path)
+                            .ok()
+                            .map(|p| p.to_string_lossy().to_string());
+                        if let Some(rel) = relative_md {
+                            let _ = sqlx::query(
+                                "UPDATE attachments SET markdown_path = ? WHERE id = ?",
+                            )
+                            .bind(&rel)
+                            .bind(attachment_id)
+                            .execute(&state.db)
+                            .await;
+                        }
+                    }
+                }
+            } else {
+                // Clear stale markdown_path and remove old .md file
+                let stale_md = markdown_path_for(&full_path);
+                let _ = std::fs::remove_file(&stale_md);
+                let _ = sqlx::query(
+                    "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
+                )
+                .bind(attachment_id)
+                .execute(&state.db)
+                .await;
+            }
+            tracing::info!(
+                "Reindexed attachment {}: method={}, chars={}",
+                attachment_id,
+                result.method.as_str(),
+                result
+                    .extracted_text
+                    .as_ref()
+                    .map_or(0, |t| t.len())
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Failed to reindex attachment {}: {}", attachment_id, e);
+            return Err(format!("Extraction failed: {}", e));
+        }
+    }
+
+    // Commit changes
+    state
+        .search_index
+        .commit()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 /// Reindex a single entry and its attachments
 #[tauri::command]
 pub async fn reindex_entry(
     state: State<'_, AppState>,
     entry_id: i64,
-    skip_ocr: Option<bool>,
-    ollama_enabled: Option<bool>,
-    ollama_endpoint: Option<String>,
-    ollama_model: Option<String>,
+    enable_ocr: Option<bool>,
+    force_ocr: Option<bool>,
 ) -> Result<(), String> {
     let config = ExtractionConfig {
-        skip_ocr: skip_ocr.unwrap_or(false),
-        ollama_enabled: ollama_enabled.unwrap_or(false),
-        ollama_endpoint: ollama_endpoint.unwrap_or_else(|| "http://localhost:11434".to_string()),
-        ollama_model: ollama_model.unwrap_or_else(|| "llava".to_string()),
+        enable_ocr: enable_ocr.unwrap_or(true),
+        force_ocr: force_ocr.unwrap_or(false),
     };
 
     // First delete existing documents for this entry
@@ -215,12 +380,47 @@ pub async fn reindex_entry(
                     content_source: attachment.attachment_type.clone(),
                 };
 
-                if let Err(e) = state
+                match state
                     .search_index
                     .index_attachment_content(&attachment_data, &config)
                     .await
                 {
-                    tracing::warn!("Failed to index attachment {}: {}", attachment.id, e);
+                    Ok(result) => {
+                        // Save markdown alongside original if extraction is substantial
+                        let worth_saving = result.extracted_text.as_ref().map_or(false, |t| is_worth_saving(t));
+                        if worth_saving {
+                            if let Some(ref text) = result.extracted_text {
+                                if let Ok(md_path) = save_markdown(&full_path, text) {
+                                    let relative_md =
+                                        md_path.strip_prefix(&*library_path).ok().map(|p| {
+                                            p.to_string_lossy().to_string()
+                                        });
+                                    if let Some(rel) = relative_md {
+                                        let _ = sqlx::query(
+                                            "UPDATE attachments SET markdown_path = ? WHERE id = ?",
+                                        )
+                                        .bind(&rel)
+                                        .bind(attachment.id)
+                                        .execute(&state.db)
+                                        .await;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Clear stale markdown_path and remove old .md file
+                            let stale_md = markdown_path_for(&full_path);
+                            let _ = std::fs::remove_file(&stale_md);
+                            let _ = sqlx::query(
+                                "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
+                            )
+                            .bind(attachment.id)
+                            .execute(&state.db)
+                            .await;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to index attachment {}: {}", attachment.id, e);
+                    }
                 }
             }
         }
@@ -270,7 +470,11 @@ pub async fn reindex_entry(
                 };
 
                 if let Err(e) = state.search_index.index_annotations(&annotation_data).await {
-                    tracing::warn!("Failed to index annotations for attachment {}: {}", attachment.id, e);
+                    tracing::warn!(
+                        "Failed to index annotations for attachment {}: {}",
+                        attachment.id,
+                        e
+                    );
                 }
             }
         }
@@ -291,18 +495,13 @@ pub async fn reindex_entry(
 pub async fn reindex_library(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
-    skip_ocr: Option<bool>,
-    ollama_enabled: Option<bool>,
-    ollama_endpoint: Option<String>,
-    ollama_model: Option<String>,
+    enable_ocr: Option<bool>,
 ) -> Result<(), String> {
     use tauri::Emitter;
 
     let config = ExtractionConfig {
-        skip_ocr: skip_ocr.unwrap_or(false),
-        ollama_enabled: ollama_enabled.unwrap_or(false),
-        ollama_endpoint: ollama_endpoint.unwrap_or_else(|| "http://localhost:11434".to_string()),
-        ollama_model: ollama_model.unwrap_or_else(|| "llava".to_string()),
+        enable_ocr: enable_ocr.unwrap_or(true),
+        force_ocr: false,
     };
 
     // Get all entries
@@ -407,28 +606,7 @@ pub async fn reindex_library(
                     .to_string();
 
                 if full_path.exists() {
-                    // Determine expected extraction method based on file extension
-                    let expected_method = match full_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.to_lowercase())
-                        .as_deref()
-                    {
-                        Some("pdf") => {
-                            if config.skip_ocr {
-                                "pdf-extract (OCR disabled)"
-                            } else if config.ollama_enabled {
-                                "pdf-extract → ollama → ocr"
-                            } else {
-                                "pdf-extract → ocr"
-                            }
-                        }
-                        Some("md") | Some("txt") | Some("markdown") => "direct",
-                        Some("html") | Some("htm") => "html-parse",
-                        _ => "unknown",
-                    };
-
-                    // Emit progress: extracting with expected method
+                    // Emit progress: extracting
                     let _ = app_handle.emit(
                         "reindex:detail",
                         ReindexProgress {
@@ -437,7 +615,7 @@ pub async fn reindex_library(
                             entry_title: entry.title.clone(),
                             file_name: Some(file_name.clone()),
                             step: "extracting".to_string(),
-                            method: Some(expected_method.to_string()),
+                            method: Some("kreuzberg".to_string()),
                             status: "processing".to_string(),
                             message: None,
                         },
@@ -458,6 +636,38 @@ pub async fn reindex_library(
                         .await
                     {
                         Ok(result) => {
+                            // Save markdown alongside original if extraction is substantial
+                            let worth_saving = result.extracted_text.as_ref().map_or(false, |t| is_worth_saving(t));
+                            if worth_saving {
+                                if let Some(ref text) = result.extracted_text {
+                                    if let Ok(md_path) = save_markdown(&full_path, text) {
+                                        let relative_md = md_path
+                                            .strip_prefix(&library_path)
+                                            .ok()
+                                            .map(|p| p.to_string_lossy().to_string());
+                                        if let Some(rel) = relative_md {
+                                            let _ = sqlx::query(
+                                                "UPDATE attachments SET markdown_path = ? WHERE id = ?",
+                                            )
+                                            .bind(&rel)
+                                            .bind(attachment.id)
+                                            .execute(&state.db)
+                                            .await;
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Clear stale markdown_path and remove old .md file
+                                let stale_md = markdown_path_for(&full_path);
+                                let _ = std::fs::remove_file(&stale_md);
+                                let _ = sqlx::query(
+                                    "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
+                                )
+                                .bind(attachment.id)
+                                .execute(&state.db)
+                                .await;
+                            }
+
                             let _ = app_handle.emit(
                                 "reindex:detail",
                                 ReindexProgress {
@@ -467,7 +677,12 @@ pub async fn reindex_library(
                                     file_name: Some(file_name.clone()),
                                     step: "indexing".to_string(),
                                     method: Some(result.method.as_str().to_string()),
-                                    status: if result.indexed { "success" } else { "skipped" }.to_string(),
+                                    status: if result.indexed {
+                                        "success"
+                                    } else {
+                                        "skipped"
+                                    }
+                                    .to_string(),
                                     message: result.message,
                                 },
                             );
@@ -494,7 +709,7 @@ pub async fn reindex_library(
             // Index annotations for this attachment
             let annotations: Vec<AnnotationRow> = sqlx::query_as(
                 r#"
-                SELECT attachment_id, selected_text, comment
+                SELECT selected_text, comment
                 FROM attachment_annotations
                 WHERE attachment_id = ?
                 "#,
@@ -534,7 +749,10 @@ pub async fn reindex_library(
                         },
                     };
 
-                    let _ = state.search_index.index_annotations(&annotation_data).await;
+                    let _ = state
+                        .search_index
+                        .index_annotations(&annotation_data)
+                        .await;
                 }
             }
         }
@@ -555,53 +773,4 @@ pub async fn reindex_library(
     let _ = app_handle.emit("reindex:complete", total);
 
     Ok(())
-}
-
-/// Check Ollama connection status
-#[derive(Debug, Serialize)]
-pub struct OllamaStatus {
-    pub connected: bool,
-    pub models: Vec<String>,
-}
-
-#[tauri::command]
-pub async fn check_ollama_status(endpoint: String) -> Result<OllamaStatus, String> {
-    let client = reqwest::Client::new();
-    let tags_url = format!("{}/api/tags", endpoint);
-
-    match client.get(&tags_url).send().await {
-        Ok(response) => {
-            if response.status().is_success() {
-                if let Ok(json) = response.json::<serde_json::Value>().await {
-                    let models = json["models"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|m| m["name"].as_str().map(|s| s.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    Ok(OllamaStatus {
-                        connected: true,
-                        models,
-                    })
-                } else {
-                    Ok(OllamaStatus {
-                        connected: true,
-                        models: vec![],
-                    })
-                }
-            } else {
-                Ok(OllamaStatus {
-                    connected: false,
-                    models: vec![],
-                })
-            }
-        }
-        Err(_) => Ok(OllamaStatus {
-            connected: false,
-            models: vec![],
-        }),
-    }
 }

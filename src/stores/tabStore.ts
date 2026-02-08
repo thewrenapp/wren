@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 
 export interface Tab {
   id: string;
-  type: "item" | "entry" | "search" | "collection" | "welcome" | "library";
+  type: "item" | "entry" | "markdown" | "search" | "collection" | "welcome" | "library";
   title: string;
   itemId?: string;
   entryId?: string;
@@ -46,10 +46,10 @@ export const useTabStore = create<TabState>()(
           }
         }
 
-        // Check if entry already has a tab open (with same attachment if specified)
+        // Check if entry already has a tab open (with same type and attachment if specified)
         if (tab.entryId) {
           const existing = state.tabs.find((t) =>
-            t.entryId === tab.entryId && t.attachmentId === tab.attachmentId
+            t.type === tab.type && t.entryId === tab.entryId && t.attachmentId === tab.attachmentId
           );
           if (existing) {
             set({ activeTabId: existing.id });

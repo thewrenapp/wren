@@ -122,6 +122,7 @@ struct AttachmentRow {
     page_count: Option<i32>,
     frontmatter: Option<String>,
     thumbnail_path: Option<String>,
+    markdown_path: Option<String>,
     date_added: String,
     date_modified: String,
 }
@@ -1901,7 +1902,7 @@ async fn sync_entry_attachment_filenames(
     // Fetch file attachments for this entry
     let attachments = sqlx::query(
         r#"
-        SELECT a.id, a.file_path
+        SELECT a.id, a.file_path, a.markdown_path
         FROM attachments a
         WHERE a.entry_id = ? AND a.file_path IS NOT NULL
         "#
@@ -2033,11 +2034,36 @@ async fn sync_entry_attachment_filenames(
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| entry_title.clone());
 
+                // Also rename the companion markdown file if it exists (e.g. paper.pdf.md → new_name.pdf.md)
+                let markdown_path_str: Option<String> = attachment_row.get("markdown_path");
+                let mut new_markdown_rel: Option<String> = None;
+                if let Some(ref md_rel) = markdown_path_str {
+                    // markdown_path is stored relative to library
+                    let old_md_abs = lib_path.join(md_rel);
+                    if old_md_abs.exists() {
+                        let new_md_abs = crate::search::extractor::markdown_path_for(&new_path);
+                        if let Err(e) = std::fs::rename(&old_md_abs, &new_md_abs) {
+                            tracing::warn!("Failed to rename markdown file: {}", e);
+                        } else {
+                            new_markdown_rel = new_md_abs
+                                .strip_prefix(&*lib_path)
+                                .ok()
+                                .map(|p| p.to_string_lossy().to_string());
+                            tracing::info!(
+                                "Renamed markdown file: {} -> {}",
+                                old_md_abs.display(),
+                                new_md_abs.display()
+                            );
+                        }
+                    }
+                }
+
                 let _ = sqlx::query(
-                    "UPDATE attachments SET file_path = ?, title = ?, date_modified = datetime('now') WHERE id = ?"
+                    "UPDATE attachments SET file_path = ?, title = ?, markdown_path = COALESCE(?, markdown_path), date_modified = datetime('now') WHERE id = ?"
                 )
                 .bind(&new_path_str)
                 .bind(&new_title)
+                .bind(&new_markdown_rel)
                 .bind(attachment_id)
                 .execute(db)
                 .await;
@@ -2394,7 +2420,7 @@ async fn get_entry_attachments_internal(
             a.id, a.key, a.entry_id, at.name as attachment_type,
             at.display_name as attachment_type_display,
             a.title, a.file_path, a.file_hash, a.file_size, a.url,
-            a.page_count, a.frontmatter, a.thumbnail_path,
+            a.page_count, a.frontmatter, a.thumbnail_path, a.markdown_path,
             a.date_added, a.date_modified
         FROM attachments a
         JOIN attachment_types at ON a.attachment_type_id = at.id
@@ -2423,6 +2449,7 @@ async fn get_entry_attachments_internal(
             page_count: a.page_count,
             frontmatter: a.frontmatter,
             thumbnail_path: a.thumbnail_path,
+            markdown_path: a.markdown_path,
             date_added: a.date_added,
             date_modified: a.date_modified,
         })
@@ -2438,7 +2465,7 @@ pub async fn get_attachment(state: State<'_, AppState>, id: i64) -> Result<Attac
             a.id, a.key, a.entry_id, at.name as attachment_type,
             at.display_name as attachment_type_display,
             a.title, a.file_path, a.file_hash, a.file_size, a.url,
-            a.page_count, a.frontmatter, a.thumbnail_path,
+            a.page_count, a.frontmatter, a.thumbnail_path, a.markdown_path,
             a.date_added, a.date_modified
         FROM attachments a
         JOIN attachment_types at ON a.attachment_type_id = at.id
@@ -2465,6 +2492,7 @@ pub async fn get_attachment(state: State<'_, AppState>, id: i64) -> Result<Attac
         page_count: attachment.page_count,
         frontmatter: attachment.frontmatter,
         thumbnail_path: attachment.thumbnail_path,
+        markdown_path: attachment.markdown_path,
         date_added: attachment.date_added,
         date_modified: attachment.date_modified,
     })
@@ -2820,12 +2848,10 @@ pub async fn add_pdf_attachment(
         .to_string();
 
     // Determine expected extraction method based on config
-    let expected_method = if config.skip_ocr {
-        "pdf-extract (OCR disabled)"
-    } else if config.ollama_enabled {
-        "pdf-extract → ollama → ocr"
+    let expected_method = if config.enable_ocr {
+        "kreuzberg (OCR enabled)"
     } else {
-        "pdf-extract → ocr"
+        "kreuzberg"
     };
 
     // Emit progress: extracting
@@ -3862,7 +3888,7 @@ pub async fn get_entries_attachments(
             a.id, a.key, a.entry_id, at.name as attachment_type,
             at.display_name as attachment_type_display,
             a.title, a.file_path, a.file_hash, a.file_size, a.url,
-            a.page_count, a.frontmatter, a.thumbnail_path,
+            a.page_count, a.frontmatter, a.thumbnail_path, a.markdown_path,
             a.date_added, a.date_modified
         FROM attachments a
         JOIN attachment_types at ON a.attachment_type_id = at.id
@@ -3899,6 +3925,7 @@ pub async fn get_entries_attachments(
             page_count: a.page_count,
             frontmatter: a.frontmatter,
             thumbnail_path: a.thumbnail_path,
+            markdown_path: a.markdown_path,
             date_added: a.date_added,
             date_modified: a.date_modified,
         });

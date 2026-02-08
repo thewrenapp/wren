@@ -1,12 +1,14 @@
 import { useMemo, useState, useCallback } from 'react';
-import { FileType, StickyNote, Globe, Paperclip, Trash2, ExternalLink } from 'lucide-react';
+import { Trash2, ExternalLink, ScrollText, RefreshCw } from 'lucide-react';
 import { type EntrySummary, type Attachment, useLibraryStore } from '@/stores/libraryStore';
+import { AttachmentIcon, getAttachmentIcon, getEntryTypeIcon } from '@/lib/icons';
 import { useUIStore, type SortField, type SortDirection } from '@/stores/uiStore';
 import { formatRelativeDate } from '@/lib/utils';
 import { EntryContextMenuContent } from './EntryContextMenu';
 import { TrashContextMenuContent } from './TrashContextMenu';
 import { DataTable, type Column } from './DataTable';
-import { deleteAttachment, exportToBiblatexWithFiles, type ExportOptions } from '@/services/tauri';
+import { deleteAttachment, reindexAttachment, exportToBiblatexWithFiles, type ExportOptions } from '@/services/tauri';
+import { useTabStore } from '@/stores/tabStore';
 import { toast } from '@/stores/toastStore';
 import type { EntryDragData } from '@/components/dnd/DragDropProvider';
 import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
@@ -151,6 +153,45 @@ export function EntryTable({
     closeContextMenu();
   };
 
+  const handleViewExtractedText = () => {
+    if (!contextMenuAttachment) return;
+    const { attachment, entryId } = contextMenuAttachment;
+    const entry = entries.find((e) => e.id === entryId);
+    const { openTab } = useTabStore.getState();
+    openTab({
+      type: 'markdown',
+      title: `${entry?.title || 'Attachment'} - ${attachment.title || attachment.attachmentType}`,
+      entryId: String(entryId),
+      data: { attachmentId: attachment.id },
+    });
+    closeContextMenu();
+  };
+
+  const handleReindexAttachment = (forceOcr = false) => {
+    if (!contextMenuAttachment) return;
+    const { attachment } = contextMenuAttachment;
+    const attachmentId = Number(attachment.id);
+    const title = attachment.title || 'attachment';
+    closeContextMenu();
+
+    const label = forceOcr ? 'Re-extracting with OCR' : 'Re-extracting';
+    const loadingId = toast.loading(`${label}: ${title}...`);
+
+    (async () => {
+      try {
+        await reindexAttachment(attachmentId, { forceOcr });
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.dismiss(loadingId);
+        toast.success('Attachment re-indexed successfully');
+      } catch (err) {
+        console.error('Failed to reindex attachment:', err);
+        toast.dismiss(loadingId);
+        toast.error(`Failed to reindex: ${err}`);
+      }
+    })();
+  };
+
   // Define columns based on visible column config
   const columns: Column<EntrySummary>[] = useMemo(() => {
     return visibleColumns.map((col) => {
@@ -164,28 +205,32 @@ export function EntryTable({
         case 'title':
           return {
             ...baseColumn,
-            cell: (entry: EntrySummary) => (
-              <div className='flex items-center gap-2 min-w-0'>
-                {entry.tags.filter(t => t.color || !t.isImported).length > 0 && (
-                  <div className='flex items-center gap-0.5 flex-shrink-0'>
-                    {entry.tags.filter(t => t.color || !t.isImported).slice(0, 3).map((tag) => (
-                      <span
-                        key={tag.id}
-                        className='w-2 h-2 rounded-full'
-                        style={{ backgroundColor: tag.color || '#6b7280' }}
-                        title={tag.name}
-                      />
-                    ))}
-                    {entry.tags.filter(t => t.color || !t.isImported).length > 3 && (
-                      <span className='text-xs text-muted-foreground ml-0.5'>
-                        +{entry.tags.filter(t => t.color || !t.isImported).length - 3}
-                      </span>
-                    )}
-                  </div>
-                )}
-                <span className='font-medium truncate'>{entry.title}</span>
-              </div>
-            ),
+            cell: (entry: EntrySummary) => {
+              const TypeIcon = getEntryTypeIcon(entry.itemType);
+              return (
+                <div className='flex items-center gap-2 min-w-0'>
+                  <TypeIcon className='h-4 w-4 text-muted-foreground flex-shrink-0' />
+                  {entry.tags.filter(t => t.color || !t.isImported).length > 0 && (
+                    <div className='flex items-center gap-0.5 flex-shrink-0'>
+                      {entry.tags.filter(t => t.color || !t.isImported).slice(0, 3).map((tag) => (
+                        <span
+                          key={tag.id}
+                          className='w-2 h-2 rounded-full'
+                          style={{ backgroundColor: tag.color || '#6b7280' }}
+                          title={tag.name}
+                        />
+                      ))}
+                      {entry.tags.filter(t => t.color || !t.isImported).length > 3 && (
+                        <span className='text-xs text-muted-foreground ml-0.5'>
+                          +{entry.tags.filter(t => t.color || !t.isImported).length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <span className='font-medium truncate'>{entry.title}</span>
+                </div>
+              );
+            },
           };
 
         case 'creator':
@@ -238,15 +283,19 @@ export function EntryTable({
           return {
             ...baseColumn,
             sortable: false,
-            cell: (entry: EntrySummary) => (
-              <div className='flex items-center gap-1'>
-                {entry.hasPdf && <FileType className='h-3.5 w-3.5 text-red-500' />}
-                {entry.hasNote && <StickyNote className='h-3.5 w-3.5 text-amber-500' />}
-                {entry.attachmentCount > 0 && (
-                  <span className='text-xs text-muted-foreground'>{entry.attachmentCount}</span>
-                )}
-              </div>
-            ),
+            cell: (entry: EntrySummary) => {
+              const PdfIcon = getAttachmentIcon('pdf');
+              const NoteIcon = getAttachmentIcon('note');
+              return (
+                <div className='flex items-center gap-1'>
+                  {entry.hasPdf && <PdfIcon.icon className={`h-3.5 w-3.5 ${PdfIcon.className}`} />}
+                  {entry.hasNote && <NoteIcon.icon className={`h-3.5 w-3.5 ${NoteIcon.className}`} />}
+                  {entry.attachmentCount > 0 && (
+                    <span className='text-xs text-muted-foreground'>{entry.attachmentCount}</span>
+                  )}
+                </div>
+              );
+            },
           };
 
         case 'tags':
@@ -457,6 +506,24 @@ export function EntryTable({
             Open
           </DropdownMenuItem>
 
+          {contextMenuAttachment?.attachment.markdownPath && (
+            <DropdownMenuItem onClick={handleViewExtractedText}>
+              <ScrollText className='h-4 w-4 mr-2' />
+              View Extracted Text
+            </DropdownMenuItem>
+          )}
+
+          <DropdownMenuSeparator />
+
+          <DropdownMenuItem onClick={() => handleReindexAttachment(false)}>
+            <RefreshCw className='h-4 w-4 mr-2' />
+            Re-extract Text
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => handleReindexAttachment(true)}>
+            <RefreshCw className='h-4 w-4 mr-2' />
+            Re-extract with OCR
+          </DropdownMenuItem>
+
           <DropdownMenuSeparator />
 
           <DropdownMenuItem
@@ -481,19 +548,6 @@ export function EntryTable({
   );
 }
 
-// Attachment icon based on type
-function AttachmentIcon({ type }: { type: string }) {
-  switch (type) {
-    case 'pdf':
-      return <FileType className='h-4 w-4 text-red-500 flex-shrink-0' />;
-    case 'note':
-      return <StickyNote className='h-4 w-4 text-amber-500 flex-shrink-0' />;
-    case 'weblink':
-      return <Globe className='h-4 w-4 text-primary flex-shrink-0' />;
-    default:
-      return <Paperclip className='h-4 w-4 text-muted-foreground flex-shrink-0' />;
-  }
-}
 
 // Default title for attachment if none provided
 function getAttachmentDefaultTitle(attachment: Attachment): string {

@@ -1,5 +1,5 @@
 import { useToastStore, type Toast, type ToastType } from "@/stores/toastStore";
-import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from "lucide-react";
+import { X, CheckCircle, AlertCircle, Info, AlertTriangle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const toastIcons: Record<ToastType, React.ReactNode> = {
@@ -7,6 +7,7 @@ const toastIcons: Record<ToastType, React.ReactNode> = {
   error: <AlertCircle className="h-4 w-4 text-red-500" />,
   info: <Info className="h-4 w-4 text-blue-500" />,
   warning: <AlertTriangle className="h-4 w-4 text-amber-500" />,
+  loading: <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />,
 };
 
 const toastStyles: Record<ToastType, string> = {
@@ -14,6 +15,7 @@ const toastStyles: Record<ToastType, string> = {
   error: "border-red-500/20 bg-red-500/10",
   info: "border-blue-500/20 bg-blue-500/10",
   warning: "border-amber-500/20 bg-amber-500/10",
+  loading: "border-blue-500/20 bg-blue-500/10",
 };
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {

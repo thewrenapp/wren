@@ -22,9 +22,10 @@ function AppShell() {
     }
   }, [showWelcomeOnStartup, openTab, tabs.length]);
 
-  // Keyboard shortcut for Advanced Search (Cmd+Shift+F)
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd+Shift+F: Advanced Search
       if (e.metaKey && e.shiftKey && e.key === "f") {
         e.preventDefault();
         setAdvancedSearchOpen(true);

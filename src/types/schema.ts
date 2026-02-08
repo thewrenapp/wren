@@ -183,6 +183,7 @@ export interface Attachment {
   pageCount?: number;
   frontmatter?: string;
   thumbnailPath?: string;
+  markdownPath?: string;
   dateAdded: string;
   dateModified: string;
 }

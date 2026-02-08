@@ -2,6 +2,7 @@ import { useTabStore } from "@/stores/tabStore";
 import { WelcomeTab } from "./WelcomeTab";
 import { EntryTab } from "./EntryTab";
 import { LibraryTab } from "./LibraryTab";
+import { MarkdownViewer } from "@/components/viewer/MarkdownViewer";
 
 export function TabContent() {
   const { tabs, activeTabId } = useTabStore();
@@ -28,6 +29,21 @@ export function TabContent() {
         );
       }
       return <EntryTab entryId={activeTab.entryId} attachmentId={activeTab.attachmentId} />;
+
+    case "markdown":
+      if (!activeTab.data?.attachmentId) {
+        return (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+            No attachment specified
+          </div>
+        );
+      }
+      return (
+        <MarkdownViewer
+          attachmentId={activeTab.data.attachmentId as number}
+          title={activeTab.title}
+        />
+      );
 
     case "search":
       return (

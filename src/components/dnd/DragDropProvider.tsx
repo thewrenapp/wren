@@ -12,7 +12,8 @@ import {
 import { useLibraryStore, type EntrySummary } from '@/stores/libraryStore';
 import { addEntryToCollection, getCollections, deleteEntry, getTrashCount, mergeCollections, addTagToEntries, getTags, mergeTags } from '@/services/tauri';
 import { toast } from '@/stores/toastStore';
-import { FileText, Files, FolderOpen, Tag, Tags } from 'lucide-react';
+import { FolderOpen, Tag, Tags } from 'lucide-react';
+import { IconFileText, IconFiles } from '@tabler/icons-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -406,14 +407,14 @@ export function DragDropProvider({ children, onExpandCollections }: DragDropProv
             <div className="flex items-center gap-2 px-3 py-2 bg-background border border-border rounded-lg shadow-lg">
               {draggedEntries.length === 1 ? (
                 <>
-                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  <IconFileText className="h-4 w-4 text-muted-foreground" />
                   <span className="text-sm font-medium truncate max-w-[200px]">
                     {draggedEntries[0].title}
                   </span>
                 </>
               ) : (
                 <>
-                  <Files className="h-4 w-4 text-muted-foreground" />
+                  <IconFiles className="h-4 w-4 text-muted-foreground" />
                   <span className="text-sm font-medium">
                     {draggedEntries.length} items
                   </span>

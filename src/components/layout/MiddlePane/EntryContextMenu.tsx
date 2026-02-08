@@ -12,13 +12,14 @@ import {
   FolderPlus,
   FolderMinus,
   Tags,
-  Minus,
   Download,
   FileJson,
   FileCode,
   FolderOutput,
   Paperclip,
+  RefreshCw,
 } from 'lucide-react';
+import { IconTagOff } from '@tabler/icons-react';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -57,6 +58,7 @@ import {
   getTags,
   addTagToEntries,
   removeEntryTag,
+  reindexEntry,
   type ExportOptions,
 } from '@/services/tauri';
 import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
@@ -304,6 +306,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
         title: note.title || `Notes - ${entry.title}`,
         entryId: String(entry.id),
         attachmentId: String(note.id),
+        data: { attachmentType: 'note' },
       });
       toast.success('Note created');
     } catch (err) {
@@ -336,6 +339,33 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
       toast.error('Failed to move to Trash');
     }
     onClose?.();
+  };
+
+  const handleReextractAttachments = (forceOcr = false) => {
+    onClose?.();
+    const ocrLabel = forceOcr ? ' with OCR' : '';
+    const label = isMultiSelect
+      ? `Re-extracting${ocrLabel} attachments for ${targetIds.length} entries`
+      : `Re-extracting${ocrLabel} attachments`;
+    const loadingId = toast.loading(`${label}...`);
+    // Capture ids so the async work doesn't depend on component state
+    const ids = [...targetIds];
+    const multi = isMultiSelect;
+    (async () => {
+      try {
+        for (const id of ids) {
+          await reindexEntry(id, { forceOcr });
+        }
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.dismiss(loadingId);
+        toast.success(multi ? `${ids.length} entries re-extracted` : 'Attachments re-extracted');
+      } catch (err) {
+        console.error('Failed to re-extract:', err);
+        toast.dismiss(loadingId);
+        toast.error(`Failed to re-extract: ${err}`);
+      }
+    })();
   };
 
   const handleExportCslJson = async () => {
@@ -502,7 +532,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
       )}
       {activeFilter.type === 'tag' && activeTagIds.length > 0 && (
         <DropdownMenuItem onClick={handleRemoveActiveTag}>
-          <Minus className='h-4 w-4 mr-2' />
+          <IconTagOff className='h-4 w-4 mr-2' />
           {isMultiSelect
             ? `Remove Tag from ${targetIds.length} Items`
             : activeTagIds.length > 1
@@ -549,6 +579,25 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
         <Copy className='h-4 w-4 mr-2' />
         {isMultiSelect ? `Copy ${targetIds.length} Titles` : 'Copy Title'}
       </DropdownMenuItem>
+
+      <DropdownMenuSeparator />
+
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>
+          <RefreshCw className='h-4 w-4 mr-2' />
+          {isMultiSelect ? `Re-extract ${targetIds.length} Entries` : 'Re-extract Attachments'}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className='w-56'>
+          <DropdownMenuItem onClick={() => handleReextractAttachments(false)}>
+            <RefreshCw className='h-4 w-4 mr-2' />
+            Re-extract Text
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => handleReextractAttachments(true)}>
+            <RefreshCw className='h-4 w-4 mr-2' />
+            Re-extract with OCR
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
 
       <DropdownMenuSeparator />
 
@@ -781,6 +830,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
         title: note.title || `Notes - ${entry.title}`,
         entryId: String(entry.id),
         attachmentId: String(note.id),
+        data: { attachmentType: 'note' },
       });
       toast.success('Note created');
     } catch (err) {
@@ -811,6 +861,32 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
       console.error('Failed to delete entry:', err);
       toast.error('Failed to move to Trash');
     }
+  };
+
+  const handleReextractAttachments = (forceOcr = false) => {
+    const ocrLabel = forceOcr ? ' with OCR' : '';
+    const label = isMultiSelect
+      ? `Re-extracting${ocrLabel} attachments for ${targetIds.length} entries`
+      : `Re-extracting${ocrLabel} attachments`;
+    const loadingId = toast.loading(`${label}...`);
+    // Capture ids so the async work doesn't depend on component state
+    const ids = [...targetIds];
+    const multi = isMultiSelect;
+    (async () => {
+      try {
+        for (const id of ids) {
+          await reindexEntry(id, { forceOcr });
+        }
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.dismiss(loadingId);
+        toast.success(multi ? `${ids.length} entries re-extracted` : 'Attachments re-extracted');
+      } catch (err) {
+        console.error('Failed to re-extract:', err);
+        toast.dismiss(loadingId);
+        toast.error(`Failed to re-extract: ${err}`);
+      }
+    })();
   };
 
   const handleExportCslJson = async () => {
@@ -998,7 +1074,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
         )}
         {activeFilter.type === 'tag' && activeTagIds.length > 0 && (
           <ContextMenuItem onClick={handleRemoveActiveTag}>
-            <Minus className='h-4 w-4 mr-2' />
+            <IconTagOff className='h-4 w-4 mr-2' />
             {isMultiSelect
               ? `Remove Tag from ${targetIds.length} Items`
               : activeTagIds.length > 1
@@ -1045,6 +1121,25 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
           <Copy className='h-4 w-4 mr-2' />
           {isMultiSelect ? `Copy ${targetIds.length} Titles` : 'Copy Title'}
         </ContextMenuItem>
+
+        <ContextMenuSeparator />
+
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <RefreshCw className='h-4 w-4 mr-2' />
+            {isMultiSelect ? `Re-extract ${targetIds.length} Entries` : 'Re-extract Attachments'}
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className='w-56'>
+            <ContextMenuItem onClick={() => handleReextractAttachments(false)}>
+              <RefreshCw className='h-4 w-4 mr-2' />
+              Re-extract Text
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => handleReextractAttachments(true)}>
+              <RefreshCw className='h-4 w-4 mr-2' />
+              Re-extract with OCR
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
 
         <ContextMenuSeparator />
 

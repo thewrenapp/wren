@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { FileText, File, FolderOpen, Command, ArrowRight, Library } from "lucide-react";
+import { FolderOpen, Command, ArrowRight } from "lucide-react";
+import { sidebarIcons } from "@/lib/icons";
+import { IconLibrary } from "@tabler/icons-react";
 import { AppLogo } from "@/components/ui/AppLogo";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
@@ -143,14 +145,14 @@ export function WelcomeTab() {
           {/* Quick actions */}
           <div className="grid gap-3">
             <QuickAction
-              icon={<File className="h-5 w-5" />}
+              icon={<sidebarIcons.pdfs className="h-5 w-5 text-red-500" />}
               title="Import PDFs"
               description="Add PDF documents to your library"
               onClick={handleImportFiles}
             />
 
             <QuickAction
-              icon={<FileText className="h-5 w-5" />}
+              icon={<sidebarIcons.notes className="h-5 w-5 text-amber-500" />}
               title="Create Note"
               description="Start a new markdown note"
               onClick={() => {
@@ -166,7 +168,7 @@ export function WelcomeTab() {
             />
 
             <QuickAction
-              icon={<Library className="h-5 w-5" />}
+              icon={<IconLibrary className="h-5 w-5" />}
               title="Import from Zotero"
               description="Import BibLaTeX export with files"
               onClick={handleImportBiblatex}

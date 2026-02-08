@@ -118,6 +118,7 @@ export interface Attachment {
   pageCount?: number;
   frontmatter?: string;
   thumbnailPath?: string;
+  markdownPath?: string;
   dateAdded: string;
   dateModified: string;
 }
@@ -871,36 +872,32 @@ export async function fullTextSearch(
 }
 
 export interface ExtractionConfig {
-  skipOcr?: boolean;
-  ollamaEnabled?: boolean;
-  ollamaEndpoint?: string;
-  ollamaModel?: string;
+  enableOcr?: boolean;
+  forceOcr?: boolean;
 }
 
 export async function reindexEntry(entryId: number, config?: ExtractionConfig): Promise<void> {
   return invoke('reindex_entry', {
     entryId,
-    skipOcr: config?.skipOcr ?? null,
-    ollamaEnabled: config?.ollamaEnabled ?? null,
-    ollamaEndpoint: config?.ollamaEndpoint ?? null,
-    ollamaModel: config?.ollamaModel ?? null,
+    enableOcr: config?.enableOcr ?? null,
+    forceOcr: config?.forceOcr ?? null,
+  });
+}
+
+export async function reindexAttachment(attachmentId: number, config?: ExtractionConfig): Promise<void> {
+  return invoke('reindex_attachment', {
+    attachmentId,
+    enableOcr: config?.enableOcr ?? null,
+    forceOcr: config?.forceOcr ?? null,
   });
 }
 
 export async function reindexLibrary(config?: ExtractionConfig): Promise<void> {
   return invoke('reindex_library', {
-    skipOcr: config?.skipOcr ?? null,
-    ollamaEnabled: config?.ollamaEnabled ?? null,
-    ollamaEndpoint: config?.ollamaEndpoint ?? null,
-    ollamaModel: config?.ollamaModel ?? null,
+    enableOcr: config?.enableOcr ?? null,
   });
 }
 
-export interface OllamaStatus {
-  connected: boolean;
-  models: string[];
-}
-
-export async function checkOllamaStatus(endpoint: string): Promise<OllamaStatus> {
-  return invoke('check_ollama_status', { endpoint });
+export async function getMarkdownContent(attachmentId: number): Promise<string | null> {
+  return invoke('get_markdown_content', { attachmentId });
 }

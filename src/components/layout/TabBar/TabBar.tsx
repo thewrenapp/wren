@@ -1,15 +1,27 @@
-import { X, FileText, File, Search, Home, Library, BookOpen } from "lucide-react";
+import { X } from "lucide-react";
 import { useTabStore, type Tab } from "@/stores/tabStore";
 import { cn } from "@/lib/utils";
+import { tabIconMap, getAttachmentIcon } from "@/lib/icons";
 
 const tabIcons: Record<Tab["type"], React.ReactNode> = {
-  library: <Library className="h-4 w-4" />,
-  item: <FileText className="h-4 w-4" />,
-  entry: <BookOpen className="h-4 w-4" />,
-  search: <Search className="h-4 w-4" />,
-  collection: <File className="h-4 w-4" />,
-  welcome: <Home className="h-4 w-4" />,
+  library: <tabIconMap.library className="h-4 w-4" />,
+  item: <tabIconMap.item className="h-4 w-4" />,
+  entry: <tabIconMap.entry className="h-4 w-4" />,
+  markdown: <tabIconMap.markdown className="h-4 w-4" />,
+  search: <tabIconMap.search className="h-4 w-4" />,
+  collection: <tabIconMap.collection className="h-4 w-4" />,
+  welcome: <tabIconMap.welcome className="h-4 w-4" />,
 };
+
+function getTabIcon(tab: Tab): React.ReactNode {
+  // For entry tabs with an attachment type, show the file type icon
+  const attachmentType = tab.data?.attachmentType as string | undefined;
+  if (tab.type === "entry" && attachmentType) {
+    const { icon: Icon, className: colorClass } = getAttachmentIcon(attachmentType);
+    return <Icon className={`h-4 w-4 ${colorClass}`} />;
+  }
+  return tabIcons[tab.type];
+}
 
 export function TabBar() {
   const { tabs, activeTabId, setActiveTab, closeTab } = useTabStore();
@@ -44,7 +56,7 @@ export function TabBar() {
               "flex-shrink-0",
               isActive ? "text-primary" : "text-muted-foreground"
             )}>
-              {tabIcons[tab.type]}
+              {getTabIcon(tab)}
             </span>
 
             {/* Title */}

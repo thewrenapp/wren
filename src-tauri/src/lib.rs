@@ -249,8 +249,9 @@ pub fn run() {
             // Full-text Search
             commands::search::full_text_search,
             commands::search::reindex_entry,
+            commands::search::reindex_attachment,
             commands::search::reindex_library,
-            commands::search::check_ollama_status,
+            commands::search::get_markdown_content,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

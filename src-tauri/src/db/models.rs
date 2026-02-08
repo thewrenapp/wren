@@ -246,6 +246,8 @@ pub struct Attachment {
     pub frontmatter: Option<String>,
     #[serde(rename = "thumbnailPath")]
     pub thumbnail_path: Option<String>,
+    #[serde(rename = "markdownPath")]
+    pub markdown_path: Option<String>,
     #[serde(rename = "dateAdded")]
     pub date_added: String,
     #[serde(rename = "dateModified")]

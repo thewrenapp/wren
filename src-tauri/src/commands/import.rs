@@ -1,6 +1,6 @@
 use crate::filename;
 use crate::pdf;
-use crate::search::extractor::ExtractionConfig;
+use crate::search::extractor::{is_worth_saving, save_markdown, ExtractionConfig};
 use crate::search::indexer::{AttachmentData, EntryMetadata};
 use crate::state::AppState;
 use crate::commands::settings::is_setting_enabled;
@@ -533,7 +533,7 @@ async fn import_single_pdf_with_handle(
         content_source: "pdf".to_string(),
     };
 
-    // Use default extraction config (Ollama disabled by default)
+    // Use default extraction config
     let config = ExtractionConfig::default();
 
     // Get file name for progress reporting
@@ -543,22 +543,14 @@ async fn import_single_pdf_with_handle(
         .unwrap_or("unknown")
         .to_string();
 
-    // Emit progress: extracting with expected method
+    // Emit progress: extracting
     if let Some(handle) = app_handle {
-        let expected_method = if config.skip_ocr {
-            "pdf-extract (OCR disabled)"
-        } else if config.ollama_enabled {
-            "pdf-extract → ollama → ocr"
-        } else {
-            "pdf-extract → ocr"
-        };
-
         let _ = handle.emit(
             "import:detail",
             ImportDetailProgress {
                 file_name: file_name.clone(),
                 step: "extracting".to_string(),
-                method: Some(expected_method.to_string()),
+                method: Some("kreuzberg".to_string()),
                 status: "processing".to_string(),
                 message: None,
             },
@@ -567,6 +559,23 @@ async fn import_single_pdf_with_handle(
 
     match state.search_index.index_attachment_content(&attachment_data, &config).await {
         Ok(result) => {
+            // Save markdown alongside original file if extraction is substantial
+            if let Some(ref text) = result.extracted_text {
+                if is_worth_saving(text) {
+                    if let Ok(md_path) = save_markdown(&final_dest_path, text) {
+                        let library_path = state.library_path.read().await;
+                        let relative_md = md_path.strip_prefix(&*library_path).ok().map(|p| p.to_string_lossy().to_string());
+                        if let Some(rel) = relative_md {
+                            let _ = sqlx::query("UPDATE attachments SET markdown_path = ? WHERE id = ?")
+                                .bind(&rel)
+                                .bind(attachment_id)
+                                .execute(&state.db)
+                                .await;
+                        }
+                    }
+                }
+            }
+
             if let Some(handle) = app_handle {
                 let _ = handle.emit(
                     "import:detail",
@@ -2199,25 +2208,11 @@ pub async fn import_biblatex_with_files(
                         .unwrap_or("unknown")
                         .to_string();
 
-                    // Determine expected extraction method based on file type
-                    let expected_method = match final_dest_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.to_lowercase())
-                        .as_deref()
-                    {
-                        Some("pdf") => {
-                            if config.skip_ocr {
-                                "pdf-extract (OCR disabled)"
-                            } else if config.ollama_enabled {
-                                "pdf-extract → ollama → ocr"
-                            } else {
-                                "pdf-extract → ocr"
-                            }
-                        }
-                        Some("md") | Some("txt") | Some("markdown") => "direct",
-                        Some("html") | Some("htm") => "html-parse",
-                        _ => "unknown",
+                    // Determine expected extraction method based on config
+                    let expected_method = if config.enable_ocr {
+                        "kreuzberg (OCR enabled)"
+                    } else {
+                        "kreuzberg"
                     };
 
                     // Emit progress: extracting
@@ -2234,6 +2229,22 @@ pub async fn import_biblatex_with_files(
 
                     match state.search_index.index_attachment_content(&attachment_data, &config).await {
                         Ok(result) => {
+                            // Save markdown alongside original if extraction is substantial
+                            if let Some(ref text) = result.extracted_text {
+                                if is_worth_saving(text) {
+                                    if let Ok(md_path) = save_markdown(&final_dest_path, text) {
+                                        let relative_md = md_path.strip_prefix(&*library_path).ok().map(|p| p.to_string_lossy().to_string());
+                                        if let Some(rel) = relative_md {
+                                            let _ = sqlx::query("UPDATE attachments SET markdown_path = ? WHERE id = ?")
+                                                .bind(&rel)
+                                                .bind(attachment_id)
+                                                .execute(&state.db)
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+
                             let _ = app_handle.emit(
                                 "import:detail",
                                 ImportDetailProgress {

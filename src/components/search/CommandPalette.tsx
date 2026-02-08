@@ -31,20 +31,17 @@ import {
   ExternalLink,
   RotateCcw,
   Pencil,
-  Minus,
   LayoutGrid,
   LayoutList,
   FilePlus2,
   FileUp,
-  Clock,
-  Files,
   StickyNote,
-  CircleSlash,
-  GitMerge,
   Loader2,
   BookOpen,
   FileSearch,
 } from "lucide-react";
+import { sidebarIcons } from "@/lib/icons";
+import { IconTagOff } from "@tabler/icons-react";
 import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
@@ -85,6 +82,8 @@ import {
   createEntry,
   createAttachment,
   deleteAttachment,
+  reindexAttachment,
+  reindexEntry,
   importAnnotationsFromPdf,
   getEntryAttachments,
   fullTextSearch,
@@ -183,6 +182,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     | "deleteTag"
     | "addAttachment"
     | "deleteAttachment"
+    | "reindexAttachment"
     | "createEntryType"
     | null
   >(null);
@@ -771,6 +771,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     setCommandPaletteOpen(false);
   };
 
+
   // Copy title(s) handler
   const handleCopyTitle = async () => {
     if (selectedEntryIds.length === 0) {
@@ -1170,6 +1171,76 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     setEntryAttachments([]);
   };
 
+  // Load attachments for reindex attachment submenu (single entry) or bulk re-extract (multi)
+  const handleOpenReindexAttachment = (forceOcr = false) => {
+    if (selectedEntryIds.length === 0) {
+      toast.warning("Select at least one entry to re-extract");
+      return;
+    }
+    // Multi-select: re-extract all entries directly
+    if (selectedEntryIds.length > 1) {
+      setCommandPaletteOpen(false);
+      const ids = [...selectedEntryIds];
+      const ocrLabel = forceOcr ? " with OCR" : "";
+      const loadingId = toast.loading(`Re-extracting${ocrLabel} attachments for ${ids.length} entries...`);
+      (async () => {
+        try {
+          for (const id of ids) {
+            await reindexEntry(id, { forceOcr });
+          }
+          invalidateAttachments();
+          await refreshLibrary();
+          toast.dismiss(loadingId);
+          toast.success(`${ids.length} entries re-extracted`);
+        } catch (err) {
+          console.error("Failed to re-extract:", err);
+          toast.dismiss(loadingId);
+          toast.error(`Failed to re-extract: ${err}`);
+        }
+      })();
+      return;
+    }
+    // Single entry: show attachment picker submenu
+    (async () => {
+      try {
+        const attachments = await getEntryAttachments(selectedEntryIds[0]);
+        if (attachments.length === 0) {
+          toast.info("Selected entry has no attachments");
+          return;
+        }
+        setEntryAttachments(attachments);
+        setSubMenu("reindexAttachment");
+      } catch (err) {
+        console.error("Failed to load attachments:", err);
+        toast.error("Failed to load attachments");
+      }
+    })();
+  };
+
+  // Reindex attachment handler
+  const handleReindexAttachmentCmd = (attachmentId: number, forceOcr: boolean) => {
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+    setEntryAttachments([]);
+
+    const label = forceOcr ? "Re-extracting with OCR" : "Re-extracting";
+    const loadingId = toast.loading(`${label}...`);
+
+    (async () => {
+      try {
+        await reindexAttachment(attachmentId, { forceOcr });
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.dismiss(loadingId);
+        toast.success("Attachment re-indexed successfully");
+      } catch (err) {
+        console.error("Reindex attachment error:", err);
+        toast.dismiss(loadingId);
+        toast.error(`Failed to re-extract: ${err}`);
+      }
+    })();
+  };
+
   // Create entry with specific type handler
   const handleCreateEntryWithType = async (itemType: string) => {
     setCommandPaletteOpen(false);
@@ -1458,7 +1529,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
         <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
           <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
             <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
-              <Minus className="h-5 w-5 text-primary shrink-0" />
+              <IconTagOff className="h-5 w-5 text-primary shrink-0" />
               <span className="text-base">Remove Tag</span>
               <button
                 onClick={() => setSubMenu(null)}
@@ -1921,6 +1992,72 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     );
   }
 
+  // Sub-menu for re-extracting attachment
+  if (subMenu === "reindexAttachment") {
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+          onClick={() => { setSubMenu(null); setCommandPaletteOpen(false); setEntryAttachments([]); }}
+        />
+        <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
+          <Command className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden">
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <RefreshCw className="h-5 w-5 text-blue-500 shrink-0" />
+              <span className="text-base">Re-extract Attachment</span>
+              <button
+                onClick={() => { setSubMenu(null); setEntryAttachments([]); }}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Back
+              </button>
+            </div>
+            <Command.List className="max-h-[300px] overflow-y-auto p-2">
+              {entryAttachments.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No attachments available.
+                </div>
+              ) : (
+                entryAttachments.map((attachment) => (
+                  <div key={attachment.id} className="mb-1">
+                    <Command.Item
+                      value={`reindex ${attachment.title || attachment.filePath || ''}`}
+                      onSelect={() => handleReindexAttachmentCmd(attachment.id, false)}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                        {attachment.attachmentType === "pdf" ? (
+                          <File className="h-4 w-4 text-blue-500" />
+                        ) : attachment.attachmentType === "note" ? (
+                          <StickyNote className="h-4 w-4 text-yellow-500" />
+                        ) : (
+                          <FileText className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium truncate block">{attachment.title || attachment.filePath || "Untitled"}</span>
+                        <span className="text-xs text-muted-foreground">{attachment.attachmentTypeDisplay} — Re-extract</span>
+                      </div>
+                    </Command.Item>
+                    <Command.Item
+                      value={`reindex ocr ${attachment.title || attachment.filePath || ''}`}
+                      onSelect={() => handleReindexAttachmentCmd(attachment.id, true)}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-11"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <span className="text-xs text-muted-foreground">Force OCR (for scanned documents)</span>
+                      </div>
+                    </Command.Item>
+                  </div>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </div>
+      </div>
+    );
+  }
+
   // Sub-menu for selecting entry type when creating
   if (subMenu === "createEntryType") {
     return (
@@ -2280,7 +2417,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                       >
                         <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-orange-500/10">
-                          <Minus className="h-4 w-4 text-orange-500" />
+                          <IconTagOff className="h-4 w-4 text-orange-500" />
                         </div>
                         <div className="flex-1">
                           <span className="block text-sm font-medium">Remove Tag</span>
@@ -2336,6 +2473,31 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                           </div>
                           <div className="flex-1">
                             <span className="block text-sm font-medium">Delete Attachment...</span>
+                          </div>
+                        </Command.Item>
+                        <Command.Item
+                          value="reindex re-extract attachment text"
+                          onSelect={() => handleOpenReindexAttachment(false)}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                            <RefreshCw className="h-4 w-4 text-blue-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Re-extract Attachment...</span>
+                          </div>
+                        </Command.Item>
+                        <Command.Item
+                          value="reindex re-extract attachment force ocr scanned"
+                          onSelect={() => handleOpenReindexAttachment(true)}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                            <RefreshCw className="h-4 w-4 text-blue-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Re-extract with OCR...</span>
+                            <span className="block text-xs text-muted-foreground">Force OCR for scanned documents</span>
                           </div>
                         </Command.Item>
                         <Command.Item
@@ -2872,7 +3034,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
                     <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
-                      <Files className="h-4 w-4 text-red-500" />
+                      <sidebarIcons.pdfs className="h-4 w-4 text-red-500" />
                     </div>
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Go to PDFs</span>
@@ -2883,8 +3045,8 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     onSelect={() => handleNavigateTo("notes")}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
-                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-yellow-500/10">
-                      <StickyNote className="h-4 w-4 text-yellow-500" />
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10">
+                      <sidebarIcons.notes className="h-4 w-4 text-amber-500" />
                     </div>
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Go to Notes</span>
@@ -2896,7 +3058,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
                     <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
-                      <Clock className="h-4 w-4 text-blue-500" />
+                      <sidebarIcons.recent className="h-4 w-4 text-blue-500" />
                     </div>
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Go to Recently Added</span>
@@ -2908,7 +3070,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
                     <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
-                      <CircleSlash className="h-4 w-4 text-muted-foreground" />
+                      <sidebarIcons.untagged className="h-4 w-4 text-muted-foreground" />
                     </div>
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Go to Untagged</span>
@@ -2920,7 +3082,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
                     <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10">
-                      <GitMerge className="h-4 w-4 text-amber-500" />
+                      <sidebarIcons.duplicates className="h-4 w-4 text-amber-500" />
                     </div>
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Go to Duplicates</span>

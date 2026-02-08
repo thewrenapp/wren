@@ -7,9 +7,7 @@ import {
   FolderOpen,
   Tags,
   Link2,
-  Globe,
   ExternalLink,
-  File,
   Users,
   Copy,
   Check,
@@ -18,6 +16,7 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
+import { AttachmentIcon } from "@/lib/icons";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -755,18 +754,6 @@ function MetadataField({
   );
 }
 
-function AttachmentIcon({ type }: { type: string }) {
-  switch (type) {
-    case "pdf":
-      return <File className="h-4 w-4 text-red-500" />;
-    case "note":
-      return <FileText className="h-4 w-4 text-primary" />;
-    case "weblink":
-      return <Globe className="h-4 w-4 text-primary/70" />;
-    default:
-      return <Paperclip className="h-4 w-4 text-muted-foreground" />;
-  }
-}
 
 function getAttachmentTitle(attachment: {
   filePath?: string;

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type ToastType = "success" | "error" | "info" | "warning";
+export type ToastType = "success" | "error" | "info" | "warning" | "loading";
 
 export interface Toast {
   id: string;
@@ -11,13 +11,8 @@ export interface Toast {
 
 interface ToastState {
   toasts: Toast[];
-  addToast: (message: string, type?: ToastType, duration?: number) => void;
+  addToast: (message: string, type?: ToastType, duration?: number) => string;
   removeToast: (id: string) => void;
-  // Convenience methods
-  success: (message: string, duration?: number) => void;
-  error: (message: string, duration?: number) => void;
-  info: (message: string, duration?: number) => void;
-  warning: (message: string, duration?: number) => void;
 }
 
 let toastId = 0;
@@ -31,7 +26,7 @@ export const useToastStore = create<ToastState>()((set) => ({
       toasts: [...state.toasts, { id, message, type, duration }],
     }));
 
-    // Auto-remove after duration
+    // Auto-remove after duration (0 = persistent)
     if (duration > 0) {
       setTimeout(() => {
         set((state) => ({
@@ -39,36 +34,29 @@ export const useToastStore = create<ToastState>()((set) => ({
         }));
       }, duration);
     }
+
+    return id;
   },
 
   removeToast: (id) =>
     set((state) => ({
       toasts: state.toasts.filter((t) => t.id !== id),
     })),
-
-  // Convenience methods
-  success: (message, duration) => {
-    useToastStore.getState().addToast(message, "success", duration);
-  },
-  error: (message, duration) => {
-    useToastStore.getState().addToast(message, "error", duration ?? 6000);
-  },
-  info: (message, duration) => {
-    useToastStore.getState().addToast(message, "info", duration);
-  },
-  warning: (message, duration) => {
-    useToastStore.getState().addToast(message, "warning", duration ?? 5000);
-  },
 }));
 
 // Export a simple toast function for easy use
 export const toast = {
-  success: (message: string, duration?: number) =>
-    useToastStore.getState().success(message, duration),
-  error: (message: string, duration?: number) =>
-    useToastStore.getState().error(message, duration),
-  info: (message: string, duration?: number) =>
-    useToastStore.getState().info(message, duration),
-  warning: (message: string, duration?: number) =>
-    useToastStore.getState().warning(message, duration),
+  success: (message: string, duration?: number): string =>
+    useToastStore.getState().addToast(message, "success", duration),
+  error: (message: string, duration?: number): string =>
+    useToastStore.getState().addToast(message, "error", duration ?? 6000),
+  info: (message: string, duration?: number): string =>
+    useToastStore.getState().addToast(message, "info", duration),
+  warning: (message: string, duration?: number): string =>
+    useToastStore.getState().addToast(message, "warning", duration ?? 5000),
+  loading: (message: string): string =>
+    useToastStore.getState().addToast(message, "loading", 0),
+  dismiss: (id: string): void => {
+    useToastStore.getState().removeToast(id);
+  },
 };
