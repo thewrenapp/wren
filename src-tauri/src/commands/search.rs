@@ -496,12 +496,13 @@ pub async fn reindex_library(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
     enable_ocr: Option<bool>,
+    force_ocr: Option<bool>,
 ) -> Result<(), String> {
     use tauri::Emitter;
 
     let config = ExtractionConfig {
         enable_ocr: enable_ocr.unwrap_or(true),
-        force_ocr: false,
+        force_ocr: force_ocr.unwrap_or(false),
     };
 
     // Get all entries

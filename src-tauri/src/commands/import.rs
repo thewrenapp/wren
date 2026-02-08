@@ -533,8 +533,15 @@ async fn import_single_pdf_with_handle(
         content_source: "pdf".to_string(),
     };
 
-    // Use default extraction config
-    let config = ExtractionConfig::default();
+    // Read OCR settings from the database
+    let config = ExtractionConfig {
+        // enable_ocr defaults to true; only disable if explicitly set to "false"
+        enable_ocr: crate::commands::settings::get_setting_value(&state.db, "enable_ocr")
+            .await
+            .map(|v| v == "true")
+            .unwrap_or(true),
+        force_ocr: is_setting_enabled(&state.db, "force_ocr").await,
+    };
 
     // Get file name for progress reporting
     let file_name = final_dest_path
@@ -2198,8 +2205,14 @@ pub async fn import_biblatex_with_files(
                         content_source: attachment_type.to_string(),
                     };
 
-                    // Use default extraction config (Ollama disabled by default)
-                    let config = ExtractionConfig::default();
+                    // Read OCR settings from the database
+                    let config = ExtractionConfig {
+                        enable_ocr: crate::commands::settings::get_setting_value(&state.db, "enable_ocr")
+                            .await
+                            .map(|v| v == "true")
+                            .unwrap_or(true),
+                        force_ocr: is_setting_enabled(&state.db, "force_ocr").await,
+                    };
 
                     // Get file name for progress reporting
                     let progress_file_name = final_dest_path

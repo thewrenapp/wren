@@ -13,6 +13,8 @@ export function AISearchSection() {
     setEmbeddingModel,
     enableOcr,
     setEnableOcr,
+    forceOcr,
+    setForceOcr,
   } = useSettingsStore();
 
   const [isReindexing, setIsReindexing] = useState(false);
@@ -103,6 +105,7 @@ export function AISearchSection() {
     try {
       await reindexLibrary({
         enableOcr,
+        forceOcr,
       });
       // Success is handled by the reindex:complete event listener
     } catch (err) {
@@ -171,6 +174,22 @@ export function AISearchSection() {
             <p className="text-xs text-muted-foreground">
               Uses Tesseract OCR (bundled) to extract text from scanned PDFs and images.
               Disable for faster indexing if you only have text-based documents.
+            </p>
+          </div>
+        </label>
+
+        <label className={`flex items-center gap-3 cursor-pointer ${!enableOcr ? 'opacity-50 pointer-events-none' : ''}`}>
+          <Checkbox
+            checked={forceOcr}
+            disabled={!enableOcr}
+            onCheckedChange={(checked) => setForceOcr(checked === true)}
+          />
+          <div>
+            <span className="text-sm">Force OCR for all documents</span>
+            <p className="text-xs text-muted-foreground">
+              Always run OCR, even for PDFs that have a text layer. Use this if you have
+              scanned PDFs with incomplete or low-quality embedded text. Slower but more thorough.
+              Applies to imports and index rebuilds.
             </p>
           </div>
         </label>

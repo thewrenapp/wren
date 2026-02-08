@@ -2273,7 +2273,13 @@ pub async fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), St
         .await
         .unwrap_or_default();
 
-        let config = ExtractionConfig::default();
+        let config = ExtractionConfig {
+            enable_ocr: crate::commands::settings::get_setting_value(&state.db, "enable_ocr")
+                .await
+                .map(|v| v == "true")
+                .unwrap_or(true),
+            force_ocr: crate::commands::settings::is_setting_enabled(&state.db, "force_ocr").await,
+        };
         for att in attachments {
             if let Some(file_path) = att.file_path {
                 let attachment_data = AttachmentData {
@@ -2837,8 +2843,14 @@ pub async fn add_pdf_attachment(
         content_source: "pdf".to_string(),
     };
 
-    // Use default extraction config (Ollama disabled by default)
-    let config = ExtractionConfig::default();
+    // Read OCR settings from DB
+    let config = ExtractionConfig {
+        enable_ocr: crate::commands::settings::get_setting_value(&state.db, "enable_ocr")
+            .await
+            .map(|v| v == "true")
+            .unwrap_or(true),
+        force_ocr: is_setting_enabled(&state.db, "force_ocr").await,
+    };
 
     // Get file name for progress reporting
     let file_name_for_progress = dest_path

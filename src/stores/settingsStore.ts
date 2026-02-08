@@ -19,6 +19,7 @@ interface SettingsState {
 
   // OCR Settings
   enableOcr: boolean;
+  forceOcr: boolean;
 
   // Startup
   showWelcomeOnStartup: boolean;
@@ -29,6 +30,7 @@ interface SettingsState {
   setAutoRenameFiles: (enabled: boolean) => void;
   setEmbeddingModel: (model: string) => void;
   setEnableOcr: (enabled: boolean) => void;
+  setForceOcr: (enabled: boolean) => void;
   setShowWelcomeOnStartup: (show: boolean) => void;
   loadFromBackend: () => Promise<void>;
 }
@@ -41,6 +43,7 @@ export const useSettingsStore = create<SettingsState>()(
       autoRenameFiles: true,
       embeddingModel: "all-MiniLM-L6-v2",
       enableOcr: true,
+      forceOcr: false,
       showWelcomeOnStartup: true,
 
       setTheme: (theme) => set({ theme }),
@@ -55,7 +58,22 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       setEmbeddingModel: (model) => set({ embeddingModel: model }),
-      setEnableOcr: (enabled) => set({ enableOcr: enabled }),
+      setEnableOcr: async (enabled) => {
+        set({ enableOcr: enabled });
+        try {
+          await updateSetting("enable_ocr", enabled ? "true" : "false");
+        } catch (err) {
+          console.error("Failed to update enable_ocr setting:", err);
+        }
+      },
+      setForceOcr: async (enabled) => {
+        set({ forceOcr: enabled });
+        try {
+          await updateSetting("force_ocr", enabled ? "true" : "false");
+        } catch (err) {
+          console.error("Failed to update force_ocr setting:", err);
+        }
+      },
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
       loadFromBackend: async () => {
         try {
@@ -63,6 +81,14 @@ export const useSettingsStore = create<SettingsState>()(
           const autoRename = settings.find(s => s.key === "auto_rename_files");
           if (autoRename) {
             set({ autoRenameFiles: autoRename.value === "true" });
+          }
+          const enableOcr = settings.find(s => s.key === "enable_ocr");
+          if (enableOcr) {
+            set({ enableOcr: enableOcr.value === "true" });
+          }
+          const forceOcr = settings.find(s => s.key === "force_ocr");
+          if (forceOcr) {
+            set({ forceOcr: forceOcr.value === "true" });
           }
         } catch (err) {
           console.error("Failed to load settings from backend:", err);

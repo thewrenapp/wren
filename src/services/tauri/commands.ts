@@ -895,6 +895,7 @@ export async function reindexAttachment(attachmentId: number, config?: Extractio
 export async function reindexLibrary(config?: ExtractionConfig): Promise<void> {
   return invoke('reindex_library', {
     enableOcr: config?.enableOcr ?? null,
+    forceOcr: config?.forceOcr ?? null,
   });
 }
 
