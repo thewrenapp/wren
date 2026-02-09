@@ -20,7 +20,7 @@ export const markdownRenderTheme = EditorView.theme({
     fontFamily:
       "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
     lineHeight: '1.65',
-    padding: '24px clamp(16px, 8vw, 160px)',
+    padding: '24px clamp(16px, calc(-130px + 24.3vw), 280px)',
     caretColor: 'hsl(var(--foreground))',
   },
   '.cm-line': {
