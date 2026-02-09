@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { MarkdownEditor } from "@/components/editor/MarkdownEditor";
 import { getMarkdownContent } from "@/services/tauri/commands";
+import { RichMarkdownEditor } from "@/components/editor/RichMarkdownEditor";
 import { FileText } from "lucide-react";
 
 interface MarkdownViewerProps {
@@ -8,7 +8,7 @@ interface MarkdownViewerProps {
   title?: string;
 }
 
-export function MarkdownViewer({ attachmentId, title }: MarkdownViewerProps) {
+export function MarkdownViewer({ attachmentId }: MarkdownViewerProps) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,19 +61,11 @@ export function MarkdownViewer({ attachmentId, title }: MarkdownViewerProps) {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {title && (
-        <div className="flex items-center gap-2 px-4 py-2 border-b bg-muted/30">
-          <FileText className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium truncate">{title}</span>
-          <span className="text-xs text-muted-foreground ml-auto">
-            Extracted Text
-          </span>
-        </div>
-      )}
-      <div className="flex-1 overflow-hidden">
-        <MarkdownEditor content={content} readOnly={true} />
-      </div>
-    </div>
+    <RichMarkdownEditor
+      content={content}
+      attachmentId={attachmentId}
+      showToolbar={true}
+      showReindex={true}
+    />
   );
 }

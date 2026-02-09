@@ -39,6 +39,7 @@ import {
   Loader2,
   BookOpen,
   FileSearch,
+  Table2,
 } from "lucide-react";
 import { sidebarIcons } from "@/lib/icons";
 import { IconTagOff } from "@tabler/icons-react";
@@ -2461,6 +2462,38 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                           </div>
                           <div className="flex-1">
                             <span className="block text-sm font-medium">Create Note</span>
+                          </div>
+                        </Command.Item>
+                        <Command.Item
+                          value="insert new table database"
+                          onSelect={() => {
+                            setCommandPaletteOpen(false);
+                            window.dispatchEvent(new Event("wren:insert-new-table"));
+                          }}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                            <Table2 className="h-4 w-4 text-purple-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Insert New Table</span>
+                            <span className="block text-xs text-muted-foreground">Create an inline database table</span>
+                          </div>
+                        </Command.Item>
+                        <Command.Item
+                          value="insert existing table browse search database"
+                          onSelect={() => {
+                            setCommandPaletteOpen(false);
+                            window.dispatchEvent(new Event("wren:browse-tables"));
+                          }}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                            <Table2 className="h-4 w-4 text-purple-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Insert Existing Table...</span>
+                            <span className="block text-xs text-muted-foreground">Browse and embed or link to a table</span>
                           </div>
                         </Command.Item>
                         <Command.Item

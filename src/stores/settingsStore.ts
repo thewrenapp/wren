@@ -4,9 +4,15 @@ import { getSettings, updateSetting } from "@/services/tauri/commands";
 
 export type Theme = "system" | "light" | "dark";
 
+export interface CodeTheme {
+  light: string;
+  dark: string;
+}
+
 interface SettingsState {
   // Appearance
   theme: Theme;
+  codeTheme: CodeTheme;
 
   // Library
   libraryPath: string;
@@ -21,11 +27,16 @@ interface SettingsState {
   enableOcr: boolean;
   forceOcr: boolean;
 
+  // Code Editor
+  showCodeLineNumbers: boolean;
+
   // Startup
   showWelcomeOnStartup: boolean;
 
   // Actions
   setTheme: (theme: Theme) => void;
+  setCodeTheme: (codeTheme: CodeTheme) => void;
+  setShowCodeLineNumbers: (show: boolean) => void;
   setLibraryPath: (path: string) => void;
   setAutoRenameFiles: (enabled: boolean) => void;
   setEmbeddingModel: (model: string) => void;
@@ -39,14 +50,18 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       theme: "system",
+      codeTheme: { light: "github-light", dark: "github-dark" },
       libraryPath: "~/Wren",
       autoRenameFiles: true,
       embeddingModel: "all-MiniLM-L6-v2",
       enableOcr: true,
       forceOcr: false,
+      showCodeLineNumbers: false,
       showWelcomeOnStartup: true,
 
       setTheme: (theme) => set({ theme }),
+      setCodeTheme: (codeTheme) => set({ codeTheme }),
+      setShowCodeLineNumbers: (show) => set({ showCodeLineNumbers: show }),
       setLibraryPath: (path) => set({ libraryPath: path }),
       setAutoRenameFiles: async (enabled) => {
         set({ autoRenameFiles: enabled });

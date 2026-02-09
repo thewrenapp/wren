@@ -4,6 +4,7 @@ pub mod duplicates;
 pub mod entries;
 pub mod export;
 pub mod import;
+pub mod inline_tables;
 pub mod saved_searches;
 pub mod schema;
 pub mod search;

@@ -8,6 +8,7 @@ import { PDFViewer } from "@/components/pdf/PDFViewer";
 import { HTMLViewer } from "@/components/viewer/HTMLViewer";
 import { EPUBViewer } from "@/components/epub/EPUBViewer";
 import { ImageViewer } from "@/components/viewer/ImageViewer";
+import { NoteEditor } from "@/components/editor/NoteEditor";
 import { EntryInfoPanel } from "@/components/layout/RightPane/EntryInfoPanel";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -171,14 +172,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
     }
 
     if (targetAttachment?.attachmentType === "note") {
-      return (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <div className="text-center">
-            <p className="font-medium">{entry.title}</p>
-            <p className="text-sm mt-2">Note Editor - Coming Soon</p>
-          </div>
-        </div>
-      );
+      return <NoteEditor attachmentId={targetAttachment.id} />;
     }
 
     // Weblink: show link with button to open in browser

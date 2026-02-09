@@ -123,6 +123,80 @@ pub async fn get_markdown_content(
     }
 }
 
+/// Save markdown content for an attachment (auto-save from editor, no reindex)
+#[tauri::command]
+pub async fn save_markdown_content(
+    state: State<'_, AppState>,
+    attachment_id: i64,
+    content: String,
+) -> Result<(), String> {
+    // Get attachment info including file_path, markdown_path, entry_key
+    #[derive(Debug, FromRow)]
+    struct AttachmentSaveRow {
+        file_path: Option<String>,
+        markdown_path: Option<String>,
+        entry_key: String,
+        attachment_key: String,
+    }
+
+    let attachment: AttachmentSaveRow = sqlx::query_as(
+        r#"
+        SELECT a.file_path, a.markdown_path, e.key as entry_key, a.key as attachment_key
+        FROM attachments a
+        JOIN entries e ON a.entry_id = e.id
+        WHERE a.id = ?
+        "#,
+    )
+    .bind(attachment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "Attachment not found".to_string())?;
+
+    let library_path = state.library_path.read().await;
+
+    let md_relative_path = if let Some(ref file_path) = attachment.file_path {
+        // Attachment has a file on disk (PDF, EPUB, etc.) — save markdown alongside it
+        let full_path = library_path.join(file_path);
+        let md_path = markdown_path_for(&full_path);
+        std::fs::write(&md_path, &content).map_err(|e| e.to_string())?;
+        md_path
+            .strip_prefix(&*library_path)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .to_string()
+    } else if let Some(ref existing_md) = attachment.markdown_path {
+        // Note with an existing markdown file — overwrite it
+        let full_md = library_path.join(existing_md);
+        std::fs::write(&full_md, &content).map_err(|e| e.to_string())?;
+        existing_md.clone()
+    } else {
+        // New note with no file — create in entry's files directory
+        let dir = library_path.join("files").join(&attachment.entry_key);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let md_path = dir.join(format!("note-{}.md", &attachment.attachment_key));
+        std::fs::write(&md_path, &content).map_err(|e| e.to_string())?;
+        md_path
+            .strip_prefix(&*library_path)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .to_string()
+    };
+
+    // Update markdown_path in DB
+    sqlx::query("UPDATE attachments SET markdown_path = ?, date_modified = datetime('now') WHERE id = ?")
+        .bind(&md_relative_path)
+        .bind(attachment_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Update inline table refs from the saved content
+    update_inline_table_refs(&state.db, attachment_id, &content).await;
+
+    Ok(())
+}
+
 /// Reindex a single attachment (re-extract text, update index, save/clear markdown)
 #[tauri::command]
 pub async fn reindex_attachment(
@@ -243,6 +317,25 @@ pub async fn reindex_attachment(
         Err(e) => {
             tracing::warn!("Failed to reindex attachment {}: {}", attachment_id, e);
             return Err(format!("Extraction failed: {}", e));
+        }
+    }
+
+    // Update inline table refs by reading the markdown file for this attachment
+    {
+        // Try to get the markdown content (either the saved .md or the original note)
+        let md_row: Option<MarkdownPathRow> = sqlx::query_as(
+            "SELECT markdown_path FROM attachments WHERE id = ?",
+        )
+        .bind(attachment_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+
+        if let Some(md_path) = md_row.and_then(|r| r.markdown_path) {
+            let md_full = library_path.join(&md_path);
+            if let Ok(md_content) = std::fs::read_to_string(&md_full) {
+                update_inline_table_refs(&state.db, attachment_id, &md_content).await;
+            }
         }
     }
 
@@ -774,4 +867,100 @@ pub async fn reindex_library(
     let _ = app_handle.emit("reindex:complete", total);
 
     Ok(())
+}
+
+// =====================================================
+// INLINE TABLE REF TRACKING HELPERS
+// =====================================================
+
+/// Extract wren-table UUIDs from markdown content.
+/// Looks for `<!-- wren-table:uuid -->` markers.
+fn extract_table_uuids(content: &str) -> Vec<String> {
+    let mut uuids = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("<!-- wren-table:") {
+            if let Some(uuid) = rest.strip_suffix("-->") {
+                let uuid = uuid.trim();
+                if !uuid.is_empty() {
+                    uuids.push(uuid.to_string());
+                }
+            }
+        }
+    }
+    uuids
+}
+
+/// Update inline_table_refs for an attachment, and garbage-collect orphaned tables.
+/// Call this after saving/reindexing an attachment's markdown content.
+pub async fn update_inline_table_refs(
+    db: &sqlx::SqlitePool,
+    attachment_id: i64,
+    markdown_content: &str,
+) {
+    // 1. Get old table UUIDs for this attachment
+    let old_uuids: Vec<String> = sqlx::query_scalar(
+        r#"
+        SELECT t.key FROM inline_table_refs r
+        JOIN inline_tables t ON r.table_id = t.id
+        WHERE r.attachment_id = ?
+        "#,
+    )
+    .bind(attachment_id)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+
+    // 2. Delete all refs for this attachment
+    let _ = sqlx::query("DELETE FROM inline_table_refs WHERE attachment_id = ?")
+        .bind(attachment_id)
+        .execute(db)
+        .await;
+
+    // 3. Extract new table UUIDs from current markdown
+    let new_uuids = extract_table_uuids(markdown_content);
+
+    // 4. Insert new refs
+    for uuid in &new_uuids {
+        let _ = sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO inline_table_refs (table_id, attachment_id)
+            SELECT id, ? FROM inline_tables WHERE key = ?
+            "#,
+        )
+        .bind(attachment_id)
+        .bind(uuid)
+        .execute(db)
+        .await;
+    }
+
+    // 5. Find removed UUIDs (were in old set but not in new set)
+    let new_set: std::collections::HashSet<&str> = new_uuids.iter().map(|s| s.as_str()).collect();
+    let removed_uuids: Vec<&String> = old_uuids
+        .iter()
+        .filter(|u| !new_set.contains(u.as_str()))
+        .collect();
+
+    // 6. For each removed UUID, check if any other refs exist. If not, delete the table.
+    for uuid in removed_uuids {
+        let ref_count: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*) FROM inline_table_refs r
+            JOIN inline_tables t ON r.table_id = t.id
+            WHERE t.key = ?
+            "#,
+        )
+        .bind(uuid)
+        .fetch_one(db)
+        .await
+        .unwrap_or(Some(1)); // Default to 1 to avoid accidental deletion
+
+        if ref_count == Some(0) {
+            tracing::info!("Garbage collecting orphaned inline table: {}", uuid);
+            let _ = sqlx::query("DELETE FROM inline_tables WHERE key = ?")
+                .bind(uuid)
+                .execute(db)
+                .await;
+        }
+    }
 }

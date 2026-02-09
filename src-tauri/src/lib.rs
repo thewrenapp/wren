@@ -252,6 +252,20 @@ pub fn run() {
             commands::search::reindex_attachment,
             commands::search::reindex_library,
             commands::search::get_markdown_content,
+            commands::search::save_markdown_content,
+            // Inline Tables
+            commands::inline_tables::create_inline_table,
+            commands::inline_tables::get_inline_table,
+            commands::inline_tables::get_inline_tables,
+            commands::inline_tables::update_inline_table,
+            commands::inline_tables::add_inline_table_row,
+            commands::inline_tables::update_inline_table_row,
+            commands::inline_tables::delete_inline_table_row,
+            commands::inline_tables::reorder_inline_table_rows,
+            commands::inline_tables::delete_inline_table,
+            commands::inline_tables::get_inline_table_as_markdown,
+            commands::inline_tables::get_inline_table_refs,
+            commands::inline_tables::get_inline_table_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

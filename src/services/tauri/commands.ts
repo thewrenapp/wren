@@ -902,3 +902,127 @@ export async function reindexLibrary(config?: ExtractionConfig): Promise<void> {
 export async function getMarkdownContent(attachmentId: number): Promise<string | null> {
   return invoke('get_markdown_content', { attachmentId });
 }
+
+export async function saveMarkdownContent(attachmentId: number, content: string): Promise<void> {
+  return invoke('save_markdown_content', { attachmentId, content });
+}
+
+// =====================================================
+// Inline Table Types
+// =====================================================
+
+export interface InlineTableColumn {
+  id: string;
+  name: string;
+  width: number;
+}
+
+export interface InlineTableRow {
+  id: number;
+  table_id: number;
+  data: Record<string, string>;
+  sort_order: number;
+}
+
+export interface InlineTable {
+  id: number;
+  key: string;
+  title: string;
+  columns: InlineTableColumn[];
+  rows: InlineTableRow[];
+  date_added: string;
+  date_modified: string;
+}
+
+export interface InlineTableSummary {
+  id: number;
+  key: string;
+  title: string;
+  column_count: number;
+  row_count: number;
+  date_modified: string;
+}
+
+export interface InlineTableInfo {
+  title: string;
+  column_count: number;
+  row_count: number;
+}
+
+export interface TableRef {
+  attachment_id: number;
+  entry_id: number;
+  entry_title: string;
+}
+
+// =====================================================
+// Inline Table Commands
+// =====================================================
+
+export async function createInlineTable(
+  title: string,
+  columnsJson: string,
+): Promise<InlineTable> {
+  return invoke('create_inline_table', { title, columnsJson });
+}
+
+export async function getInlineTable(key: string): Promise<InlineTable> {
+  return invoke('get_inline_table', { key });
+}
+
+export async function getInlineTables(): Promise<InlineTableSummary[]> {
+  return invoke('get_inline_tables');
+}
+
+export async function updateInlineTable(
+  key: string,
+  title?: string,
+  columnsJson?: string,
+): Promise<InlineTable> {
+  return invoke('update_inline_table', {
+    key,
+    title: title ?? null,
+    columnsJson: columnsJson ?? null,
+  });
+}
+
+export async function addInlineTableRow(
+  tableKey: string,
+  dataJson: string,
+): Promise<InlineTableRow> {
+  return invoke('add_inline_table_row', { tableKey, dataJson });
+}
+
+export async function updateInlineTableRow(
+  rowId: number,
+  dataJson: string,
+): Promise<InlineTableRow> {
+  return invoke('update_inline_table_row', { rowId, dataJson });
+}
+
+export async function deleteInlineTableRow(rowId: number): Promise<void> {
+  return invoke('delete_inline_table_row', { rowId });
+}
+
+export async function reorderInlineTableRows(
+  tableKey: string,
+  rowIds: number[],
+): Promise<void> {
+  return invoke('reorder_inline_table_rows', { tableKey, rowIds });
+}
+
+export async function deleteInlineTable(key: string): Promise<void> {
+  return invoke('delete_inline_table', { key });
+}
+
+export async function getInlineTableAsMarkdown(key: string): Promise<string> {
+  return invoke('get_inline_table_as_markdown', { key });
+}
+
+export async function getInlineTableRefs(tableKey: string): Promise<TableRef[]> {
+  return invoke('get_inline_table_refs', { tableKey });
+}
+
+export async function getInlineTableInfo(key: string): Promise<InlineTableInfo> {
+  return invoke('get_inline_table_info', { key });
+}

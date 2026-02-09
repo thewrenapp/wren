@@ -178,6 +178,56 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Inline tables (database-backed interactive tables)
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS inline_tables (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL DEFAULT 'Untitled Table',
+            columns_json TEXT NOT NULL DEFAULT '[]',
+            date_added TEXT NOT NULL DEFAULT (datetime('now')),
+            date_modified TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS inline_table_rows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_id INTEGER NOT NULL,
+            data_json TEXT NOT NULL DEFAULT '{}',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (table_id) REFERENCES inline_tables(id) ON DELETE CASCADE
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_inline_table_rows_table ON inline_table_rows(table_id, sort_order)"
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS inline_table_refs (
+            table_id INTEGER NOT NULL,
+            attachment_id INTEGER NOT NULL,
+            PRIMARY KEY (table_id, attachment_id),
+            FOREIGN KEY (table_id) REFERENCES inline_tables(id) ON DELETE CASCADE,
+            FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
     Ok(())
 }
 
