@@ -67,6 +67,7 @@ interface UIState {
   pdfLeftPanelOpen: boolean;
   htmlLeftPanelOpen: boolean;
   epubLeftPanelOpen: boolean;
+  libraryInfoPaneEnabled: boolean;
 
   // Command palette
   commandPaletteOpen: boolean;
@@ -126,6 +127,8 @@ interface UIState {
   toggleHtmlLeftPanel: () => void;
   setEpubLeftPanelOpen: (open: boolean) => void;
   toggleEpubLeftPanel: () => void;
+  setLibraryInfoPaneEnabled: (enabled: boolean) => void;
+  toggleLibraryInfoPane: () => void;
   setActiveFilter: (filter: UIState['activeFilter']) => void;
 
   // Tag display actions
@@ -137,6 +140,11 @@ interface UIState {
   setColumnWidth: (columnId: ColumnId, width: number) => void;
   moveColumn: (columnId: ColumnId, direction: 'left' | 'right') => void;
   resetColumns: () => void;
+
+  // Sidebar
+  sidebarCollapsed: boolean;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  toggleSidebar: () => void;
 
   // Delete confirmation actions
   showDeleteConfirmation: (entryIds: number[], onConfirm: () => void) => void;
@@ -170,6 +178,7 @@ export const useUIStore = create<UIState>()(
       pdfLeftPanelOpen: true,
       htmlLeftPanelOpen: true,
       epubLeftPanelOpen: true,
+      libraryInfoPaneEnabled: true,
       commandPaletteOpen: false,
       commandPaletteMode: 'default',
       settingsOpen: false,
@@ -179,6 +188,7 @@ export const useUIStore = create<UIState>()(
       advancedSearchOpen: false,
       activeFilter: 'all',
       hideImportedTags: true,
+      sidebarCollapsed: false,
       deleteConfirmation: {
         open: false,
         entryIds: [],
@@ -260,6 +270,9 @@ export const useUIStore = create<UIState>()(
 
       toggleEpubLeftPanel: () => set((state) => ({ epubLeftPanelOpen: !state.epubLeftPanelOpen })),
 
+      setLibraryInfoPaneEnabled: (enabled) => set({ libraryInfoPaneEnabled: enabled }),
+      toggleLibraryInfoPane: () => set((state) => ({ libraryInfoPaneEnabled: !state.libraryInfoPaneEnabled })),
+
       setActiveFilter: (filter) => set({ activeFilter: filter }),
 
       // Tag display actions
@@ -301,6 +314,10 @@ export const useUIStore = create<UIState>()(
 
       resetColumns: () => set({ columns: [...DEFAULT_COLUMNS] }),
 
+      // Sidebar
+      setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+      toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
       showDeleteConfirmation: (entryIds, onConfirm) =>
         set({
           deleteConfirmation: {
@@ -337,6 +354,7 @@ export const useUIStore = create<UIState>()(
         htmlLeftPanelOpen: state.htmlLeftPanelOpen,
         epubLeftPanelOpen: state.epubLeftPanelOpen,
         columns: state.columns,
+        sidebarCollapsed: state.sidebarCollapsed,
       }),
     },
   ),

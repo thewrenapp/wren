@@ -70,6 +70,8 @@ interface AppHighlight extends Highlight {
 interface PDFViewerProps {
   filePath: string;
   attachmentId: string;
+  infoPaneOpen?: boolean;
+  onToggleInfoPane?: () => void;
 }
 
 // Tool modes
@@ -277,7 +279,7 @@ function HighlightRenderer({
   );
 }
 
-export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
+export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane }: PDFViewerProps) {
   const [highlights, setHighlights] = useState<AppHighlight[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string>("");
   const [scale, setScale] = useState<PdfScaleValue | undefined>(undefined);
@@ -310,14 +312,18 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
   // Saved selection ref for Cmd+C copy
   const savedSelectionRef = useRef<string>("");
 
-  // Get panel states from global store
+  // Get panel states (infoPaneOpen and toggle come from parent props, left panel is per-instance)
   const {
-    infoPaneOpen,
-    toggleInfoPane,
-    pdfLeftPanelOpen,
-    togglePdfLeftPanel,
+    infoPaneOpen: globalInfoPaneOpen,
     libraryLayout,
   } = useUIStore();
+
+  const infoPaneOpen = infoPaneOpenProp ?? globalInfoPaneOpen;
+  const toggleInfoPane = onToggleInfoPane ?? (() => {});
+
+  // Per-instance left panel state (always starts closed)
+  const [pdfLeftPanelOpen, setPdfLeftPanelOpen] = useState(false);
+  const togglePdfLeftPanel = useCallback(() => setPdfLeftPanelOpen(prev => !prev), []);
 
   const pdfHighlighterUtilsRef = useRef<PdfHighlighterUtils | null>(null);
   const hasInitializedUtilsRef = useRef(false);

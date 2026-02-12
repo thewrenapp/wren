@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -46,15 +46,19 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const {
-    rightPaneWidth,
-    setRightPaneWidth,
-    infoPanelHeight,
-    setInfoPanelHeight,
-    libraryLayout,
-    infoPaneOpen,
-  } = useUIStore();
+  const { libraryLayout } = useUIStore();
   const { entryVersion } = useLibraryStore();
+
+  // Per-instance info pane state (always starts closed)
+  const [infoPaneOpen, setInfoPaneOpen] = useState(false);
+  const toggleInfoPane = useCallback(() => setInfoPaneOpen(prev => !prev), []);
+
+  // Listen for Cmd+I toggle event from keyboard shortcuts
+  useEffect(() => {
+    const handler = () => setInfoPaneOpen(prev => !prev);
+    window.addEventListener("wren:toggle-info-pane", handler);
+    return () => window.removeEventListener("wren:toggle-info-pane", handler);
+  }, []);
 
   // Load entry details with attachments (also refetch when entryVersion changes)
   useEffect(() => {
@@ -150,28 +154,25 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
     hasWeblink: entry.attachments?.some(a => a.attachmentType === "weblink") || false,
   };
 
-  const totalWidth = typeof window !== "undefined" ? window.innerWidth : 1000;
-  const totalHeight = typeof window !== "undefined" ? window.innerHeight : 800;
-  const rightPanePercent = (rightPaneWidth / totalWidth) * 100;
-  const bottomPanePercent = (infoPanelHeight / totalHeight) * 100;
+  const isStacked = libraryLayout === "stacked";
 
   // Render main content based on attachment type
   const renderMainContent = () => {
     // Extracted text view: show markdown viewer for any attachment that has markdown content
     if (viewMode === "extracted" && targetAttachment) {
-      return <MarkdownViewer attachmentId={targetAttachment.id} title={targetAttachment.title} />;
+      return <MarkdownViewer attachmentId={targetAttachment.id} title={targetAttachment.title} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
     }
 
     if (targetAttachment?.attachmentType === "pdf" && targetAttachment.filePath) {
-      return <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} />;
+      return <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
     }
 
     if (targetAttachment?.attachmentType === "snapshot" && targetAttachment.filePath) {
-      return <HTMLViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} />;
+      return <HTMLViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
     }
 
     if (targetAttachment?.attachmentType === "epub" && targetAttachment.filePath) {
-      return <EPUBViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} />;
+      return <EPUBViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
     }
 
     if (targetAttachment?.attachmentType === "image" && targetAttachment.filePath) {
@@ -179,7 +180,7 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
     }
 
     if (targetAttachment?.attachmentType === "note") {
-      return <NoteEditor attachmentId={targetAttachment.id} />;
+      return <NoteEditor attachmentId={targetAttachment.id} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
     }
 
     // Weblink: show link with button to open in browser
@@ -225,74 +226,36 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
 
   const mainContent = renderMainContent();
 
-  // Stacked layout: vertical split (content on top, info on bottom)
-  if (libraryLayout === "stacked") {
-    if (!infoPaneOpen) {
-      return <div className="h-full w-full">{mainContent}</div>;
-    }
-
-    return (
-      <div className="h-full w-full">
-        <ResizablePanelGroup direction="vertical">
-          {/* Main content */}
-          <ResizablePanel
-            defaultSize={100 - bottomPanePercent}
-            minSize={30}
-            className="overflow-hidden"
-          >
-            {mainContent}
-          </ResizablePanel>
-
-          {/* Bottom pane (details) */}
-          <ResizableHandle className="h-[1px] bg-border hover:bg-primary/50 transition-colors" />
-          <ResizablePanel
-            defaultSize={bottomPanePercent}
-            minSize={15}
-            maxSize={50}
-            onResize={(size) => {
-              const newHeight = (size / 100) * totalHeight;
-              setInfoPanelHeight(newHeight);
-            }}
-            className="bg-background overflow-hidden"
-          >
-            <EntryInfoPanel entry={entrySummary} />
-          </ResizablePanel>
-        </ResizablePanelGroup>
-      </div>
-    );
-  }
-
-  // Normal layout: horizontal split (content on left, info on right)
-  if (!infoPaneOpen) {
-    return <div className="h-full w-full">{mainContent}</div>;
-  }
+  const direction = isStacked ? "vertical" : "horizontal";
+  const infoPanelPercent = isStacked ? 30 : 25;
+  const handleClass = isStacked
+    ? "h-[1px] bg-border hover:bg-primary/50 transition-colors"
+    : "w-[1px] bg-border hover:bg-primary/50 transition-colors";
 
   return (
     <div className="h-full w-full">
-      <ResizablePanelGroup direction="horizontal">
-        {/* Main content */}
+      <ResizablePanelGroup direction={direction}>
         <ResizablePanel
-          defaultSize={100 - rightPanePercent}
-          minSize={40}
+          defaultSize={infoPaneOpen ? (100 - infoPanelPercent) : 100}
+          minSize={isStacked ? 30 : 40}
           className="overflow-hidden"
         >
           {mainContent}
         </ResizablePanel>
 
-        {/* Right pane (details) */}
-        <ResizableHandle className="w-[1px] bg-border hover:bg-primary/50 transition-colors" />
-        <ResizablePanel
-          defaultSize={rightPanePercent}
-          minSize={15}
-          maxSize={35}
-          onResize={(size) => {
-            const newWidth = (size / 100) * totalWidth;
-            setRightPaneWidth(newWidth);
-          }}
-          className="bg-background overflow-hidden"
-        >
-          <EntryInfoPanel entry={entrySummary} />
-        </ResizablePanel>
+        {infoPaneOpen && (
+          <>
+            <ResizableHandle className={handleClass} />
+            <ResizablePanel
+              defaultSize={infoPanelPercent}
+              minSize={15}
+              maxSize={isStacked ? 50 : 35}
+              className="bg-background overflow-hidden"
+            >
+              <EntryInfoPanel entry={entrySummary} />
+            </ResizablePanel>
+          </>
+        )}
       </ResizablePanelGroup>
     </div>
   );

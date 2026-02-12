@@ -66,6 +66,9 @@ import {
   ArrowUpDown,
   Pin,
   ChevronRight,
+  Columns2,
+  PanelLeftClose,
+  ArrowRightFromLine,
 } from "lucide-react";
 import { sidebarIcons } from "@/lib/icons";
 import { IconTagOff } from "@tabler/icons-react";
@@ -161,6 +164,8 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     setCommandPaletteOpen,
     setSettingsOpen,
     toggleInfoPane,
+    libraryInfoPaneEnabled,
+    toggleLibraryInfoPane,
     setNewCollectionDialogOpen,
     setTagManagementDialogOpen,
     setCollectionManagementDialogOpen,
@@ -171,7 +176,8 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
 
   // Threshold for showing confirmation dialog
   const BULK_DELETE_THRESHOLD = 3;
-  const { openTab, tabs, activeTabId, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, pinTab, unpinTab, duplicateTab, closeTabsToRight } = useTabStore();
+  const { openTab, tabs, activeTabId, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, pinTab, unpinTab, duplicateTab, closeTabsToRight, splitEnabled, moveTabToPane, disableSplit, focusedPane, activeRightTabId, setFocusedPane } = useTabStore();
+  const { toggleSidebar } = useUIStore();
   const {
     entries,
     selectedEntryIds,
@@ -3227,8 +3233,69 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                       <div className="flex-1"><span className="block text-sm font-medium">Open Main File</span></div>
                     </Command.Item>
                   )}
+                  {/* Split pane: Move to other pane */}
+                  {activeTab && activeTab.type !== "library" && (
+                    <Command.Item
+                      value="split right move to right pane"
+                      onSelect={() => handleSelect(() => {
+                        const tabId = focusedPane === "right" ? activeRightTabId : activeTabId;
+                        if (tabId) moveTabToPane(tabId, focusedPane === "right" ? "left" : "right");
+                      })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <ArrowRightFromLine className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">{splitEnabled ? "Move to Other Pane" : "Split Right"}</span></div>
+                      <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">⌘\</span>
+                    </Command.Item>
+                  )}
+                  {/* Close split pane */}
+                  {splitEnabled && (
+                    <Command.Item
+                      value="close split pane merge"
+                      onSelect={() => handleSelect(() => disableSplit())}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <Columns2 className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Close Split Pane</span></div>
+                    </Command.Item>
+                  )}
+                  {/* Focus other pane */}
+                  {splitEnabled && (
+                    <Command.Item
+                      value="focus other pane left right"
+                      onSelect={() => handleSelect(() => setFocusedPane(focusedPane === "left" ? "right" : "left"))}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <Columns2 className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Focus {focusedPane === "left" ? "Right" : "Left"} Pane</span></div>
+                    </Command.Item>
+                  )}
                 </Command.Group>
               )}
+
+              {/* Layout commands */}
+              <Command.Group>
+                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                  Layout
+                </div>
+                <Command.Item
+                  value="toggle sidebar show hide"
+                  onSelect={() => handleSelect(() => toggleSidebar())}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                >
+                  <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                    <PanelLeftClose className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div className="flex-1"><span className="block text-sm font-medium">Toggle Sidebar</span></div>
+                  <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">⌘B</span>
+                </Command.Item>
+              </Command.Group>
 
               {/* Actions on selected entries */}
               {selectedEntryIds.length > 0 && activeFilter !== "trash" && (
@@ -3883,6 +3950,21 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                       <span className="block text-sm font-medium">Toggle Info Panel</span>
                     </div>
                     <ShortcutBadge keys={["⌘", "I"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="toggle library info panel preview details sidebar"
+                    onSelect={() => handleSelect(() => toggleLibraryInfoPane())}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                      <PanelRight className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Toggle Library Info Panel</span>
+                      <span className="text-xs text-muted-foreground">
+                        Currently {libraryInfoPaneEnabled ? "shown" : "hidden"} for selected entries
+                      </span>
+                    </div>
                   </Command.Item>
                   <Command.Item
                     value="toggle view mode list card grid table"

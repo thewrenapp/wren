@@ -6,9 +6,11 @@ import { FileText } from "lucide-react";
 interface MarkdownViewerProps {
   attachmentId: number;
   title?: string;
+  infoPaneOpen?: boolean;
+  onToggleInfoPane?: () => void;
 }
 
-export function MarkdownViewer({ attachmentId }: MarkdownViewerProps) {
+export function MarkdownViewer({ attachmentId, infoPaneOpen, onToggleInfoPane }: MarkdownViewerProps) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +68,8 @@ export function MarkdownViewer({ attachmentId }: MarkdownViewerProps) {
       attachmentId={attachmentId}
       showToolbar={true}
       showReindex={true}
+      infoPaneOpen={infoPaneOpen}
+      onToggleInfoPane={onToggleInfoPane}
     />
   );
 }

@@ -16,6 +16,8 @@ import {
   Square,
   XSquare,
   Tag,
+  PanelRight,
+  PanelRightClose,
 } from 'lucide-react';
 import { sidebarIcons } from '@/lib/icons';
 import { IconPaperclip, IconWorld } from '@tabler/icons-react';
@@ -80,6 +82,8 @@ export function MiddlePane() {
     secondarySortDirection,
     setSecondarySort,
     activeFilter,
+    libraryInfoPaneEnabled,
+    toggleLibraryInfoPane,
   } = useUIStore();
   const {
     entries,
@@ -785,6 +789,21 @@ export function MiddlePane() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* Info pane toggle */}
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            className={cn('h-7 w-7', libraryInfoPaneEnabled && 'text-primary')}
+            onClick={toggleLibraryInfoPane}
+            title={libraryInfoPaneEnabled ? 'Hide Info Panel' : 'Show Info Panel'}
+          >
+            {libraryInfoPaneEnabled ? (
+              <PanelRightClose className='h-4 w-4' />
+            ) : (
+              <PanelRight className='h-4 w-4' />
+            )}
+          </Button>
 
           {/* Hide view toggle for duplicates view (has its own layout) */}
           {!isDuplicatesView && (

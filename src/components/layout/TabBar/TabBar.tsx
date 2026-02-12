@@ -1,6 +1,6 @@
-import { useCallback } from "react";
-import { X, Pin, FolderOpen, FileText, Copy, Library, ChevronRight } from "lucide-react";
-import { useTabStore, type Tab } from "@/stores/tabStore";
+import React, { useCallback } from "react";
+import { X, Pin, FolderOpen, FileText, Copy, Library, ChevronRight, ArrowRightFromLine, ArrowLeftFromLine } from "lucide-react";
+import { useTabStore, getTabsForPane, type Tab } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { cn } from "@/lib/utils";
 import { tabIconMap, getAttachmentIcon } from "@/lib/icons";
@@ -13,18 +13,11 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
   SortableContext,
   horizontalListSortingStrategy,
   useSortable,
 } from "@dnd-kit/sortable";
+import { useDroppable, useDndContext } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 
 const tabIcons: Record<Tab["type"], React.ReactNode> = {
@@ -78,17 +71,18 @@ function SortableTab({ tab, isDragDisabled, children }: SortableTabProps) {
       style={style}
       {...attributes}
       {...listeners}
-      className={cn(isDragging && "opacity-50")}
+      className={cn("min-w-0 flex-shrink", isDragging && "opacity-50")}
     >
       {children}
     </div>
   );
 }
 
-function TabContextMenu({ tab, tabIndex, totalTabs, children }: {
+function TabContextMenu({ tab, tabIndex, totalTabs, pane = "left", children }: {
   tab: Tab;
   tabIndex: number;
   totalTabs: number;
+  pane?: "left" | "right";
   children: React.ReactNode;
 }) {
   const {
@@ -100,6 +94,8 @@ function TabContextMenu({ tab, tabIndex, totalTabs, children }: {
     pinTab,
     unpinTab,
     duplicateTab,
+    moveTabToPane,
+    splitEnabled,
   } = useTabStore();
 
   const hasEntryId = !!tab.entryId;
@@ -107,6 +103,7 @@ function TabContextMenu({ tab, tabIndex, totalTabs, children }: {
   const isWelcome = tab.type === "welcome";
   const isEntry = tab.type === "entry";
   const isMarkdown = tab.type === "markdown";
+  const isNote = tab.data?.attachmentType === "note";
   const hasTabsToRight = tabIndex < totalTabs - 1;
 
   const handleShowInLibrary = useCallback(() => {
@@ -171,7 +168,7 @@ function TabContextMenu({ tab, tabIndex, totalTabs, children }: {
         )}
 
         {/* Cross-navigation */}
-        {isEntry && hasEntryId && (
+        {isEntry && hasEntryId && !isNote && (
           <>
             <ContextMenuItem onClick={handleOpenExtracted}>
               <FileText className="h-4 w-4 mr-2" />
@@ -213,6 +210,25 @@ function TabContextMenu({ tab, tabIndex, totalTabs, children }: {
           </ContextMenuItem>
         )}
 
+        {/* Split pane actions */}
+        {!isLibrary && (
+          <>
+            <ContextMenuSeparator />
+            {pane === "left" && (
+              <ContextMenuItem onClick={() => moveTabToPane(tab.id, "right")}>
+                <ArrowRightFromLine className="h-4 w-4 mr-2" />
+                {splitEnabled ? "Move to Right Pane" : "Split Right"}
+              </ContextMenuItem>
+            )}
+            {pane === "right" && (
+              <ContextMenuItem onClick={() => moveTabToPane(tab.id, "left")}>
+                <ArrowLeftFromLine className="h-4 w-4 mr-2" />
+                Move to Left Pane
+              </ContextMenuItem>
+            )}
+          </>
+        )}
+
         <ContextMenuSeparator />
 
         {/* Close actions */}
@@ -238,122 +254,174 @@ function TabContextMenu({ tab, tabIndex, totalTabs, children }: {
   );
 }
 
-export function TabBar() {
-  const { tabs, activeTabId, setActiveTab, closeTab, reorderTabs } = useTabStore();
+/** Inner tab visual — shared between static Library tab and sortable tabs */
+const TabInner = React.forwardRef<
+  HTMLDivElement,
+  {
+    tab: Tab;
+    isActive: boolean;
+    onActivate: () => void;
+    onClose?: () => void;
+  } & React.HTMLAttributes<HTMLDivElement>
+>(({ tab, isActive, onActivate, onClose, className, ...props }, ref) => {
+  const isLibrary = tab.type === "library";
+  const isPinned = !!tab.pinned;
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 5,
-      },
-    })
+  return (
+    <div
+      ref={ref}
+      onClick={onActivate}
+      {...props}
+      className={cn(
+        "group relative flex items-center gap-2 h-8 px-3 rounded-md cursor-pointer transition-colors",
+        "flex-shrink min-w-0",
+        isPinned ? "max-w-[160px]" : "max-w-[200px]",
+        // Library tab: subtle indigo theme
+        isLibrary && !isActive && "bg-indigo-50/50 dark:bg-indigo-950/20 text-indigo-900/70 dark:text-indigo-100/70 border border-indigo-200/30 dark:border-indigo-800/20",
+        isLibrary && isActive && "bg-indigo-100/60 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-100 shadow-sm border border-indigo-200/50 dark:border-indigo-700/30",
+        // Regular/pinned tab styling
+        !isLibrary && isActive && "bg-accent text-foreground",
+        !isLibrary && !isActive && "text-muted-foreground hover:text-foreground hover:bg-accent/50",
+        className
+      )}
+    >
+      {/* Pin indicator for pinned tabs */}
+      {isPinned && !isLibrary && (
+        <Pin className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60 -mr-1" />
+      )}
+
+      {/* Icon */}
+      <span
+        className={cn(
+          "flex-shrink-0",
+          isLibrary && isActive ? "text-indigo-600 dark:text-indigo-400" : "",
+          !isLibrary && isActive ? "text-primary" : "",
+          !isActive ? "text-muted-foreground" : ""
+        )}
+      >
+        {getTabIcon(tab)}
+      </span>
+
+      {/* Title */}
+      <span className="text-sm truncate min-w-0">{tab.title}</span>
+
+      {/* Close button - not shown for library tab or pinned tabs */}
+      {!isLibrary && !isPinned && onClose && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          className={cn(
+            "flex-shrink-0 p-0.5 rounded hover:bg-muted transition-opacity ml-1",
+            "opacity-0 group-hover:opacity-100",
+            isActive && "opacity-60 hover:opacity-100"
+          )}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+
+      {/* Active indicator line */}
+      {isActive && (
+        <div className={cn(
+          "absolute bottom-0 left-2 right-2 h-0.5 rounded-full",
+          isLibrary ? "bg-indigo-500 dark:bg-indigo-400" : "bg-primary"
+        )} />
+      )}
+    </div>
   );
+});
+TabInner.displayName = "TabInner";
 
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
+export function TabBar({ pane = "left" }: { pane?: "left" | "right" }) {
+  const {
+    tabs: allTabs,
+    activeTabId,
+    activeRightTabId,
+    setActiveTab,
+    closeTab,
+    splitEnabled,
+  } = useTabStore();
 
-      const oldIndex = tabs.findIndex((t) => t.id === active.id);
-      const newIndex = tabs.findIndex((t) => t.id === over.id);
-      if (oldIndex !== -1 && newIndex !== -1) {
-        reorderTabs(oldIndex, newIndex);
-      }
-    },
-    [tabs, reorderTabs]
-  );
+  // Pane-level drop zone for cross-pane tab moves
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: `pane-drop-${pane}` });
 
-  if (tabs.length === 0) {
+  // Check if something is actively being dragged from the OTHER pane
+  const { active } = useDndContext();
+  const isDraggingFromOtherPane = (() => {
+    if (!active || !splitEnabled) return false;
+    const draggedTab = allTabs.find((t) => t.id === active.id);
+    if (!draggedTab) return false;
+    return (draggedTab.pane ?? "left") !== pane;
+  })();
+
+  // Filter tabs for this pane
+  const paneTabs = getTabsForPane(allTabs, pane);
+  const currentActiveId = pane === "left" ? activeTabId : activeRightTabId;
+
+  if (paneTabs.length === 0) {
     return (
-      <div className="h-10 flex items-center px-4 text-sm text-muted-foreground">
+      <div
+        ref={setDropRef}
+        className={cn(
+          "h-10 flex items-center px-4 text-sm text-muted-foreground",
+          isDraggingFromOtherPane && isOver && "bg-primary/10 ring-1 ring-inset ring-primary/30"
+        )}
+      >
         No open tabs
       </div>
     );
   }
 
-  const tabIds = tabs.map((t) => t.id);
+  // Separate library tab (static, not sortable) from other tabs — only in left pane
+  const libraryTab = pane === "left" ? paneTabs.find((t) => t.type === "library") : undefined;
+  const sortableTabs = paneTabs.filter((t) => t.type !== "library");
+  const sortableIds = sortableTabs.map((t) => t.id);
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragEnd={handleDragEnd}
+    <div
+      ref={setDropRef}
+      className={cn(
+        "flex items-center h-10 px-2 gap-1 overflow-hidden",
+        isDraggingFromOtherPane && isOver && "bg-primary/10 ring-1 ring-inset ring-primary/30"
+      )}
     >
-      <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-        <div className="flex items-center h-10 px-2 gap-1 overflow-hidden">
-          {tabs.map((tab, index) => {
-            const isActive = tab.id === activeTabId;
-            const isLibrary = tab.type === "library";
-            const isPinned = !!tab.pinned;
-            const isDragDisabled = isLibrary;
+      {/* Library tab — static, not part of sortable context */}
+      {libraryTab && (
+        <TabContextMenu tab={libraryTab} tabIndex={0} totalTabs={paneTabs.length} pane={pane}>
+          <TabInner
+            tab={libraryTab}
+            isActive={libraryTab.id === currentActiveId}
+            onActivate={() => setActiveTab(libraryTab.id)}
+          />
+        </TabContextMenu>
+      )}
 
-            return (
-              <SortableTab
-                key={tab.id}
-                tab={tab}
-                isDragDisabled={isDragDisabled}
-              >
-                <TabContextMenu tab={tab} tabIndex={index} totalTabs={tabs.length}>
-                  <div
-                    onClick={() => setActiveTab(tab.id)}
-                    className={cn(
-                      "group relative flex items-center gap-2 h-8 px-3 rounded-md cursor-pointer transition-colors",
-                      "flex-shrink min-w-0",
-                      isPinned ? "max-w-[160px]" : "max-w-[200px]",
-                      // Library tab: special styling
-                      isLibrary && !isActive && "bg-muted/50 text-foreground/80 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]",
-                      isLibrary && isActive && "bg-muted text-foreground shadow-sm",
-                      // Regular/pinned tab styling
-                      !isLibrary && isActive && "bg-accent text-foreground",
-                      !isLibrary && !isActive && "text-muted-foreground hover:text-foreground hover:bg-accent/50"
-                    )}
-                  >
-                    {/* Pin indicator for pinned tabs */}
-                    {isPinned && !isLibrary && (
-                      <Pin className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60 -mr-1" />
-                    )}
+      {/* Sortable tabs — DndContext is provided by TabDndProvider above */}
+      <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
+        {sortableTabs.map((tab, index) => {
+          // tabIndex accounts for the library tab at position 0
+          const globalIndex = libraryTab ? index + 1 : index;
 
-                    {/* Icon */}
-                    <span
-                      className={cn(
-                        "flex-shrink-0",
-                        isActive ? "text-primary" : "text-muted-foreground"
-                      )}
-                    >
-                      {getTabIcon(tab)}
-                    </span>
-
-                    {/* Title */}
-                    <span className="text-sm truncate min-w-0">{tab.title}</span>
-
-                    {/* Close button - not shown for library tab or pinned tabs */}
-                    {!isLibrary && !isPinned && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          closeTab(tab.id);
-                        }}
-                        className={cn(
-                          "flex-shrink-0 p-0.5 rounded hover:bg-muted transition-opacity ml-1",
-                          "opacity-0 group-hover:opacity-100",
-                          isActive && "opacity-60 hover:opacity-100"
-                        )}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-
-                    {/* Active indicator line */}
-                    {isActive && (
-                      <div className="absolute bottom-0 left-2 right-2 h-0.5 bg-primary rounded-full" />
-                    )}
-                  </div>
-                </TabContextMenu>
-              </SortableTab>
-            );
-          })}
-        </div>
+          return (
+            <SortableTab
+              key={tab.id}
+              tab={tab}
+              isDragDisabled={false}
+            >
+              <TabContextMenu tab={tab} tabIndex={globalIndex} totalTabs={paneTabs.length} pane={pane}>
+                <TabInner
+                  tab={tab}
+                  isActive={tab.id === currentActiveId}
+                  onActivate={() => setActiveTab(tab.id)}
+                  onClose={() => closeTab(tab.id)}
+                />
+              </TabContextMenu>
+            </SortableTab>
+          );
+        })}
       </SortableContext>
-    </DndContext>
+    </div>
   );
 }

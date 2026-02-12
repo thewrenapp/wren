@@ -20,9 +20,11 @@ interface HTMLViewerProps {
   filePath: string;
   attachmentId: string;
   title?: string;
+  infoPaneOpen?: boolean;
+  onToggleInfoPane?: () => void;
 }
 
-export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
+export function HTMLViewer({ filePath, attachmentId, title, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane }: HTMLViewerProps) {
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -89,14 +91,18 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
     };
   }, []);
 
-  // Store
+  // Store (infoPaneOpen from parent props, left panel is per-instance)
   const {
-    htmlLeftPanelOpen,
-    toggleHtmlLeftPanel,
-    infoPaneOpen,
-    toggleInfoPane,
+    infoPaneOpen: globalInfoPaneOpen,
     libraryLayout,
   } = useUIStore();
+
+  const infoPaneOpen = infoPaneOpenProp ?? globalInfoPaneOpen;
+  const toggleInfoPane = onToggleInfoPane ?? (() => {});
+
+  // Per-instance left panel state
+  const [htmlLeftPanelOpen, setHtmlLeftPanelOpen] = useState(false);
+  const toggleHtmlLeftPanel = useCallback(() => setHtmlLeftPanelOpen(prev => !prev), []);
 
   // Hooks
   const annotations = useHTMLAnnotations(iframeRef, attachmentId);

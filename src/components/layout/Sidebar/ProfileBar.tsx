@@ -3,6 +3,8 @@ import {
   Sun,
   Moon,
   Monitor,
+  PanelLeft,
+  PanelLeftClose,
 } from "lucide-react";
 import { AppLogo } from "@/components/ui/AppLogo";
 import { Button } from "@/components/ui/button";
@@ -59,7 +61,7 @@ function IconButton({ icon, label, active, onClick }: IconButtonProps) {
 
 export function ProfileBar() {
   const { theme, setTheme } = useSettingsStore();
-  const { setSettingsOpen } = useUIStore();
+  const { setSettingsOpen, sidebarCollapsed, toggleSidebar } = useUIStore();
 
   const cycleTheme = () => {
     const currentIndex = themeOrder.indexOf(theme);
@@ -95,6 +97,12 @@ export function ProfileBar() {
 
         {/* Bottom actions */}
         <div className="flex flex-col items-center gap-1 pb-2">
+          <IconButton
+            icon={sidebarCollapsed ? <PanelLeft className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+            label={sidebarCollapsed ? "Show Sidebar (⌘B)" : "Hide Sidebar (⌘B)"}
+            onClick={toggleSidebar}
+          />
+
           <IconButton
             icon={themeIcons[theme]}
             label={`Theme: ${theme}`}

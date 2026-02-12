@@ -1,4 +1,4 @@
-import { useTabStore, type Tab } from "@/stores/tabStore";
+import { useTabStore, getTabsForPane, type Tab } from "@/stores/tabStore";
 import { WelcomeTab } from "./WelcomeTab";
 import { EntryTab } from "./EntryTab";
 import { LibraryTab } from "./LibraryTab";
@@ -56,24 +56,33 @@ function renderTab(tab: Tab) {
   }
 }
 
-export function TabContent() {
-  const { tabs, activeTabId } = useTabStore();
+export function TabContent({ pane = "left" }: { pane?: "left" | "right" }) {
+  const { tabs: allTabs, activeTabId, activeRightTabId } = useTabStore();
+
+  // Filter tabs for this pane
+  const tabs = getTabsForPane(allTabs, pane);
+  const currentActiveId = pane === "left" ? activeTabId : activeRightTabId;
 
   if (tabs.length === 0) {
     return null;
   }
 
-  // Render ALL tabs but only show the active one.
+  // Render ALL tabs for this pane but only show the active one.
   // Each tab stays mounted with its own component tree, so state
   // (scroll position, page number, zoom) is preserved across tab switches.
   // Duplicate tabs get independent instances via unique keys (tab.id).
+  // Active tab uses flex-1 to fill the parent flex container.
+  // (display:contents breaks height resolution for PDF.js and scroll containers).
   return (
     <>
       {tabs.map((tab) => (
         <div
           key={tab.id}
-          className="h-full w-full"
-          style={{ display: tab.id === activeTabId ? "contents" : "none" }}
+          className={
+            tab.id === currentActiveId
+              ? "flex-1 flex flex-col min-h-0"
+              : "hidden"
+          }
         >
           {renderTab(tab)}
         </div>

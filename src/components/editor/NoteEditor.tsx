@@ -4,9 +4,11 @@ import { RichMarkdownEditor } from "./RichMarkdownEditor";
 
 interface NoteEditorProps {
   attachmentId: number;
+  infoPaneOpen?: boolean;
+  onToggleInfoPane?: () => void;
 }
 
-export function NoteEditor({ attachmentId }: NoteEditorProps) {
+export function NoteEditor({ attachmentId, infoPaneOpen, onToggleInfoPane }: NoteEditorProps) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -40,6 +42,8 @@ export function NoteEditor({ attachmentId }: NoteEditorProps) {
       attachmentId={attachmentId}
       showToolbar={true}
       showReindex={true}
+      infoPaneOpen={infoPaneOpen}
+      onToggleInfoPane={onToggleInfoPane}
     />
   );
 }

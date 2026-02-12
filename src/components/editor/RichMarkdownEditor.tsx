@@ -33,6 +33,8 @@ interface RichMarkdownEditorProps {
   showReindex?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   className?: string;
+  infoPaneOpen?: boolean;
+  onToggleInfoPane?: () => void;
 }
 
 // =====================================================
@@ -48,6 +50,8 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       showReindex = false,
       onDirtyChange,
       className,
+      infoPaneOpen,
+      onToggleInfoPane,
     },
     ref,
   ) {
@@ -270,6 +274,8 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
             saveStatus={saveStatus}
             showReindex={showReindex}
             onReindex={handleReindex}
+            infoPaneOpen={infoPaneOpen}
+            onToggleInfoPane={onToggleInfoPane}
           />
         )}
         <div ref={containerRef} className="flex-1 overflow-hidden w-full min-w-0" />

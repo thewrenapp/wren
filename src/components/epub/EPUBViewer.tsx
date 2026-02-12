@@ -15,13 +15,15 @@ interface EPUBViewerProps {
   filePath: string;
   attachmentId: string;
   title?: string;
+  infoPaneOpen?: boolean;
+  onToggleInfoPane?: () => void;
 }
 
 // No-ops for annotation toolbar props (annotations not supported in EPUB viewer)
 const NOOP = () => {};
 const NOOP_STR = (_s: string) => {};
 
-export function EPUBViewer({ filePath }: EPUBViewerProps) {
+export function EPUBViewer({ filePath, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane }: EPUBViewerProps) {
   // Core epub state
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,14 +50,18 @@ export function EPUBViewer({ filePath }: EPUBViewerProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const savedSelectionRef = useRef<string>("");
 
-  // Store
+  // Store (infoPaneOpen from parent props, left panel is per-instance)
   const {
-    epubLeftPanelOpen,
-    toggleEpubLeftPanel,
-    infoPaneOpen,
-    toggleInfoPane,
+    infoPaneOpen: globalInfoPaneOpen,
     libraryLayout,
   } = useUIStore();
+
+  const infoPaneOpen = infoPaneOpenProp ?? globalInfoPaneOpen;
+  const toggleInfoPane = onToggleInfoPane ?? (() => {});
+
+  // Per-instance left panel state
+  const [epubLeftPanelOpen, setEpubLeftPanelOpen] = useState(false);
+  const toggleEpubLeftPanel = useCallback(() => setEpubLeftPanelOpen(prev => !prev), []);
 
   // Search hook
   const epubSearch = useEPUBSearch(renditionRef, bookRef);

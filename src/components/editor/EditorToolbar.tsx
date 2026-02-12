@@ -217,6 +217,8 @@ interface EditorToolbarProps {
   saveStatus?: "idle" | "saving" | "saved";
   showReindex?: boolean;
   onReindex?: () => void;
+  infoPaneOpen?: boolean;
+  onToggleInfoPane?: () => void;
 }
 
 interface ToolbarButtonProps {
@@ -295,9 +297,13 @@ export function EditorToolbar({
   saveStatus = "idle",
   showReindex = false,
   onReindex,
+  infoPaneOpen: infoPaneOpenProp,
+  onToggleInfoPane,
 }: EditorToolbarProps) {
   const v = editorView;
-  const { infoPaneOpen, toggleInfoPane, libraryLayout } = useUIStore();
+  const { infoPaneOpen: globalInfoPaneOpen, toggleInfoPane: globalToggleInfoPane, libraryLayout } = useUIStore();
+  const infoPaneOpen = infoPaneOpenProp ?? globalInfoPaneOpen;
+  const toggleInfoPane = onToggleInfoPane ?? globalToggleInfoPane;
   const isStackedLayout = libraryLayout === "stacked";
   const [tablePickerOpen, setTablePickerOpen] = useState(false);
   const [existingTables, setExistingTables] = useState<InlineTableSummary[]>([]);

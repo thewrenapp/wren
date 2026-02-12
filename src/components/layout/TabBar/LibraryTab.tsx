@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -7,6 +8,7 @@ import { MiddlePane } from "../MiddlePane/MiddlePane";
 import { RightPane } from "../RightPane/RightPane";
 import { useUIStore } from "@/stores/uiStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useTabStore } from "@/stores/tabStore";
 
 export function LibraryTab() {
   const {
@@ -15,11 +17,20 @@ export function LibraryTab() {
     infoPanelHeight,
     setInfoPanelHeight,
     libraryLayout,
+    libraryInfoPaneEnabled,
+    setLibraryInfoPaneEnabled,
   } = useUIStore();
   const { selectedEntryIds } = useLibraryStore();
+  const { splitEnabled } = useTabStore();
 
-  // Show info pane only when exactly one entry is selected
-  const showInfoPane = selectedEntryIds.length === 1;
+  // Auto-disable info pane when entering split mode, auto-enable when leaving
+  // Also handles initial mount (e.g. page refresh while split is active)
+  useEffect(() => {
+    setLibraryInfoPaneEnabled(!splitEnabled);
+  }, [splitEnabled, setLibraryInfoPaneEnabled]);
+
+  // Show info pane only when enabled and exactly one entry is selected
+  const showInfoPane = libraryInfoPaneEnabled && selectedEntryIds.length === 1;
 
   const totalWidth = typeof window !== "undefined" ? window.innerWidth : 1000;
   const totalHeight = typeof window !== "undefined" ? window.innerHeight : 800;

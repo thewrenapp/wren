@@ -20,7 +20,7 @@ import { toast } from "@/stores/toastStore";
 const BULK_DELETE_THRESHOLD = 3;
 
 export function useKeyboardShortcuts() {
-  const { toggleCommandPalette, toggleInfoPane, setViewMode, viewModeByFilter, activeFilter: uiActiveFilter, showDeleteConfirmation } = useUIStore();
+  const { toggleCommandPalette, toggleSidebar, setViewMode, viewModeByFilter, activeFilter: uiActiveFilter, showDeleteConfirmation } = useUIStore();
   const viewMode = viewModeByFilter[uiActiveFilter];
   const { closeTab, activeTabId, tabs, setActiveTab, openTab } = useTabStore();
   const {
@@ -177,7 +177,7 @@ export function useKeyboardShortcuts() {
         target.isContentEditable
       ) {
         // Allow some shortcuts even in inputs
-        if (!(isMeta && e.key === "k")) {
+        if (!(isMeta && (e.key === "k" || e.key === "b" || e.key === "\\"))) {
           return;
         }
       }
@@ -186,6 +186,29 @@ export function useKeyboardShortcuts() {
       if (isMeta && e.key === "k") {
         e.preventDefault();
         toggleCommandPalette();
+        return;
+      }
+
+      // Toggle sidebar: Cmd+B
+      if (isMeta && e.key === "b") {
+        e.preventDefault();
+        toggleSidebar();
+        return;
+      }
+
+      // Toggle split pane: Cmd+\
+      if (isMeta && e.key === "\\") {
+        e.preventDefault();
+        const { splitEnabled, disableSplit, moveTabToPane, activeTabId: currentTabId, focusedPane, activeRightTabId } = useTabStore.getState();
+        if (splitEnabled) {
+          disableSplit();
+        } else if (currentTabId) {
+          // Find the focused active tab and move it to the other pane
+          const focusedTabId = focusedPane === "right" ? activeRightTabId : currentTabId;
+          if (focusedTabId) {
+            moveTabToPane(focusedTabId, "right");
+          }
+        }
         return;
       }
 
@@ -308,10 +331,10 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Cmd+I: Toggle Info Panel
+      // Cmd+I: Toggle Info Panel (per-instance via custom event)
       if (isMeta && e.key === "i") {
         e.preventDefault();
-        toggleInfoPane();
+        window.dispatchEvent(new Event("wren:toggle-info-pane"));
         return;
       }
 
@@ -348,7 +371,7 @@ export function useKeyboardShortcuts() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
     toggleCommandPalette,
-    toggleInfoPane,
+    toggleSidebar,
     setViewMode,
     viewMode,
     closeTab,
