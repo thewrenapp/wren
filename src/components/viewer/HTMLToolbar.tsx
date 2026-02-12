@@ -234,6 +234,13 @@ export function HTMLToolbar({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [searchOpen, handleCloseSearch]);
 
+  // Listen for Command Palette search event
+  useEffect(() => {
+    const handleHtmlSearch = () => setSearchOpen(true);
+    window.addEventListener("wren:html-search", handleHtmlSearch);
+    return () => window.removeEventListener("wren:html-search", handleHtmlSearch);
+  }, []);
+
   return (
     <TooltipProvider delayDuration={300}>
       <div

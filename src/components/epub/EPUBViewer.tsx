@@ -406,6 +406,18 @@ export function EPUBViewer({ filePath }: EPUBViewerProps) {
     return () => container.removeEventListener("wheel", handleWheel, options);
   }, [zoomIn, zoomOut]);
 
+  // Listen for Command Palette events
+  useEffect(() => {
+    const events: [string, () => void][] = [
+      ["wren:epub-zoom-in", zoomIn],
+      ["wren:epub-zoom-out", zoomOut],
+      ["wren:epub-next", nextPage],
+      ["wren:epub-prev", prevPage],
+    ];
+    for (const [name, handler] of events) window.addEventListener(name, handler);
+    return () => { for (const [name, handler] of events) window.removeEventListener(name, handler); };
+  }, [zoomIn, zoomOut, nextPage, prevPage]);
+
   // Error state
   if (error) {
     return (

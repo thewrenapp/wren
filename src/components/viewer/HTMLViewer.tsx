@@ -331,6 +331,19 @@ export function HTMLViewer({ filePath, attachmentId, title }: HTMLViewerProps) {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [zoomIn, zoomOut, handleScaleChange, handlePrint]);
 
+  // Listen for Command Palette events
+  useEffect(() => {
+    const handleToggleEdit = () => setEditMode(prev => !prev);
+    const events: [string, () => void][] = [
+      ["wren:html-zoom-in", zoomIn],
+      ["wren:html-zoom-out", zoomOut],
+      ["wren:html-toggle-edit", handleToggleEdit],
+      ["wren:html-print", handlePrint],
+    ];
+    for (const [name, handler] of events) window.addEventListener(name, handler);
+    return () => { for (const [name, handler] of events) window.removeEventListener(name, handler); };
+  }, [zoomIn, zoomOut, handlePrint]);
+
   const popupEnabled = editMode && toolMode === null;
 
   // Handle text selection for highlight mode — depends on iframeDoc state

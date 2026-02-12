@@ -12,6 +12,9 @@ export const markdownRenderTheme = EditorView.theme({
   // =====================================================
   '&': {
     height: '100%',
+    width: '100%',
+    maxWidth: '100%',
+    overflow: 'hidden',
     fontSize: '16px',
     backgroundColor: 'hsl(var(--background))',
     color: 'hsl(var(--foreground))',
@@ -20,8 +23,10 @@ export const markdownRenderTheme = EditorView.theme({
     fontFamily:
       "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
     lineHeight: '1.65',
-    padding: '24px clamp(16px, calc(-130px + 24.3vw), 280px)',
+    padding: '24px clamp(16px, 10%, 280px)',
     caretColor: 'hsl(var(--foreground))',
+    maxWidth: '100%',
+    boxSizing: 'border-box',
   },
   '.cm-line': {
     padding: '0',
@@ -41,6 +46,7 @@ export const markdownRenderTheme = EditorView.theme({
   },
   '.cm-scroller': {
     overflow: 'auto',
+    overflowX: 'hidden',
   },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
     backgroundColor: 'hsl(var(--primary) / 0.15)',

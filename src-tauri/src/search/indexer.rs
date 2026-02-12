@@ -72,6 +72,48 @@ pub fn index_entry_metadata(
     Ok(())
 }
 
+/// Index pre-extracted text content for an attachment (e.g. notes with expanded inline tables)
+pub fn index_text_content(
+    writer: &IndexWriter,
+    fields: &SearchFields,
+    attachment: &AttachmentData,
+    text: &str,
+) -> Result<IndexingResult> {
+    if text.trim().is_empty() {
+        return Ok(IndexingResult {
+            indexed: false,
+            method: ExtractionMethod::DirectRead,
+            message: Some("No text content".to_string()),
+            extracted_text: None,
+        });
+    }
+
+    let doc = doc!(
+        fields.entry_id => attachment.entry_id,
+        fields.entry_key => attachment.entry_key.clone(),
+        fields.attachment_id => attachment.attachment_id,
+        fields.title => attachment.title.clone().unwrap_or_default(),
+        fields.creators => "",
+        fields.abstract_text => "",
+        fields.content => text,
+        fields.item_type => "",
+        fields.file_path => attachment.file_path.clone(),
+        fields.content_source => attachment.content_source.clone(),
+    );
+
+    writer.add_document(doc)?;
+    info!(
+        "Indexed pre-extracted text: {} ({}) - {} chars",
+        attachment.file_path, attachment.attachment_id, text.len()
+    );
+    Ok(IndexingResult {
+        indexed: true,
+        method: ExtractionMethod::DirectRead,
+        message: None,
+        extracted_text: Some(text.to_string()),
+    })
+}
+
 /// Index an attachment's content (PDF, markdown, HTML, etc.)
 pub async fn index_attachment_content(
     writer: &IndexWriter,

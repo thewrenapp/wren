@@ -21,6 +21,8 @@ import {
   Search,
   Link2,
   TableProperties,
+  PanelRight,
+  PanelRightClose,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,6 +52,7 @@ import {
   getInlineTables,
   type InlineTableSummary,
 } from "@/services/tauri";
+import { useUIStore } from "@/stores/uiStore";
 
 // =====================================================
 // Formatting commands that dispatch CM6 transactions
@@ -294,6 +297,8 @@ export function EditorToolbar({
   onReindex,
 }: EditorToolbarProps) {
   const v = editorView;
+  const { infoPaneOpen, toggleInfoPane, libraryLayout } = useUIStore();
+  const isStackedLayout = libraryLayout === "stacked";
   const [tablePickerOpen, setTablePickerOpen] = useState(false);
   const [existingTables, setExistingTables] = useState<InlineTableSummary[]>([]);
   const [tableSearch, setTableSearch] = useState("");
@@ -315,18 +320,45 @@ export function EditorToolbar({
 
   // Listen for Command Palette events
   useEffect(() => {
-    const handleInsertNewTable = () => {
-      if (v) insertDatabaseTable(v);
-    };
-    const handleBrowseTables = () => {
-      openTablePicker();
-    };
-    window.addEventListener("wren:insert-new-table", handleInsertNewTable);
-    window.addEventListener("wren:browse-tables", handleBrowseTables);
-    return () => {
-      window.removeEventListener("wren:insert-new-table", handleInsertNewTable);
-      window.removeEventListener("wren:browse-tables", handleBrowseTables);
-    };
+    const handleInsertNewTable = () => { if (v) insertDatabaseTable(v); };
+    const handleBrowseTables = () => { openTablePicker(); };
+    const handleBold = () => { if (v) wrapSelection(v, "**", "**"); };
+    const handleItalic = () => { if (v) wrapSelection(v, "*", "*"); };
+    const handleStrikethrough = () => { if (v) wrapSelection(v, "~~", "~~"); };
+    const handleCode = () => { if (v) wrapSelection(v, "`", "`"); };
+    const handleLink = () => { if (v) insertLink(v); };
+    const handleH1 = () => { if (v) toggleLinePrefix(v, "# "); };
+    const handleH2 = () => { if (v) toggleLinePrefix(v, "## "); };
+    const handleH3 = () => { if (v) toggleLinePrefix(v, "### "); };
+    const handleBulletList = () => { if (v) insertAtLineStart(v, "- "); };
+    const handleTaskList = () => { if (v) insertAtLineStart(v, "- [ ] "); };
+    const handleBlockquote = () => { if (v) insertAtLineStart(v, "> "); };
+    const handleCodeBlock = () => { if (v) insertCodeBlock(v); };
+    const handleMath = () => { if (v) insertInlineMath(v); };
+    const handleCallout = () => { if (v) insertCallout(v, "Note"); };
+    const handleHr = () => { if (v) insertHorizontalRule(v); };
+
+    const events: [string, () => void][] = [
+      ["wren:insert-new-table", handleInsertNewTable],
+      ["wren:browse-tables", handleBrowseTables],
+      ["wren:editor-bold", handleBold],
+      ["wren:editor-italic", handleItalic],
+      ["wren:editor-strikethrough", handleStrikethrough],
+      ["wren:editor-code", handleCode],
+      ["wren:editor-link", handleLink],
+      ["wren:editor-h1", handleH1],
+      ["wren:editor-h2", handleH2],
+      ["wren:editor-h3", handleH3],
+      ["wren:editor-bullet-list", handleBulletList],
+      ["wren:editor-task-list", handleTaskList],
+      ["wren:editor-blockquote", handleBlockquote],
+      ["wren:editor-code-block", handleCodeBlock],
+      ["wren:editor-math", handleMath],
+      ["wren:editor-callout", handleCallout],
+      ["wren:editor-hr", handleHr],
+    ];
+    for (const [name, handler] of events) window.addEventListener(name, handler);
+    return () => { for (const [name, handler] of events) window.removeEventListener(name, handler); };
   }, [v, openTablePicker]);
 
   const filteredTables = tableSearch
@@ -337,8 +369,8 @@ export function EditorToolbar({
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex items-center justify-between px-3 py-1.5 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="flex items-center gap-0.5">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 overflow-hidden">
+        <div className="flex items-center gap-0.5 min-w-0 overflow-x-auto scrollbar-none">
           {/* Text formatting */}
           <ToolbarButton
             icon={Bold}
@@ -511,6 +543,22 @@ export function EditorToolbar({
               onClick={onReindex}
             />
           )}
+
+          {/* Info Pane toggle */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={toggleInfoPane}>
+                {infoPaneOpen ? (
+                  <PanelRightClose className={cn("h-4 w-4", isStackedLayout && "rotate-90")} />
+                ) : (
+                  <PanelRight className={cn("h-4 w-4", isStackedLayout && "rotate-90")} />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {infoPaneOpen ? "Hide info panel" : "Show info panel"}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 

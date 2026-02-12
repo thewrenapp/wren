@@ -263,7 +263,7 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
     }, [content]);
 
     return (
-      <div className={cn("flex flex-col h-full", className)}>
+      <div className={cn("flex flex-col h-full min-w-0", className)}>
         {showToolbar && (
           <EditorToolbar
             editorView={editorView}
@@ -272,7 +272,7 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
             onReindex={handleReindex}
           />
         )}
-        <div ref={containerRef} className="flex-1 overflow-hidden" />
+        <div ref={containerRef} className="flex-1 overflow-hidden w-full min-w-0" />
       </div>
     );
   },

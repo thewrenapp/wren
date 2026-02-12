@@ -217,6 +217,17 @@ export function DataTable<TData>({
     maybeLoadMore();
   }, [sortField, sortDirection, data.length, autoLoadKey, maybeLoadMore]);
 
+  // Listen for "Show in Library" scroll-to-entry events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { entryId } = (e as CustomEvent).detail;
+      // Small delay to allow tab switch + render
+      setTimeout(() => scrollRowIntoView(entryId), 100);
+    };
+    window.addEventListener("wren:scroll-to-entry", handler);
+    return () => window.removeEventListener("wren:scroll-to-entry", handler);
+  }, [scrollRowIntoView]);
+
   return (
     <div
       ref={containerRef}

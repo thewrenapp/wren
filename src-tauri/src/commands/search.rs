@@ -130,20 +130,23 @@ pub async fn save_markdown_content(
     attachment_id: i64,
     content: String,
 ) -> Result<(), String> {
-    // Get attachment info including file_path, markdown_path, entry_key
+    // Get attachment info including file_path, markdown_path, entry_key, and type
     #[derive(Debug, FromRow)]
     struct AttachmentSaveRow {
         file_path: Option<String>,
         markdown_path: Option<String>,
         entry_key: String,
         attachment_key: String,
+        attachment_type: String,
     }
 
     let attachment: AttachmentSaveRow = sqlx::query_as(
         r#"
-        SELECT a.file_path, a.markdown_path, e.key as entry_key, a.key as attachment_key
+        SELECT a.file_path, a.markdown_path, e.key as entry_key, a.key as attachment_key,
+               at.name as attachment_type
         FROM attachments a
         JOIN entries e ON a.entry_id = e.id
+        JOIN attachment_types at ON a.attachment_type_id = at.id
         WHERE a.id = ?
         "#,
     )
@@ -154,9 +157,29 @@ pub async fn save_markdown_content(
     .ok_or_else(|| "Attachment not found".to_string())?;
 
     let library_path = state.library_path.read().await;
+    let is_note = attachment.attachment_type == "note";
 
-    let md_relative_path = if let Some(ref file_path) = attachment.file_path {
-        // Attachment has a file on disk (PDF, EPUB, etc.) — save markdown alongside it
+    let md_relative_path = if is_note {
+        // Note attachment: the .md file IS the content itself
+        if let Some(ref existing_md) = attachment.markdown_path {
+            // Existing note — overwrite it
+            let full_md = library_path.join(existing_md);
+            std::fs::write(&full_md, &content).map_err(|e| e.to_string())?;
+            existing_md.clone()
+        } else {
+            // New note with no file — create in entry's files directory
+            let dir = library_path.join("files").join(&attachment.entry_key);
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let md_path = dir.join(format!("note-{}.md", &attachment.attachment_key));
+            std::fs::write(&md_path, &content).map_err(|e| e.to_string())?;
+            md_path
+                .strip_prefix(&*library_path)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .to_string()
+        }
+    } else if let Some(ref file_path) = attachment.file_path {
+        // Non-note attachment with a file on disk (PDF, EPUB, etc.) — save markdown alongside it
         let full_path = library_path.join(file_path);
         let md_path = markdown_path_for(&full_path);
         std::fs::write(&md_path, &content).map_err(|e| e.to_string())?;
@@ -165,31 +188,29 @@ pub async fn save_markdown_content(
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .to_string()
-    } else if let Some(ref existing_md) = attachment.markdown_path {
-        // Note with an existing markdown file — overwrite it
-        let full_md = library_path.join(existing_md);
-        std::fs::write(&full_md, &content).map_err(|e| e.to_string())?;
-        existing_md.clone()
     } else {
-        // New note with no file — create in entry's files directory
-        let dir = library_path.join("files").join(&attachment.entry_key);
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let md_path = dir.join(format!("note-{}.md", &attachment.attachment_key));
-        std::fs::write(&md_path, &content).map_err(|e| e.to_string())?;
-        md_path
-            .strip_prefix(&*library_path)
-            .map_err(|e| e.to_string())?
-            .to_string_lossy()
-            .to_string()
+        return Err("Attachment has no file path".to_string());
     };
 
-    // Update markdown_path in DB
-    sqlx::query("UPDATE attachments SET markdown_path = ?, date_modified = datetime('now') WHERE id = ?")
-        .bind(&md_relative_path)
-        .bind(attachment_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Update DB: notes set both file_path (absolute) and markdown_path (relative)
+    if is_note {
+        let full_path = library_path.join(&md_relative_path);
+        let abs_path = full_path.to_string_lossy().to_string();
+        sqlx::query("UPDATE attachments SET markdown_path = ?, file_path = ?, date_modified = datetime('now') WHERE id = ?")
+            .bind(&md_relative_path)
+            .bind(&abs_path)
+            .bind(attachment_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query("UPDATE attachments SET markdown_path = ?, date_modified = datetime('now') WHERE id = ?")
+            .bind(&md_relative_path)
+            .bind(attachment_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 
     // Update inline table refs from the saved content
     update_inline_table_refs(&state.db, attachment_id, &content).await;
@@ -237,12 +258,28 @@ pub async fn reindex_attachment(
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "Attachment not found".to_string())?;
 
-    let file_path = attachment
-        .file_path
-        .ok_or_else(|| "Attachment has no file path".to_string())?;
-
     let library_path = state.library_path.read().await;
-    let full_path = library_path.join(&file_path);
+    let is_note = attachment.attachment_type == "note";
+
+    // Resolve the file path to read from.
+    // For notes, markdown_path may be set even if file_path is NULL (legacy notes).
+    let full_path = if let Some(ref fp) = attachment.file_path {
+        library_path.join(fp)
+    } else {
+        // Fall back to markdown_path (for notes that haven't been re-saved with file_path)
+        let md_row: Option<MarkdownPathRow> = sqlx::query_as(
+            "SELECT markdown_path FROM attachments WHERE id = ?",
+        )
+        .bind(attachment_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        match md_row.and_then(|r| r.markdown_path) {
+            Some(md_path) => library_path.join(&md_path),
+            None => return Err("Attachment has no file path".to_string()),
+        }
+    };
 
     if !full_path.exists() {
         return Err(format!("File not found: {}", full_path.display()));
@@ -255,7 +292,6 @@ pub async fn reindex_attachment(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Re-extract and index
     let attachment_data = crate::search::indexer::AttachmentData {
         entry_id: attachment.entry_id,
         entry_key: attachment.entry_key,
@@ -265,64 +301,96 @@ pub async fn reindex_attachment(
         content_source: attachment.attachment_type,
     };
 
-    match state
-        .search_index
-        .index_attachment_content(&attachment_data, &config)
-        .await
-    {
-        Ok(result) => {
-            let worth_saving = result
-                .extracted_text
-                .as_ref()
-                .map_or(false, |t| is_worth_saving(t));
-            if worth_saving {
-                if let Some(ref text) = result.extracted_text {
-                    if let Ok(md_path) = save_markdown(&full_path, text) {
-                        let relative_md = md_path
-                            .strip_prefix(&*library_path)
-                            .ok()
-                            .map(|p| p.to_string_lossy().to_string());
-                        if let Some(rel) = relative_md {
-                            let _ = sqlx::query(
-                                "UPDATE attachments SET markdown_path = ? WHERE id = ?",
-                            )
-                            .bind(&rel)
-                            .bind(attachment_id)
-                            .execute(&state.db)
-                            .await;
-                        }
-                    }
+    if is_note {
+        // Notes: read markdown, expand inline tables, index the expanded text.
+        // Do NOT call save_markdown (the .md file IS the note itself).
+        let raw_text = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
+
+        // Expand <!-- wren-table:UUID --> placeholders to actual markdown tables
+        let expanded_text = expand_inline_tables(&state.db, &raw_text).await;
+
+        match state
+            .search_index
+            .index_text_content(&attachment_data, &expanded_text)
+            .await
+        {
+            Ok(result) => {
+                tracing::info!(
+                    "Reindexed note {}: {} chars (expanded from {})",
+                    attachment_id,
+                    expanded_text.len(),
+                    raw_text.len()
+                );
+                if !result.indexed {
+                    tracing::info!("Note {} had no indexable content", attachment_id);
                 }
-            } else {
-                // Clear stale markdown_path and remove old .md file
-                let stale_md = markdown_path_for(&full_path);
-                let _ = std::fs::remove_file(&stale_md);
-                let _ = sqlx::query(
-                    "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
-                )
-                .bind(attachment_id)
-                .execute(&state.db)
-                .await;
             }
-            tracing::info!(
-                "Reindexed attachment {}: method={}, chars={}",
-                attachment_id,
-                result.method.as_str(),
-                result
+            Err(e) => {
+                tracing::warn!("Failed to reindex note {}: {}", attachment_id, e);
+                return Err(format!("Indexing failed: {}", e));
+            }
+        }
+
+        // Update inline table refs from the raw (unexpanded) content
+        update_inline_table_refs(&state.db, attachment_id, &raw_text).await;
+    } else {
+        // Non-note attachments: extract text, index, save markdown alongside original file
+        match state
+            .search_index
+            .index_attachment_content(&attachment_data, &config)
+            .await
+        {
+            Ok(result) => {
+                let worth_saving = result
                     .extracted_text
                     .as_ref()
-                    .map_or(0, |t| t.len())
-            );
+                    .map_or(false, |t| is_worth_saving(t));
+                if worth_saving {
+                    if let Some(ref text) = result.extracted_text {
+                        if let Ok(md_path) = save_markdown(&full_path, text) {
+                            let relative_md = md_path
+                                .strip_prefix(&*library_path)
+                                .ok()
+                                .map(|p| p.to_string_lossy().to_string());
+                            if let Some(rel) = relative_md {
+                                let _ = sqlx::query(
+                                    "UPDATE attachments SET markdown_path = ? WHERE id = ?",
+                                )
+                                .bind(&rel)
+                                .bind(attachment_id)
+                                .execute(&state.db)
+                                .await;
+                            }
+                        }
+                    }
+                } else {
+                    // Clear stale markdown_path and remove old .md file
+                    let stale_md = markdown_path_for(&full_path);
+                    let _ = std::fs::remove_file(&stale_md);
+                    let _ = sqlx::query(
+                        "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
+                    )
+                    .bind(attachment_id)
+                    .execute(&state.db)
+                    .await;
+                }
+                tracing::info!(
+                    "Reindexed attachment {}: method={}, chars={}",
+                    attachment_id,
+                    result.method.as_str(),
+                    result
+                        .extracted_text
+                        .as_ref()
+                        .map_or(0, |t| t.len())
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to reindex attachment {}: {}", attachment_id, e);
+                return Err(format!("Extraction failed: {}", e));
+            }
         }
-        Err(e) => {
-            tracing::warn!("Failed to reindex attachment {}: {}", attachment_id, e);
-            return Err(format!("Extraction failed: {}", e));
-        }
-    }
 
-    // Update inline table refs by reading the markdown file for this attachment
-    {
-        // Try to get the markdown content (either the saved .md or the original note)
+        // Update inline table refs from the markdown file for non-note attachments
         let md_row: Option<MarkdownPathRow> = sqlx::query_as(
             "SELECT markdown_path FROM attachments WHERE id = ?",
         )
@@ -872,6 +940,87 @@ pub async fn reindex_library(
 // =====================================================
 // INLINE TABLE REF TRACKING HELPERS
 // =====================================================
+
+/// Expand `<!-- wren-table:UUID -->` placeholders in markdown by fetching the
+/// actual table data from the DB and converting to markdown table syntax.
+/// The original placeholder line is replaced with the table title + markdown table.
+async fn expand_inline_tables(db: &sqlx::SqlitePool, content: &str) -> String {
+    use super::inline_tables::InlineTableColumn;
+    use sqlx::Row;
+
+    let mut result = String::with_capacity(content.len());
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("<!-- wren-table:") {
+            if let Some(uuid) = rest.strip_suffix("-->") {
+                let uuid = uuid.trim();
+                if !uuid.is_empty() {
+                    // Fetch table data
+                    if let Ok(Some(table_row)) = sqlx::query(
+                        "SELECT id, title, columns_json FROM inline_tables WHERE key = ?",
+                    )
+                    .bind(uuid)
+                    .fetch_optional(db)
+                    .await
+                    {
+                        let table_id: i64 = table_row.get("id");
+                        let title: String = table_row.get("title");
+                        let columns_json: String = table_row.get("columns_json");
+                        let columns: Vec<InlineTableColumn> =
+                            serde_json::from_str(&columns_json).unwrap_or_default();
+
+                        if !columns.is_empty() {
+                            // Fetch rows
+                            let rows = sqlx::query(
+                                "SELECT data_json FROM inline_table_rows WHERE table_id = ? ORDER BY sort_order",
+                            )
+                            .bind(table_id)
+                            .fetch_all(db)
+                            .await
+                            .unwrap_or_default();
+
+                            // Build markdown table
+                            result.push_str(&title);
+                            result.push('\n');
+
+                            // Header
+                            let header: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
+                            result.push_str(&format!("| {} |", header.join(" | ")));
+                            result.push('\n');
+
+                            // Separator
+                            let sep: Vec<&str> = columns.iter().map(|_| "---").collect();
+                            result.push_str(&format!("| {} |", sep.join(" | ")));
+                            result.push('\n');
+
+                            // Data rows
+                            for row in &rows {
+                                let data_json: String = row.get("data_json");
+                                let data: serde_json::Value =
+                                    serde_json::from_str(&data_json).unwrap_or_default();
+                                let cells: Vec<String> = columns
+                                    .iter()
+                                    .map(|col| {
+                                        data.get(&col.id)
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string()
+                                    })
+                                    .collect();
+                                result.push_str(&format!("| {} |", cells.join(" | ")));
+                                result.push('\n');
+                            }
+                            continue; // Skip appending the original placeholder line
+                        }
+                    }
+                }
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
 
 /// Extract wren-table UUIDs from markdown content.
 /// Looks for `<!-- wren-table:uuid -->` markers.

@@ -57,6 +57,19 @@ export function ImageViewer({ filePath, title }: ImageViewerProps) {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [zoomIn, zoomOut, resetZoom, handlePrint]);
 
+  // Listen for Command Palette events
+  useEffect(() => {
+    const events: [string, () => void][] = [
+      ["wren:image-zoom-in", zoomIn],
+      ["wren:image-zoom-out", zoomOut],
+      ["wren:image-rotate", rotate],
+      ["wren:image-reset", resetZoom],
+      ["wren:image-print", handlePrint],
+    ];
+    for (const [name, handler] of events) window.addEventListener(name, handler);
+    return () => { for (const [name, handler] of events) window.removeEventListener(name, handler); };
+  }, [zoomIn, zoomOut, rotate, resetZoom, handlePrint]);
+
   // Scroll wheel zoom
   useEffect(() => {
     const container = containerRef.current;

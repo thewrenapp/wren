@@ -162,6 +162,7 @@ export function EntryTable({
       type: 'markdown',
       title: `${entry?.title || 'Attachment'} - ${attachment.title || attachment.attachmentType}`,
       entryId: String(entryId),
+      attachmentId: String(attachment.id),
       data: { attachmentId: attachment.id },
     });
     closeContextMenu();

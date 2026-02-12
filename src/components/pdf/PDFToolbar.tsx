@@ -260,6 +260,17 @@ export function PDFToolbar({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [searchOpen, handleCloseSearch]);
 
+  // Listen for Command Palette search events (shared toolbar for PDF/EPUB/HTML)
+  useEffect(() => {
+    const handleOpenSearch = () => setSearchOpen(true);
+    window.addEventListener("wren:pdf-search", handleOpenSearch);
+    window.addEventListener("wren:epub-search", handleOpenSearch);
+    return () => {
+      window.removeEventListener("wren:pdf-search", handleOpenSearch);
+      window.removeEventListener("wren:epub-search", handleOpenSearch);
+    };
+  }, []);
+
   return (
     <TooltipProvider delayDuration={300}>
       <div ref={toolbarRef} className="flex flex-col border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">

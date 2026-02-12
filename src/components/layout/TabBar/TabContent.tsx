@@ -1,19 +1,10 @@
-import { useTabStore } from "@/stores/tabStore";
+import { useTabStore, type Tab } from "@/stores/tabStore";
 import { WelcomeTab } from "./WelcomeTab";
 import { EntryTab } from "./EntryTab";
 import { LibraryTab } from "./LibraryTab";
-import { MarkdownViewer } from "@/components/viewer/MarkdownViewer";
 
-export function TabContent() {
-  const { tabs, activeTabId } = useTabStore();
-
-  const activeTab = tabs.find((t) => t.id === activeTabId);
-
-  if (!activeTab) {
-    return null;
-  }
-
-  switch (activeTab.type) {
+function renderTab(tab: Tab) {
+  switch (tab.type) {
     case "library":
       return <LibraryTab />;
 
@@ -21,17 +12,17 @@ export function TabContent() {
       return <WelcomeTab />;
 
     case "entry":
-      if (!activeTab.entryId) {
+      if (!tab.entryId) {
         return (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
             Entry not found
           </div>
         );
       }
-      return <EntryTab entryId={activeTab.entryId} attachmentId={activeTab.attachmentId} />;
+      return <EntryTab entryId={tab.entryId} attachmentId={tab.attachmentId} />;
 
     case "markdown":
-      if (!activeTab.data?.attachmentId) {
+      if (!tab.entryId || !tab.attachmentId) {
         return (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
             No attachment specified
@@ -39,9 +30,10 @@ export function TabContent() {
         );
       }
       return (
-        <MarkdownViewer
-          attachmentId={activeTab.data.attachmentId as number}
-          title={activeTab.title}
+        <EntryTab
+          entryId={tab.entryId}
+          attachmentId={tab.attachmentId}
+          viewMode="extracted"
         />
       );
 
@@ -62,4 +54,30 @@ export function TabContent() {
     default:
       return null;
   }
+}
+
+export function TabContent() {
+  const { tabs, activeTabId } = useTabStore();
+
+  if (tabs.length === 0) {
+    return null;
+  }
+
+  // Render ALL tabs but only show the active one.
+  // Each tab stays mounted with its own component tree, so state
+  // (scroll position, page number, zoom) is preserved across tab switches.
+  // Duplicate tabs get independent instances via unique keys (tab.id).
+  return (
+    <>
+      {tabs.map((tab) => (
+        <div
+          key={tab.id}
+          className="h-full w-full"
+          style={{ display: tab.id === activeTabId ? "contents" : "none" }}
+        >
+          {renderTab(tab)}
+        </div>
+      ))}
+    </>
+  );
 }

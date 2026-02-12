@@ -9,6 +9,7 @@ import { HTMLViewer } from "@/components/viewer/HTMLViewer";
 import { EPUBViewer } from "@/components/epub/EPUBViewer";
 import { ImageViewer } from "@/components/viewer/ImageViewer";
 import { NoteEditor } from "@/components/editor/NoteEditor";
+import { MarkdownViewer } from "@/components/viewer/MarkdownViewer";
 import { EntryInfoPanel } from "@/components/layout/RightPane/EntryInfoPanel";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -38,9 +39,10 @@ function AutoOpenFile({ filePath, entryId }: { filePath: string; entryId: string
 interface EntryTabProps {
   entryId: string;
   attachmentId?: string; // Specific attachment to display
+  viewMode?: "default" | "extracted"; // "extracted" shows markdown viewer for extracted text
 }
 
-export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
+export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryTabProps) {
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -155,6 +157,11 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
 
   // Render main content based on attachment type
   const renderMainContent = () => {
+    // Extracted text view: show markdown viewer for any attachment that has markdown content
+    if (viewMode === "extracted" && targetAttachment) {
+      return <MarkdownViewer attachmentId={targetAttachment.id} title={targetAttachment.title} />;
+    }
+
     if (targetAttachment?.attachmentType === "pdf" && targetAttachment.filePath) {
       return <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} />;
     }
@@ -231,6 +238,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
           <ResizablePanel
             defaultSize={100 - bottomPanePercent}
             minSize={30}
+            className="overflow-hidden"
           >
             {mainContent}
           </ResizablePanel>
@@ -245,7 +253,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
               const newHeight = (size / 100) * totalHeight;
               setInfoPanelHeight(newHeight);
             }}
-            className="bg-background"
+            className="bg-background overflow-hidden"
           >
             <EntryInfoPanel entry={entrySummary} />
           </ResizablePanel>
@@ -266,6 +274,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
         <ResizablePanel
           defaultSize={100 - rightPanePercent}
           minSize={40}
+          className="overflow-hidden"
         >
           {mainContent}
         </ResizablePanel>
@@ -280,7 +289,7 @@ export function EntryTab({ entryId, attachmentId }: EntryTabProps) {
             const newWidth = (size / 100) * totalWidth;
             setRightPaneWidth(newWidth);
           }}
-          className="bg-background"
+          className="bg-background overflow-hidden"
         >
           <EntryInfoPanel entry={entrySummary} />
         </ResizablePanel>

@@ -38,6 +38,7 @@ import {
   type Entry as TauriEntry,
   type Creator,
 } from "@/services/tauri";
+import { openFileWithDefaultApp, getLibraryPath } from "@/services/tauri/commands";
 import type { ItemTypeInfo } from "@/types/schema";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
@@ -47,7 +48,7 @@ interface EntryInfoPanelProps {
 
 export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   const { collections, setTags, setCollections, entryVersion, invalidateEntry, invalidateAttachments, refreshLibrary } = useLibraryStore();
-  const { tabs, updateTab } = useTabStore();
+  const { tabs, activeTabId, updateTab } = useTabStore();
   const { activeFilter } = useUIStore();
   const { getItemTypeInfo, loadSchema, isLoaded, itemTypes } = useSchemaStore();
   const isTrashView = activeFilter === "trash";
@@ -300,7 +301,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   const currentCreators = isEditing ? editedCreators : fullEntry?.creators || [];
 
   return (
-    <div className="h-full flex flex-col bg-background">
+    <div className="h-full flex flex-col bg-background overflow-hidden">
       {/* Header */}
       <div className="px-3 py-2 border-b flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
@@ -359,7 +360,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
         )}
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 overflow-hidden">
         {/* Info Section - Dynamic Fields */}
         <InfoSection
           title="Info"
@@ -490,7 +491,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
                       <span className="text-xs text-muted-foreground w-20 flex-shrink-0 pt-0.5 capitalize">
                         {creator.creatorType}
                       </span>
-                      <span className="flex-1 text-sm">
+                      <span className="flex-1 text-sm min-w-0 break-words">
                         {creator.name ||
                           [creator.firstName, creator.lastName]
                             .filter(Boolean)
@@ -538,6 +539,15 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
                 <div
                   key={attachment.id}
                   className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer"
+                  onClick={() => {
+                    const { openTab } = useTabStore.getState();
+                    openTab({
+                      type: "entry",
+                      title: attachment.title || getAttachmentTitle(attachment),
+                      entryId: String(entry.id),
+                      attachmentId: String(attachment.id),
+                    });
+                  }}
                 >
                   <AttachmentIcon type={attachment.attachmentType} />
                   <span className="text-sm flex-1 truncate">
@@ -583,12 +593,22 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
               {entryCollections.map((collection) => (
                 <div
                   key={collection.id}
-                  className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 group"
+                  className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 group cursor-pointer"
+                  onClick={() => {
+                    const { setActiveCollection } = useLibraryStore.getState();
+                    setActiveCollection(collection.id);
+                    const { openTab } = useTabStore.getState();
+                    openTab({ type: "library", title: "Library" });
+                  }}
+                  title={`Show "${collection.name}" collection`}
                 >
                   <FolderOpen className="h-4 w-4 text-muted-foreground" />
                   <span className="text-sm flex-1">{collection.name}</span>
                   <button
-                    onClick={() => handleRemoveFromCollection(collection.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveFromCollection(collection.id);
+                    }}
                     className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-destructive/10 rounded"
                     title="Remove from collection"
                   >
@@ -637,11 +657,21 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
               {fullEntry?.tags?.map((tag) => (
                 <span
                   key={tag.id}
-                  className="px-2 py-0.5 text-xs bg-muted rounded-full flex items-center gap-1 group"
+                  className="px-2 py-0.5 text-xs bg-muted rounded-full flex items-center gap-1 group cursor-pointer hover:bg-muted/80"
+                  onClick={() => {
+                    const { setActiveTags } = useLibraryStore.getState();
+                    setActiveTags([tag.id]);
+                    const { openTab } = useTabStore.getState();
+                    openTab({ type: "library", title: "Library" });
+                  }}
+                  title={`Filter by "${tag.name}"`}
                 >
                   {tag.name}
                   <button
-                    onClick={() => handleRemoveTag(tag.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveTag(tag.id);
+                    }}
                     className="opacity-0 group-hover:opacity-100 hover:text-destructive"
                     title="Remove tag"
                   >
@@ -665,14 +695,39 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
         </InfoSection>
 
         {/* Actions */}
-        {!isEditing && (
-          <div className="p-3 space-y-2">
-            <Button variant="outline" size="sm" className="w-full justify-start">
-              <ExternalLink className="h-4 w-4 mr-2" />
-              Open in External App
-            </Button>
-          </div>
-        )}
+        {!isEditing && (() => {
+          const activeTab = tabs.find(t => t.id === activeTabId);
+          const currentAttachment = activeTab?.attachmentId
+            ? fullEntry?.attachments?.find(a => String(a.id) === activeTab.attachmentId && (a.filePath || a.markdownPath))
+            : fullEntry?.attachments?.find(a => a.filePath || a.markdownPath);
+          const openPath = currentAttachment?.filePath || currentAttachment?.markdownPath;
+          if (!openPath) return null;
+          return (
+            <div className="p-3 space-y-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start overflow-hidden"
+                onClick={async () => {
+                  try {
+                    let resolvedPath = openPath;
+                    // markdownPath is relative to library root, needs resolving
+                    if (!currentAttachment?.filePath && currentAttachment?.markdownPath) {
+                      const libPath = await getLibraryPath();
+                      resolvedPath = `${libPath}/${currentAttachment.markdownPath}`;
+                    }
+                    await openFileWithDefaultApp(resolvedPath);
+                  } catch (err) {
+                    toast.error(`Failed to open file: ${err}`);
+                  }
+                }}
+              >
+                <ExternalLink className="h-4 w-4 mr-2 flex-shrink-0" />
+                <span className="truncate">Open in External App</span>
+              </Button>
+            </div>
+          );
+        })()}
       </ScrollArea>
     </div>
   );
@@ -729,12 +784,12 @@ function MetadataField({
             href={value}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-primary hover:underline truncate block flex-1 pt-0.5"
+            className="text-sm text-primary hover:underline break-all block flex-1 pt-0.5"
           >
             {value}
           </a>
         ) : (
-          <span className="text-sm flex-1 break-words pt-0.5">{value}</span>
+          <span className="text-sm flex-1 break-all pt-0.5">{value}</span>
         )}
         {copyable && !isEditing && (
           <button

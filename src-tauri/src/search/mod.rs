@@ -101,6 +101,16 @@ impl SearchIndex {
         indexer::index_attachment_content(&writer, &self.fields, attachment, config).await
     }
 
+    /// Index pre-extracted text content for an attachment
+    pub async fn index_text_content(
+        &self,
+        attachment: &indexer::AttachmentData,
+        text: &str,
+    ) -> Result<indexer::IndexingResult> {
+        let writer = self.writer.write().await;
+        indexer::index_text_content(&writer, &self.fields, attachment, text)
+    }
+
     /// Delete all documents for an entry
     pub async fn delete_entry(&self, entry_id: i64) -> Result<()> {
         let writer = self.writer.write().await;

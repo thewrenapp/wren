@@ -1150,6 +1150,21 @@ export function PDFViewer({ filePath, attachmentId }: PDFViewerProps) {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [zoomIn, zoomOut, fitWidth, filePath, handlePrint]);
 
+  // Listen for Command Palette events
+  useEffect(() => {
+    const handleToggleEdit = () => handleModeChange(mode === "edit" ? "pan" : "edit");
+    const events: [string, () => void][] = [
+      ["wren:pdf-zoom-in", zoomIn],
+      ["wren:pdf-zoom-out", zoomOut],
+      ["wren:pdf-fit-width", fitWidth],
+      ["wren:pdf-fit-page", fitPage],
+      ["wren:pdf-toggle-edit", handleToggleEdit],
+      ["wren:pdf-print", handlePrint],
+    ];
+    for (const [name, handler] of events) window.addEventListener(name, handler);
+    return () => { for (const [name, handler] of events) window.removeEventListener(name, handler); };
+  }, [zoomIn, zoomOut, fitWidth, fitPage, handlePrint, handleModeChange, mode]);
+
   // Hand tool - grab to pan
   useEffect(() => {
     if (mode !== "pan") return;

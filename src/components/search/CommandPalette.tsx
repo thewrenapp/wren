@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Command } from "cmdk";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
@@ -40,6 +40,32 @@ import {
   BookOpen,
   FileSearch,
   Table2,
+  Layers,
+  X,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+  RotateCw,
+  Printer,
+  PanelLeft,
+  Bold,
+  Italic,
+  Strikethrough,
+  Code,
+  Link,
+  Heading1,
+  Heading2,
+  Heading3,
+  List,
+  ListChecks,
+  Quote,
+  Minus,
+  ArrowLeft,
+  ArrowRight,
+  Columns,
+  ArrowUpDown,
+  Pin,
+  ChevronRight,
 } from "lucide-react";
 import { sidebarIcons } from "@/lib/icons";
 import { IconTagOff } from "@tabler/icons-react";
@@ -88,6 +114,7 @@ import {
   importAnnotationsFromPdf,
   getEntryAttachments,
   fullTextSearch,
+  reindexLibrary,
   type ExportOptions,
   type BiblatexPreviewResult,
   type Attachment,
@@ -144,7 +171,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
 
   // Threshold for showing confirmation dialog
   const BULK_DELETE_THRESHOLD = 3;
-  const { openTab } = useTabStore();
+  const { openTab, tabs, activeTabId, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, pinTab, unpinTab, duplicateTab, closeTabsToRight } = useTabStore();
   const {
     entries,
     selectedEntryIds,
@@ -161,8 +188,16 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     setTags,
     invalidateEntry,
     invalidateAttachments,
+    savedSearches,
+    setActiveSavedSearch,
   } = useLibraryStore();
-  const { viewModeByFilter, setViewMode, activeFilter, setActiveFilter } = useUIStore();
+  const {
+    viewModeByFilter, setViewMode, activeFilter, setActiveFilter,
+    sortField, sortDirection, setSort,
+    libraryLayout, setLibraryLayout,
+    columns, toggleColumnVisibility, resetColumns,
+    togglePdfLeftPanel, toggleHtmlLeftPanel, toggleEpubLeftPanel,
+  } = useUIStore();
   const { theme, setTheme } = useSettingsStore();
   const { importFiles, importFolder } = useImport();
   const { itemTypes } = useSchemaStore();
@@ -205,6 +240,88 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
   const [importPreviewData, setImportPreviewData] = useState<BiblatexPreviewResult | null>(null);
   const [importFolderPath, setImportFolderPath] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+
+  // Context detection for context-aware command prioritization
+  type ViewerContext = "library" | "pdf" | "epub" | "html" | "image" | "note" | "markdown" | "welcome" | "weblink" | "none";
+  const [viewerContext, setViewerContext] = useState<ViewerContext>("library");
+  const [contextAttachmentId, setContextAttachmentId] = useState<number | null>(null);
+
+  const activeTab = useMemo(() => tabs.find(t => t.id === activeTabId), [tabs, activeTabId]);
+
+  // Resolve descriptive labels for entry tabs (e.g. "PDF", "EPUB", "Notes")
+  const [tabTypeLabels, setTabTypeLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const entryTabs = tabs.filter(t => t.type === "entry" && t.entryId);
+    if (entryTabs.length === 0) return;
+    const labelMap: Record<string, string> = {};
+    Promise.all(entryTabs.map(async (tab) => {
+      try {
+        const attachments = await getEntryAttachments(Number(tab.entryId));
+        let target = tab.attachmentId
+          ? attachments.find(a => String(a.id) === tab.attachmentId)
+          : undefined;
+        if (!target) {
+          for (const type of ["pdf", "epub", "snapshot", "image"]) {
+            target = attachments.find(a => a.attachmentType === type);
+            if (target) break;
+          }
+        }
+        if (!target) target = attachments.find(a => a.filePath);
+        const typeDisplayMap: Record<string, string> = {
+          pdf: "PDF", epub: "EPUB", snapshot: "Web Snapshot", image: "Image",
+          note: "Notes", weblink: "Weblink",
+        };
+        labelMap[tab.id] = target ? (typeDisplayMap[target.attachmentType] || "Entry") : "Entry";
+      } catch {
+        labelMap[tab.id] = "Entry";
+      }
+    })).then(() => setTabTypeLabels(labelMap));
+  }, [tabs]);
+
+  useEffect(() => {
+    if (!activeTab) {
+      setViewerContext("library");
+      setContextAttachmentId(null);
+      return;
+    }
+    if (activeTab.type === "library") { setViewerContext("library"); setContextAttachmentId(null); return; }
+    if (activeTab.type === "welcome") { setViewerContext("welcome"); setContextAttachmentId(null); return; }
+    if (activeTab.type === "markdown") {
+      setViewerContext("markdown");
+      // For markdown tabs, resolve the attachment ID
+      if (activeTab.entryId) {
+        getEntryAttachments(Number(activeTab.entryId)).then(attachments => {
+          const target = activeTab.attachmentId
+            ? attachments.find(a => String(a.id) === activeTab.attachmentId)
+            : attachments.find(a => a.filePath);
+          setContextAttachmentId(target?.id ?? null);
+        }).catch(() => setContextAttachmentId(null));
+      }
+      return;
+    }
+    if (activeTab.type !== "entry" || !activeTab.entryId) { setViewerContext("none"); setContextAttachmentId(null); return; }
+
+    // Resolve attachment type for entry tab
+    getEntryAttachments(Number(activeTab.entryId)).then(attachments => {
+      let target = activeTab.attachmentId
+        ? attachments.find(a => String(a.id) === activeTab.attachmentId)
+        : undefined;
+      if (!target) {
+        for (const type of ["pdf", "epub", "snapshot", "image"]) {
+          target = attachments.find(a => a.attachmentType === type);
+          if (target) break;
+        }
+      }
+      if (!target) target = attachments.find(a => a.filePath);
+
+      const typeMap: Record<string, ViewerContext> = {
+        pdf: "pdf", epub: "epub", snapshot: "html", image: "image",
+        note: "note", weblink: "weblink",
+      };
+      setViewerContext(target ? (typeMap[target.attachmentType] || "none") : "none");
+      setContextAttachmentId(target?.id ?? null);
+    }).catch(() => { setViewerContext("none"); setContextAttachmentId(null); });
+  }, [activeTab?.id, activeTab?.type, activeTab?.entryId, activeTab?.attachmentId]);
 
   const [searchResults, setSearchResults] = useState<EntrySummary[]>([]);
   const [fullSearchResults, setFullSearchResults] = useState<FullSearchResult[]>([]);
@@ -2341,6 +2458,778 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
 
             {/* Commands */}
             <>
+              {/* Context-specific commands based on active viewer */}
+              {viewerContext === "pdf" && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    PDF
+                  </div>
+                  <Command.Item
+                    value="search in pdf find text"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:pdf-search")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Search className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Search in PDF</span></div>
+                    <ShortcutBadge keys={["⌘", "F"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="zoom in pdf enlarge"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:pdf-zoom-in")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <ZoomIn className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Zoom In</span></div>
+                    <ShortcutBadge keys={["⌘", "+"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="zoom out pdf shrink"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:pdf-zoom-out")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <ZoomOut className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Zoom Out</span></div>
+                    <ShortcutBadge keys={["⌘", "-"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="fit width pdf scale"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:pdf-fit-width")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Maximize className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Fit to Width</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="fit page pdf scale"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:pdf-fit-page")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Maximize className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Fit to Page</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="toggle edit annotation mode pdf highlight"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:pdf-toggle-edit")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Pencil className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Toggle Edit Mode</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="toggle pdf sidebar outline thumbnails left panel"
+                    onSelect={() => handleSelect(() => togglePdfLeftPanel())}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <PanelLeft className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Toggle PDF Sidebar</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="print pdf document"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:pdf-print")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Printer className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Print</span></div>
+                    <ShortcutBadge keys={["⌘", "P"]} />
+                  </Command.Item>
+                </Command.Group>
+              )}
+
+              {viewerContext === "epub" && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    EPUB
+                  </div>
+                  <Command.Item
+                    value="search in epub find text"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:epub-search")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-emerald-500/10">
+                      <Search className="h-4 w-4 text-emerald-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Search in EPUB</span></div>
+                    <ShortcutBadge keys={["⌘", "F"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="next page chapter epub forward"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:epub-next")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-emerald-500/10">
+                      <ArrowRight className="h-4 w-4 text-emerald-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Next Page</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="previous page chapter epub back"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:epub-prev")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-emerald-500/10">
+                      <ArrowLeft className="h-4 w-4 text-emerald-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Previous Page</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="increase font size zoom in epub"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:epub-zoom-in")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-emerald-500/10">
+                      <ZoomIn className="h-4 w-4 text-emerald-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Increase Font Size</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="decrease font size zoom out epub"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:epub-zoom-out")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-emerald-500/10">
+                      <ZoomOut className="h-4 w-4 text-emerald-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Decrease Font Size</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="toggle epub sidebar outline toc"
+                    onSelect={() => handleSelect(() => toggleEpubLeftPanel())}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-emerald-500/10">
+                      <PanelLeft className="h-4 w-4 text-emerald-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Toggle EPUB Sidebar</span></div>
+                  </Command.Item>
+                </Command.Group>
+              )}
+
+              {viewerContext === "html" && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Web Snapshot
+                  </div>
+                  <Command.Item
+                    value="search in html page find text"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:html-search")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <Search className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Search in Page</span></div>
+                    <ShortcutBadge keys={["⌘", "F"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="zoom in html enlarge"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:html-zoom-in")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <ZoomIn className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Zoom In</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="zoom out html shrink"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:html-zoom-out")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <ZoomOut className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Zoom Out</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="toggle edit annotation mode html highlight"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:html-toggle-edit")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <Pencil className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Toggle Edit Mode</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="toggle html sidebar outline left panel"
+                    onSelect={() => handleSelect(() => toggleHtmlLeftPanel())}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <PanelLeft className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Toggle Sidebar</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="print html page document"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:html-print")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <Printer className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Print</span></div>
+                    <ShortcutBadge keys={["⌘", "P"]} />
+                  </Command.Item>
+                </Command.Group>
+              )}
+
+              {viewerContext === "image" && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Image
+                  </div>
+                  <Command.Item
+                    value="zoom in image enlarge"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:image-zoom-in")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                      <ZoomIn className="h-4 w-4 text-purple-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Zoom In</span></div>
+                    <ShortcutBadge keys={["⌘", "+"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="zoom out image shrink"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:image-zoom-out")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                      <ZoomOut className="h-4 w-4 text-purple-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Zoom Out</span></div>
+                    <ShortcutBadge keys={["⌘", "-"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="rotate image clockwise"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:image-rotate")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                      <RotateCw className="h-4 w-4 text-purple-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Rotate</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="reset view image original"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:image-reset")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                      <RotateCcw className="h-4 w-4 text-purple-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Reset View</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="print image document"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:image-print")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                      <Printer className="h-4 w-4 text-purple-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Print</span></div>
+                    <ShortcutBadge keys={["⌘", "P"]} />
+                  </Command.Item>
+                </Command.Group>
+              )}
+
+              {viewerContext === "note" && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Editor
+                  </div>
+                  <Command.Item
+                    value="bold formatting text editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-bold")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Bold className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Bold</span></div>
+                    <ShortcutBadge keys={["⌘", "B"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="italic formatting text editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-italic")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Italic className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Italic</span></div>
+                    <ShortcutBadge keys={["⌘", "I"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="strikethrough formatting text editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-strikethrough")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Strikethrough className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Strikethrough</span></div>
+                    <ShortcutBadge keys={["⌘", "⇧", "S"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="code inline formatting editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-code")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Code className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Inline Code</span></div>
+                    <ShortcutBadge keys={["⌘", "E"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="link url editor insert"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-link")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Link className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Insert Link</span></div>
+                    <ShortcutBadge keys={["⌘", "K"]} />
+                  </Command.Item>
+                  <Command.Item
+                    value="heading 1 h1 editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-h1")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Heading1 className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Heading 1</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="heading 2 h2 editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-h2")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Heading2 className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Heading 2</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="heading 3 h3 editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-h3")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Heading3 className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Heading 3</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="bullet list unordered editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-bullet-list")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <List className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Bullet List</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="task list checkbox todo editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-task-list")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <ListChecks className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Task List</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="blockquote quote editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-blockquote")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Quote className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Blockquote</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="code block fenced editor programming"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-code-block")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Code className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Code Block</span>
+                      <span className="block text-xs text-muted-foreground">Insert fenced code block</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="math equation latex katex editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-math")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <span className="text-sm font-mono text-green-500">∑</span>
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Math Block</span>
+                      <span className="block text-xs text-muted-foreground">Insert LaTeX math equation</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="callout admonition note tip warning editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-callout")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <BookOpen className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Insert Callout</span>
+                      <span className="block text-xs text-muted-foreground">Note, Tip, Warning, etc.</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="horizontal rule divider separator editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-hr")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Minus className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Horizontal Rule</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="insert new table database editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:insert-new-table")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Table2 className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Insert New Table</span>
+                      <span className="block text-xs text-muted-foreground">Create an inline database table</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="insert existing table browse search database editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:browse-tables")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Table2 className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Insert Existing Table...</span>
+                      <span className="block text-xs text-muted-foreground">Browse and embed or link to a table</span>
+                    </div>
+                  </Command.Item>
+                </Command.Group>
+              )}
+
+              {viewerContext === "markdown" && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Extracted Text
+                  </div>
+                  <Command.Item
+                    value="re-extract reindex text current document"
+                    onSelect={async () => {
+                      if (!contextAttachmentId) return;
+                      setCommandPaletteOpen(false);
+                      const loadingId = toast.loading("Re-extracting text...");
+                      try {
+                        await reindexAttachment(contextAttachmentId);
+                        toast.dismiss(loadingId);
+                        toast.success("Text re-extracted successfully");
+                      } catch (err) {
+                        toast.dismiss(loadingId);
+                        toast.error(`Re-extraction failed: ${err}`);
+                      }
+                    }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <RefreshCw className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Re-extract Text</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="re-extract reindex force ocr scanned document"
+                    onSelect={async () => {
+                      if (!contextAttachmentId) return;
+                      setCommandPaletteOpen(false);
+                      const loadingId = toast.loading("Re-extracting with OCR...");
+                      try {
+                        await reindexAttachment(contextAttachmentId, { forceOcr: true });
+                        toast.dismiss(loadingId);
+                        toast.success("OCR re-extraction complete");
+                      } catch (err) {
+                        toast.dismiss(loadingId);
+                        toast.error(`OCR re-extraction failed: ${err}`);
+                      }
+                    }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                      <RefreshCw className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Re-extract with OCR</span>
+                      <span className="block text-xs text-muted-foreground">Force OCR for scanned documents</span>
+                    </div>
+                  </Command.Item>
+                </Command.Group>
+              )}
+
+              {viewerContext === "welcome" && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Quick Start
+                  </div>
+                  <Command.Item
+                    value="import pdf add document quick start"
+                    onSelect={handleImportPdf}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-red-500/10">
+                      <Plus className="h-4 w-4 text-red-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Import PDF</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="import folder pdfs multiple quick start"
+                    onSelect={handleImportFolder}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10">
+                      <FolderOpen className="h-4 w-4 text-amber-500" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Import Folder</span></div>
+                  </Command.Item>
+                </Command.Group>
+              )}
+
+              {/* Open Tabs - tab switching and management */}
+              {tabs.length > 0 && (
+                <Command.Group>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Tabs
+                  </div>
+                  {tabs
+                    .filter(t => t.id !== activeTabId)
+                    .map((tab) => {
+                      // Build a descriptive label for the tab type
+                      const tabLabel = tab.type === "library" ? "Library"
+                        : tab.type === "welcome" ? "Welcome"
+                        : tab.type === "markdown" ? "Extracted Text"
+                        : tab.type === "entry" ? (tabTypeLabels[tab.id] || "Entry")
+                        : tab.type;
+                      // Icon based on resolved type
+                      const isPdf = tabTypeLabels[tab.id] === "PDF";
+                      const isNote = tab.type === "entry" && tabTypeLabels[tab.id] === "Notes";
+                      return (
+                        <Command.Item
+                          key={`switch-${tab.id}`}
+                          value={`switch to tab ${tab.title} ${tabLabel} ${tab.id}`}
+                          onSelect={() => handleSelect(() => setActiveTab(tab.id))}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                            {tab.type === "library" ? <Library className="h-4 w-4 text-muted-foreground" /> :
+                             tab.type === "welcome" ? <BookOpen className="h-4 w-4 text-muted-foreground" /> :
+                             tab.type === "markdown" ? <FileText className="h-4 w-4 text-muted-foreground" /> :
+                             isPdf ? <File className="h-4 w-4 text-red-500" /> :
+                             isNote ? <StickyNote className="h-4 w-4 text-muted-foreground" /> :
+                             <File className="h-4 w-4 text-muted-foreground" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="block text-sm font-medium truncate">{tab.title}</span>
+                            <span className="text-xs text-muted-foreground">{tabLabel}</span>
+                          </div>
+                        </Command.Item>
+                      );
+                    })}
+                  {tabs.length > 0 && (
+                    <Command.Item
+                      value="close current tab"
+                      onSelect={() => handleSelect(() => { if (activeTabId) closeTab(activeTabId); })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <X className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Close Current Tab</span></div>
+                      <ShortcutBadge keys={["⌘", "W"]} />
+                    </Command.Item>
+                  )}
+                  {tabs.length > 1 && (
+                    <>
+                      <Command.Item
+                        value="close other tabs"
+                        onSelect={() => handleSelect(() => { if (activeTabId) closeOtherTabs(activeTabId); })}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                          <Layers className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div className="flex-1"><span className="block text-sm font-medium">Close Other Tabs</span></div>
+                      </Command.Item>
+                      <Command.Item
+                        value="close all tabs"
+                        onSelect={() => handleSelect(() => closeAllTabs())}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                          <X className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div className="flex-1"><span className="block text-sm font-medium">Close All Tabs</span></div>
+                      </Command.Item>
+                    </>
+                  )}
+                  {/* Close tabs to right */}
+                  {activeTab && tabs.indexOf(activeTab) < tabs.length - 1 && (
+                    <Command.Item
+                      value="close tabs to the right"
+                      onSelect={() => handleSelect(() => { if (activeTabId) closeTabsToRight(activeTabId); })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <X className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Close Tabs to the Right</span></div>
+                    </Command.Item>
+                  )}
+                  {/* Pin/Unpin current tab */}
+                  {activeTab && activeTab.type !== "library" && !activeTab.pinned && (
+                    <Command.Item
+                      value="pin current tab"
+                      onSelect={() => handleSelect(() => { if (activeTabId) pinTab(activeTabId); })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <Pin className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Pin Current Tab</span></div>
+                    </Command.Item>
+                  )}
+                  {activeTab && activeTab.pinned && (
+                    <Command.Item
+                      value="unpin current tab"
+                      onSelect={() => handleSelect(() => { if (activeTabId) unpinTab(activeTabId); })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <Pin className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Unpin Current Tab</span></div>
+                    </Command.Item>
+                  )}
+                  {/* Duplicate tab */}
+                  {activeTab && activeTab.type !== "library" && activeTab.type !== "welcome" && (
+                    <Command.Item
+                      value="duplicate current tab"
+                      onSelect={() => handleSelect(() => { if (activeTabId) duplicateTab(activeTabId); })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <Copy className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Duplicate Current Tab</span></div>
+                    </Command.Item>
+                  )}
+                  {/* Show in Library */}
+                  {activeTab && activeTab.entryId && (
+                    <Command.Item
+                      value="show in library reveal entry"
+                      onSelect={() => handleSelect(() => {
+                        if (!activeTab.entryId) return;
+                        openTab({ type: "library", title: "Library" });
+                        const { selectEntry } = useLibraryStore.getState();
+                        selectEntry(Number(activeTab.entryId));
+                        setTimeout(() => {
+                          window.dispatchEvent(new CustomEvent("wren:scroll-to-entry", { detail: { entryId: Number(activeTab.entryId) } }));
+                        }, 50);
+                      })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <Library className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Show in Library</span></div>
+                    </Command.Item>
+                  )}
+                  {/* Find in Finder */}
+                  {activeTab && activeTab.entryId && (
+                    <Command.Item
+                      value="find in finder reveal file current tab"
+                      onSelect={() => handleSelect(async () => {
+                        if (!activeTab.entryId) return;
+                        try { await showEntryInFinder(Number(activeTab.entryId)); } catch {}
+                      })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Find in Finder</span></div>
+                    </Command.Item>
+                  )}
+                  {/* Open Extracted Content (from entry tab) */}
+                  {activeTab && activeTab.type === "entry" && activeTab.entryId && (
+                    <Command.Item
+                      value="open extracted content text"
+                      onSelect={() => handleSelect(() => {
+                        openTab({ type: "markdown", title: activeTab.title, entryId: activeTab.entryId!, attachmentId: activeTab.attachmentId });
+                      })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Open Extracted Content</span></div>
+                    </Command.Item>
+                  )}
+                  {/* Open Main File (from markdown/extracted tab) */}
+                  {activeTab && activeTab.type === "markdown" && activeTab.entryId && (
+                    <Command.Item
+                      value="open main file viewer"
+                      onSelect={() => handleSelect(() => {
+                        openTab({ type: "entry", title: activeTab.title, entryId: activeTab.entryId! });
+                      })}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1"><span className="block text-sm font-medium">Open Main File</span></div>
+                    </Command.Item>
+                  )}
+                </Command.Group>
+              )}
+
               {/* Actions on selected entries */}
               {selectedEntryIds.length > 0 && activeFilter !== "trash" && (
                   <Command.Group>
@@ -3042,7 +3931,118 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                       </div>
                     </Command.Item>
                   )}
+                  <Command.Item
+                    value="toggle layout normal stacked horizontal vertical"
+                    onSelect={() => handleSelect(() => setLibraryLayout(libraryLayout === "normal" ? "stacked" : "normal"))}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                      <Columns className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Toggle Layout</span>
+                      <span className="text-xs text-muted-foreground">Current: {libraryLayout === "normal" ? "Side-by-side" : "Stacked"}</span>
+                    </div>
+                  </Command.Item>
+                  {(["title", "dateAdded", "dateModified", "creator", "year", "itemType"] as const).map(field => {
+                    const labels: Record<string, string> = {
+                      title: "Title", dateAdded: "Date Added", dateModified: "Date Modified",
+                      creator: "Creator", year: "Year", itemType: "Type",
+                    };
+                    return (
+                      <Command.Item
+                        key={field}
+                        value={`sort by ${labels[field]} order ${field}`}
+                        onSelect={() => handleSelect(() => setSort(field))}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="block text-sm font-medium">Sort by {labels[field]}</span>
+                          {sortField === field && (
+                            <span className="text-xs text-muted-foreground">Current: {sortDirection === "asc" ? "Ascending" : "Descending"}</span>
+                          )}
+                        </div>
+                      </Command.Item>
+                    );
+                  })}
+                  {columns.map(col => (
+                    <Command.Item
+                      key={col.id}
+                      value={`toggle column ${col.label} visibility show hide ${col.id}`}
+                      onSelect={() => handleSelect(() => toggleColumnVisibility(col.id))}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                        <LayoutList className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="block text-sm font-medium">{col.visible ? "Hide" : "Show"} {col.label} Column</span>
+                      </div>
+                    </Command.Item>
+                  ))}
+                  <Command.Item
+                    value="reset columns default table"
+                    onSelect={() => handleSelect(() => resetColumns())}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-muted">
+                      <RotateCcw className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1"><span className="block text-sm font-medium">Reset Columns to Default</span></div>
+                  </Command.Item>
+                  <Command.Item
+                    value="reindex entire library re-extract all"
+                    onSelect={async () => {
+                      setCommandPaletteOpen(false);
+                      const loadingId = toast.loading("Re-extracting entire library...");
+                      try {
+                        await reindexLibrary();
+                        toast.dismiss(loadingId);
+                        toast.success("Library re-extraction complete");
+                        refreshLibrary();
+                      } catch (err) {
+                        toast.dismiss(loadingId);
+                        toast.error(`Re-extraction failed: ${err}`);
+                      }
+                    }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10">
+                      <RefreshCw className="h-4 w-4 text-amber-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Reindex Entire Library</span>
+                      <span className="text-xs text-muted-foreground">Re-extract text from all documents</span>
+                    </div>
+                  </Command.Item>
                 </Command.Group>
+
+                {/* Saved Searches */}
+                {savedSearches.length > 0 && (
+                  <Command.Group>
+                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                      Saved Searches
+                    </div>
+                    {savedSearches.map(search => (
+                      <Command.Item
+                        key={search.id}
+                        value={`saved search ${search.name} filter`}
+                        onSelect={() => handleSelect(() => setActiveSavedSearch(search.id))}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                      >
+                        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10">
+                          <Search className="h-4 w-4 text-primary" />
+                        </div>
+                        <div className="flex-1">
+                          <span className="block text-sm font-medium">{search.name}</span>
+                        </div>
+                      </Command.Item>
+                    ))}
+                  </Command.Group>
+                )}
 
                 {/* Navigation commands */}
                 <Command.Group>

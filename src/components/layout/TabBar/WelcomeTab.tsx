@@ -152,15 +152,6 @@ export function WelcomeTab() {
             />
 
             <QuickAction
-              icon={<sidebarIcons.notes className="h-5 w-5 text-amber-500" />}
-              title="Create Note"
-              description="Start a new markdown note"
-              onClick={() => {
-                // TODO: Create note
-              }}
-            />
-
-            <QuickAction
               icon={<FolderOpen className="h-5 w-5" />}
               title="Import Folder"
               description="Import all PDFs from a folder"

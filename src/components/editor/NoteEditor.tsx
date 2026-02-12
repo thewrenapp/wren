@@ -39,7 +39,7 @@ export function NoteEditor({ attachmentId }: NoteEditorProps) {
       content={content ?? ""}
       attachmentId={attachmentId}
       showToolbar={true}
-      showReindex={false}
+      showReindex={true}
     />
   );
 }
