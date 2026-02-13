@@ -116,14 +116,14 @@ export const DocumentOutline: React.FC<DocumentOutlineProps> = ({
   const defaultLoadingSpinnerStyle: React.CSSProperties = {
     width: 28,
     height: 28,
-    color: '#94a3b8',
+    color: 'hsl(var(--muted-foreground))',
     marginBottom: 12,
     animation: 'spin 1s linear infinite',
   };
 
   const defaultLoadingTextStyle: React.CSSProperties = {
     fontSize: 13,
-    color: '#64748b',
+    color: 'hsl(var(--muted-foreground))',
   };
 
   const defaultEmptyContainerStyle: React.CSSProperties = {
@@ -138,7 +138,7 @@ export const DocumentOutline: React.FC<DocumentOutlineProps> = ({
     width: 56,
     height: 56,
     borderRadius: '50%',
-    backgroundColor: '#f1f5f9',
+    backgroundColor: 'hsl(var(--muted))',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -148,19 +148,19 @@ export const DocumentOutline: React.FC<DocumentOutlineProps> = ({
   const defaultEmptyIconStyle: React.CSSProperties = {
     width: 28,
     height: 28,
-    color: '#94a3b8',
+    color: 'hsl(var(--muted-foreground))',
   };
 
   const defaultEmptyTitleStyle: React.CSSProperties = {
     fontSize: 14,
     fontWeight: 500,
-    color: '#475569',
+    color: 'hsl(var(--foreground))',
     marginBottom: 4,
   };
 
   const defaultEmptyDescriptionStyle: React.CSSProperties = {
     fontSize: 13,
-    color: '#94a3b8',
+    color: 'hsl(var(--muted-foreground))',
     textAlign: 'center',
   };
 

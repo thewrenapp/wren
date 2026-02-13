@@ -4,64 +4,64 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 224 71% 4%;
-    --card: 0 0% 100%;
-    --card-foreground: 224 71% 4%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 224 71% 4%;
-    /* Purple/Indigo theme */
-    --primary: 262 83% 58%;
+    --background: 220 14% 98%;
+    --foreground: 224 40% 12%;
+    --card: 220 12% 97%;
+    --card-foreground: 224 40% 12%;
+    --popover: 220 14% 98%;
+    --popover-foreground: 224 40% 12%;
+    /* Blue-Indigo theme (Linear-style) */
+    --primary: 235 55% 58%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 270 30% 96%;
-    --secondary-foreground: 224 71% 4%;
-    --muted: 260 15% 95%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 262 30% 93%;
-    --accent-foreground: 224 71% 4%;
+    --secondary: 220 12% 91%;
+    --secondary-foreground: 224 40% 12%;
+    --muted: 220 10% 90%;
+    --muted-foreground: 220 12% 45%;
+    --accent: 225 12% 91%;
+    --accent-foreground: 224 40% 12%;
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
-    --border: 260 20% 90%;
-    --input: 260 20% 90%;
-    --ring: 262 83% 58%;
+    --border: 220 10% 87%;
+    --input: 220 10% 87%;
+    --ring: 235 55% 58%;
     --radius: 0.5rem;
 
     /* Sidebar specific */
-    --sidebar: 260 20% 97%;
-    --sidebar-foreground: 224 71% 4%;
-    --sidebar-border: 260 20% 90%;
-    --sidebar-accent: 262 30% 93%;
-    --sidebar-accent-foreground: 224 71% 4%;
+    --sidebar: 220 14% 96%;
+    --sidebar-foreground: 224 40% 12%;
+    --sidebar-border: 220 10% 87%;
+    --sidebar-accent: 225 12% 91%;
+    --sidebar-accent-foreground: 224 40% 12%;
   }
 
   .dark {
-    --background: 260 30% 6%;
-    --foreground: 210 40% 98%;
-    --card: 260 30% 6%;
-    --card-foreground: 210 40% 98%;
-    --popover: 260 30% 8%;
-    --popover-foreground: 210 40% 98%;
-    /* Purple/Indigo theme - dark */
-    --primary: 262 83% 65%;
+    --background: 0 0% 25%;
+    --foreground: 0 0% 93%;
+    --card: 0 0% 27%;
+    --card-foreground: 0 0% 93%;
+    --popover: 0 0% 21%;
+    --popover-foreground: 0 0% 93%;
+    /* Blue-Indigo theme - dark */
+    --primary: 235 55% 65%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 260 30% 18%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 260 30% 14%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 260 30% 18%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 260 30% 18%;
-    --input: 260 30% 18%;
-    --ring: 262 83% 65%;
+    --secondary: 0 0% 30%;
+    --secondary-foreground: 0 0% 93%;
+    --muted: 0 0% 31%;
+    --muted-foreground: 0 0% 65%;
+    --accent: 230 4% 31%;
+    --accent-foreground: 0 0% 93%;
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 0 0% 93%;
+    --border: 0 0% 35%;
+    --input: 0 0% 35%;
+    --ring: 235 55% 65%;
 
     /* Sidebar specific - dark */
-    --sidebar: 260 30% 5%;
-    --sidebar-foreground: 210 40% 98%;
-    --sidebar-border: 260 30% 18%;
-    --sidebar-accent: 260 30% 18%;
-    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar: 0 0% 21%;
+    --sidebar-foreground: 0 0% 93%;
+    --sidebar-border: 0 0% 35%;
+    --sidebar-accent: 230 4% 31%;
+    --sidebar-accent-foreground: 0 0% 93%;
   }
 }
 
@@ -94,11 +94,11 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-muted-foreground/20 rounded-full;
+    @apply bg-muted-foreground/15 rounded-full;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-muted-foreground/40;
+    @apply bg-muted-foreground/30;
   }
 
   /* Hide scrollbar but keep scrolling */
@@ -110,6 +110,57 @@
   .scrollbar-hidden::-webkit-scrollbar {
     display: none;
   }
+}
+
+/* Gradient utilities for layout surfaces */
+.sidebar-gradient {
+  background: linear-gradient(180deg,
+    hsl(220 14% 96%) 0%,
+    hsl(220 12% 94%) 100%
+  );
+}
+.dark .sidebar-gradient {
+  background: linear-gradient(180deg,
+    hsl(0 0% 22%) 0%,
+    hsl(0 0% 19%) 100%
+  );
+}
+
+.titlebar-gradient {
+  background: linear-gradient(90deg,
+    hsl(220 14% 96%) 0%,
+    hsl(220 12% 97%) 50%,
+    hsl(220 14% 96%) 100%
+  );
+}
+.dark .titlebar-gradient {
+  background: linear-gradient(90deg,
+    hsl(0 0% 22%) 0%,
+    hsl(0 0% 24%) 50%,
+    hsl(0 0% 22%) 100%
+  );
+}
+
+.profilebar-gradient {
+  background: linear-gradient(180deg,
+    hsl(220 14% 95%) 0%,
+    hsl(220 12% 92%) 100%
+  );
+}
+.dark .profilebar-gradient {
+  background: linear-gradient(180deg,
+    hsl(0 0% 20%) 0%,
+    hsl(0 0% 17%) 100%
+  );
+}
+
+/* Animation utilities */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Shiki dual-theme support */

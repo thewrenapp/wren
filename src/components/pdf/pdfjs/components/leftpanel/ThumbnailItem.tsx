@@ -71,8 +71,8 @@ export const ThumbnailItem = React.memo<ThumbnailItemProps>(({
     cursor: 'pointer',
     borderRadius: '6px',
     transition: 'all 0.15s ease',
-    backgroundColor: isActive ? 'rgba(59, 130, 246, 0.08)' : isHovered ? 'rgba(0, 0, 0, 0.03)' : 'transparent',
-    border: isActive ? '2px solid #3b82f6' : '2px solid transparent',
+    backgroundColor: isActive ? 'hsl(var(--primary) / 0.08)' : isHovered ? 'hsl(var(--foreground) / 0.03)' : 'transparent',
+    border: isActive ? '2px solid hsl(var(--primary))' : '2px solid transparent',
   };
 
   // Image wrapper - width 90%, height auto with aspect ratio
@@ -80,14 +80,14 @@ export const ThumbnailItem = React.memo<ThumbnailItemProps>(({
     position: 'relative',
     width: '85%',
     aspectRatio: '8.5 / 11', // Standard page aspect ratio
-    backgroundColor: '#ffffff',
+    backgroundColor: 'hsl(var(--card))',
     borderRadius: '4px',
     overflow: 'hidden',
     boxShadow: isActive
-      ? '0 4px 12px rgba(59, 130, 246, 0.25)'
+      ? '0 4px 12px hsl(var(--primary) / 0.25)'
       : isHovered
-        ? '0 4px 12px rgba(0, 0, 0, 0.12)'
-        : '0 1px 3px rgba(0, 0, 0, 0.08)',
+        ? '0 4px 12px hsl(var(--foreground) / 0.12)'
+        : '0 1px 3px hsl(var(--foreground) / 0.08)',
     transition: 'box-shadow 0.15s ease',
   };
 
@@ -95,7 +95,7 @@ export const ThumbnailItem = React.memo<ThumbnailItemProps>(({
     marginTop: '6px',
     fontSize: '11px',
     fontWeight: 500,
-    color: isActive ? '#3b82f6' : '#6b7280',
+    color: isActive ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))',
     transition: 'color 0.15s ease',
   };
 
@@ -129,14 +129,14 @@ export const ThumbnailItem = React.memo<ThumbnailItemProps>(({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: '#f9fafb',
+              backgroundColor: 'hsl(var(--muted))',
             }}
           >
             <Loader2
               style={{
                 width: 24,
                 height: 24,
-                color: '#9ca3af',
+                color: 'hsl(var(--muted-foreground))',
                 animation: 'spin 1s linear infinite',
               }}
             />
@@ -153,11 +153,11 @@ export const ThumbnailItem = React.memo<ThumbnailItemProps>(({
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: '#fef2f2',
+              backgroundColor: 'hsl(var(--destructive) / 0.05)',
             }}
           >
-            <AlertCircle style={{ width: 20, height: 20, color: '#f87171', marginBottom: 4 }} />
-            <span style={{ fontSize: 10, color: '#9ca3af' }}>Failed</span>
+            <AlertCircle style={{ width: 20, height: 20, color: 'hsl(var(--destructive))', marginBottom: 4 }} />
+            <span style={{ fontSize: 10, color: 'hsl(var(--muted-foreground))' }}>Failed</span>
           </div>
         )}
 
@@ -184,14 +184,14 @@ export const ThumbnailItem = React.memo<ThumbnailItemProps>(({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: '#f9fafb',
+              backgroundColor: 'hsl(var(--muted))',
             }}
           >
             <span
               style={{
                 fontSize: 24,
                 fontWeight: 300,
-                color: '#d1d5db',
+                color: 'hsl(var(--border))',
               }}
             >
               {pageNumber}

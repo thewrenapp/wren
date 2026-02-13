@@ -1535,19 +1535,19 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
                           zIndex: 20,
                           width: 24,
                           height: 48,
-                          backgroundColor: "#ffffff",
-                          border: "1px solid #e5e7eb",
+                          backgroundColor: "hsl(var(--background))",
+                          border: "1px solid hsl(var(--border))",
                           borderLeft: "none",
                           borderRadius: "0 6px 6px 0",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
                           cursor: "pointer",
-                          boxShadow: "2px 0 8px rgba(0,0,0,0.08)",
+                          boxShadow: "2px 0 8px hsl(var(--foreground) / 0.08)",
                         }}
                         aria-label="Close panel"
                       >
-                        <ChevronLeft style={{ width: 14, height: 14, color: "#6b7280" }} />
+                        <ChevronLeft style={{ width: 14, height: 14, color: "hsl(var(--muted-foreground))" }} />
                       </button>
                     )}
                   </div>
@@ -1571,7 +1571,7 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
                       mode === "edit" && toolMode === "highlight"
                         ? highlightColor
                         : isSelectMode
-                          ? "rgba(59, 130, 246, 0.8)"
+                          ? "hsl(var(--primary) / 0.8)"
                           : undefined
                     }
                     onSelection={mode === "edit" && (toolMode === "highlight" || toolMode === "area") ? handleSelection : undefined}

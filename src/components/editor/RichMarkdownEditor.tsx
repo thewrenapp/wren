@@ -187,7 +187,7 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
           positionJson: posJson,
           selectedText,
           comment: "",
-          color: "#9382FF",
+          color: "hsl(var(--primary))",
         });
         const nc: NoteComment = {
           id: ann.id,

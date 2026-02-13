@@ -22,8 +22,8 @@
 }
 
 .ShapeCanvas__hint {
-  background: rgba(0, 0, 0, 0.8);
-  color: white;
+  background: hsl(var(--popover) / 0.9);
+  color: hsl(var(--popover-foreground));
   padding: 8px 16px;
   border-radius: 6px;
   font-size: 14px;
@@ -32,8 +32,8 @@
 
 .ShapeCanvas__cancelButton {
   padding: 8px 20px;
-  background: #f44336;
-  color: white;
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -43,5 +43,5 @@
 }
 
 .ShapeCanvas__cancelButton:hover {
-  background: #d32f2f;
+  background: hsl(var(--destructive) / 0.9);
 }

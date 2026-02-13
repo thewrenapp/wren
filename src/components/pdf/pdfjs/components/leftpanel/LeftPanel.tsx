@@ -102,12 +102,12 @@ export interface ToggleButtonClassNames {
 }
 
 const defaultTheme: LeftPanelTheme = {
-  backgroundColor: '#ffffff',
-  borderColor: '#e5e7eb',
-  accentColor: '#3b82f6',
-  textColor: '#374151',
-  mutedTextColor: '#6b7280',
-  hoverBackgroundColor: '#f9fafb',
+  backgroundColor: 'hsl(var(--background))',
+  borderColor: 'hsl(var(--border))',
+  accentColor: 'hsl(var(--primary))',
+  textColor: 'hsl(var(--foreground))',
+  mutedTextColor: 'hsl(var(--muted-foreground))',
+  hoverBackgroundColor: 'hsl(var(--accent))',
 };
 
 export interface LeftPanelProps {
@@ -362,10 +362,10 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
             ...toggleButtonStyles?.button,
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = theme.hoverBackgroundColor || '#f9fafb';
+            e.currentTarget.style.backgroundColor = theme.hoverBackgroundColor || 'hsl(var(--accent))';
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = theme.backgroundColor || '#ffffff';
+            e.currentTarget.style.backgroundColor = theme.backgroundColor || 'hsl(var(--background))';
           }}
           aria-label={isOpen ? 'Close panel' : 'Open panel'}
         >

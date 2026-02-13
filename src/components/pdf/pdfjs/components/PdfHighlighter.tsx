@@ -111,17 +111,17 @@ export interface PdfHighlighterTheme {
 
 const defaultLightTheme: Required<PdfHighlighterTheme> = {
   mode: "light",
-  containerBackgroundColor: "#e5e5e5",
-  scrollbarThumbColor: "#9f9f9f",
-  scrollbarTrackColor: "#d1d1d1",
+  containerBackgroundColor: "hsl(var(--muted))",
+  scrollbarThumbColor: "hsl(var(--muted-foreground) / 0.3)",
+  scrollbarTrackColor: "hsl(var(--border))",
   darkModeInvertIntensity: 0.9,
 };
 
 const defaultDarkTheme: Required<PdfHighlighterTheme> = {
   mode: "dark",
-  containerBackgroundColor: "#3a3a3a",  // Lighter than PDF page (~#1a1a1a) for contrast
-  scrollbarThumbColor: "#6b6b6b",
-  scrollbarTrackColor: "#2c2c2c",
+  containerBackgroundColor: "hsl(var(--muted))",
+  scrollbarThumbColor: "hsl(var(--muted-foreground) / 0.3)",
+  scrollbarTrackColor: "hsl(var(--border))",
   darkModeInvertIntensity: 0.9,
 };
 

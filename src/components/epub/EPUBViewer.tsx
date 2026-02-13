@@ -23,6 +23,37 @@ interface EPUBViewerProps {
 const NOOP = () => {};
 const NOOP_STR = (_s: string) => {};
 
+/** Read current CSS custom property values and register them as epub.js themes */
+function registerEpubThemes(rendition: Rendition) {
+  const root = document.documentElement;
+  const style = getComputedStyle(root);
+  const fg = style.getPropertyValue("--foreground").trim();
+  const bg = style.getPropertyValue("--background").trim();
+
+  const baseStyles = {
+    "max-width": "800px",
+    margin: "0 auto",
+    padding: "20px 40px",
+    "line-height": "1.6",
+  };
+
+  // Current mode uses live CSS vars
+  const isDark = root.classList.contains("dark");
+  const currentColor = fg ? `hsl(${fg})` : (isDark ? "#ededed" : "#1c1f2e");
+  const currentBg = bg ? `hsl(${bg})` : (isDark ? "#404040" : "#f8f9fb");
+
+  // For the "other" mode, use the token values from index.css
+  // Light: --foreground: 224 40% 12%, --background: 220 14% 98%
+  // Dark:  --foreground: 0 0% 93%, --background: 0 0% 25%
+  const lightColor = isDark ? "hsl(224 40% 12%)" : currentColor;
+  const lightBg = isDark ? "hsl(220 14% 98%)" : currentBg;
+  const darkColor = isDark ? currentColor : "hsl(0 0% 93%)";
+  const darkBg = isDark ? currentBg : "hsl(0 0% 25%)";
+
+  rendition.themes.register("light", { body: { color: lightColor, background: lightBg, ...baseStyles } });
+  rendition.themes.register("dark", { body: { color: darkColor, background: darkBg, ...baseStyles } });
+}
+
 export function EPUBViewer({ filePath, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane }: EPUBViewerProps) {
   // Core epub state
   const [loading, setLoading] = useState(true);
@@ -139,27 +170,8 @@ export function EPUBViewer({ filePath, infoPaneOpen: infoPaneOpenProp, onToggleI
 
         renditionRef.current = rendition;
 
-        // Apply themes with readable styling
-        rendition.themes.register("light", {
-          body: {
-            color: "#000000",
-            background: "#ffffff",
-            "max-width": "800px",
-            margin: "0 auto",
-            padding: "20px 40px",
-            "line-height": "1.6",
-          },
-        });
-        rendition.themes.register("dark", {
-          body: {
-            color: "#e2e8f0",
-            background: "#1e293b",
-            "max-width": "800px",
-            margin: "0 auto",
-            padding: "20px 40px",
-            "line-height": "1.6",
-          },
-        });
+        // Register initial themes (will be re-registered on dark mode change)
+        registerEpubThemes(rendition);
 
         rendition.themes.fontSize(`${Math.round(scale * 100)}%`);
 
@@ -212,10 +224,11 @@ export function EPUBViewer({ filePath, infoPaneOpen: infoPaneOpenProp, onToggleI
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
 
-  // Apply dark mode
+  // Apply dark mode - re-register themes with current CSS variable values
   useEffect(() => {
     const rendition = renditionRef.current;
     if (!rendition) return;
+    registerEpubThemes(rendition);
     rendition.themes.select(darkMode ? "dark" : "light");
   }, [darkMode]);
 

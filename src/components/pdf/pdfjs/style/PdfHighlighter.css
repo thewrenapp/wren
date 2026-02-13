@@ -13,21 +13,21 @@
 }
 
 .PdfHighlighter::-webkit-scrollbar-thumb {
-  background-color: #9f9f9f;
+  background-color: hsl(var(--muted-foreground) / 0.3);
   border-radius: 5px;
 }
 
 .PdfHighlighter::-webkit-scrollbar-thumb:hover {
-  background-color: #d1d1d1;
+  background-color: hsl(var(--muted-foreground) / 0.5);
 }
 
 .PdfHighlighter::-webkit-scrollbar-track {
-  background-color: #2c2c2c;
+  background-color: hsl(var(--muted));
   border-radius: 5px;
 }
 
 .PdfHighlighter::-webkit-scrollbar-track-piece {
-  background-color: #2c2c2c;
+  background-color: hsl(var(--muted));
 }
 
 .PdfHighlighter__tip-container {

@@ -199,33 +199,14 @@ export function HTMLAnnotationPanel({
 
   if (annotations.length === 0) {
     return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "92px 20px 48px 20px",
-        }}
-      >
-        <div
-          style={{
-            width: 56,
-            height: 56,
-            borderRadius: "50%",
-            backgroundColor: "#f1f5f9",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            marginBottom: 16,
-          }}
-        >
-          <Highlighter style={{ width: 28, height: 28, color: "#94a3b8" }} />
+      <div className="flex flex-col items-center justify-center pt-[92px] px-5 pb-12">
+        <div className="w-14 h-14 rounded-full bg-muted flex items-center justify-center mb-4">
+          <Highlighter className="w-7 h-7 text-muted-foreground" />
         </div>
-        <p style={{ fontSize: 14, fontWeight: 500, color: "#475569", marginBottom: 4 }}>
+        <p className="text-sm font-medium text-foreground mb-1">
           No annotations yet
         </p>
-        <p style={{ fontSize: 13, color: "#94a3b8", textAlign: "center" }}>
+        <p className="text-[13px] text-muted-foreground text-center">
           Use the toolbar to add highlights and notes
         </p>
       </div>

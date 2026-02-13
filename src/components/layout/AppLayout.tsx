@@ -201,8 +201,8 @@ export function AppLayout() {
             <div className='flex flex-1 min-h-0 min-w-0'>
               {/* Library sidebar - collapsible */}
               <div className={cn(
-                'shrink-0 bg-sidebar border-r border-border transition-all duration-200 overflow-hidden',
-                sidebarCollapsed ? 'w-0 border-r-0' : 'w-[200px]'
+                'shrink-0 sidebar-gradient border-r border-border transition-all duration-300 overflow-hidden',
+                sidebarCollapsed ? 'w-0 border-r-0 opacity-0' : 'w-[200px] opacity-100'
               )}>
                 <LibrarySidebar expandCollectionsRef={expandCollectionsRef} />
               </div>

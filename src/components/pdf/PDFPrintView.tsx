@@ -289,7 +289,7 @@ export function PDFPrintView() {
           )}
           {status === "error" && (
             <div style={styles.statusContent}>
-              <p style={{ color: "#ef4444" }}>Failed to load {typeLabel} for printing.</p>
+              <p style={{ color: "hsl(var(--destructive))" }}>Failed to load {typeLabel} for printing.</p>
             </div>
           )}
         </div>
@@ -305,7 +305,7 @@ const styles: Record<string, React.CSSProperties> = {
   wrapper: {
     width: "100vw",
     minHeight: "100vh",
-    backgroundColor: "#f5f5f5",
+    backgroundColor: "hsl(var(--muted))",
   },
   center: {
     display: "flex",
@@ -314,7 +314,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     fontSize: "14px",
-    color: "#6b7280",
+    color: "hsl(var(--muted-foreground))",
   },
   statusOverlay: {
     position: "fixed",
@@ -325,7 +325,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    backgroundColor: "hsl(var(--background) / 0.9)",
     zIndex: 100,
   },
   statusContent: {
@@ -334,26 +334,26 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "12px",
     fontSize: "14px",
-    color: "#374151",
+    color: "hsl(var(--foreground))",
   },
   spinner: {
     width: "32px",
     height: "32px",
-    border: "3px solid #e5e7eb",
-    borderTopColor: "#3b82f6",
+    border: "3px solid hsl(var(--border))",
+    borderTopColor: "hsl(var(--primary))",
     borderRadius: "50%",
     animation: "spin 0.8s linear infinite",
   },
   progressBar: {
     width: "200px",
     height: "4px",
-    backgroundColor: "#e5e7eb",
+    backgroundColor: "hsl(var(--border))",
     borderRadius: "2px",
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
-    backgroundColor: "#3b82f6",
+    backgroundColor: "hsl(var(--primary))",
     borderRadius: "2px",
     transition: "width 0.2s ease",
   },

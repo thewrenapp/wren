@@ -18,7 +18,7 @@ export function TitleBar() {
   return (
     <div
       onMouseDown={startDrag}
-      className="flex items-center justify-center h-12 px-4 bg-sidebar border-b border-sidebar-border cursor-default"
+      className="flex items-center justify-center h-12 px-4 titlebar-gradient border-b border-sidebar-border cursor-default"
     >
       {/* Search bar - centered, the area around it is draggable */}
       <button

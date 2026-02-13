@@ -80,7 +80,7 @@ export function ProfileBar() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex flex-col items-center w-[52px] py-2 bg-sidebar-accent/30 border-r border-sidebar-border">
+      <div className="flex flex-col items-center w-[52px] py-2 profilebar-gradient border-r border-sidebar-border">
         {/* Draggable region for macOS traffic lights */}
         <div
           onMouseDown={startDrag}
@@ -89,7 +89,7 @@ export function ProfileBar() {
 
         {/* App logo */}
         <div className="pb-3">
-          <AppLogo size={40} className="shadow-md cursor-pointer hover:shadow-lg transition-shadow" />
+          <AppLogo size={40} className="cursor-pointer drop-shadow-[0_2px_6px_rgba(0,0,0,0.2)] dark:drop-shadow-[0_2px_10px_rgba(0,0,0,0.5)] hover:drop-shadow-[0_4px_12px_rgba(0,0,0,0.3)] dark:hover:drop-shadow-[0_4px_16px_rgba(0,0,0,0.6)] hover:scale-105 transition-all duration-200" />
         </div>
 
         {/* Spacer */}

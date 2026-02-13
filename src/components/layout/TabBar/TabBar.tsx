@@ -274,7 +274,7 @@ const TabInner = React.forwardRef<
       onClick={onActivate}
       {...props}
       className={cn(
-        "group relative flex items-center gap-2 h-8 px-3 rounded-md cursor-pointer transition-colors",
+        "group relative flex items-center gap-2 h-8 px-3 rounded-md cursor-pointer transition-all duration-200",
         "flex-shrink min-w-0",
         isPinned ? "max-w-[160px]" : "max-w-[200px]",
         // Library tab: subtle indigo theme
