@@ -280,6 +280,7 @@ export function useKeyboardShortcuts() {
           // Navigate from current selection
           const lastSelected = selectedEntryIds[selectedEntryIds.length - 1];
           const currentIndex = entries.findIndex((e) => e.id === lastSelected);
+          if (currentIndex === -1) return;
 
           const newIndex =
             e.key === "ArrowDown"

@@ -4,6 +4,7 @@ import { PDFPrintView } from "@/components/pdf/PDFPrintView";
 import { Toaster } from "@/components/ui/Toaster";
 import { DeleteConfirmationDialog } from "@/components/dialogs/DeleteConfirmationDialog";
 import { AdvancedSearchDialog } from "@/components/search/AdvancedSearchDialog";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -136,7 +137,11 @@ function App() {
     return <PDFPrintView />;
   }
 
-  return <AppShell />;
+  return (
+    <ErrorBoundary>
+      <AppShell />
+    </ErrorBoundary>
+  );
 }
 
 export default App;

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { getSettings, updateSetting } from "@/services/tauri/commands";
+import { toast } from "@/stores/toastStore";
 
 export type Theme = "system" | "light" | "dark";
 
@@ -48,7 +49,7 @@ interface SettingsState {
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       theme: "system",
       codeTheme: { light: "github-light", dark: "github-dark" },
       libraryPath: "~/Wren",
@@ -64,29 +65,37 @@ export const useSettingsStore = create<SettingsState>()(
       setShowCodeLineNumbers: (show) => set({ showCodeLineNumbers: show }),
       setLibraryPath: (path) => set({ libraryPath: path }),
       setAutoRenameFiles: async (enabled) => {
+        const prev = get().autoRenameFiles;
         set({ autoRenameFiles: enabled });
-        // Sync to backend database
         try {
           await updateSetting("auto_rename_files", enabled ? "true" : "false");
         } catch (err) {
           console.error("Failed to update auto_rename_files setting:", err);
+          set({ autoRenameFiles: prev });
+          toast.error("Failed to update setting");
         }
       },
       setEmbeddingModel: (model) => set({ embeddingModel: model }),
       setEnableOcr: async (enabled) => {
+        const prev = get().enableOcr;
         set({ enableOcr: enabled });
         try {
           await updateSetting("enable_ocr", enabled ? "true" : "false");
         } catch (err) {
           console.error("Failed to update enable_ocr setting:", err);
+          set({ enableOcr: prev });
+          toast.error("Failed to update setting");
         }
       },
       setForceOcr: async (enabled) => {
+        const prev = get().forceOcr;
         set({ forceOcr: enabled });
         try {
           await updateSetting("force_ocr", enabled ? "true" : "false");
         } catch (err) {
           console.error("Failed to update force_ocr setting:", err);
+          set({ forceOcr: prev });
+          toast.error("Failed to update setting");
         }
       },
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),

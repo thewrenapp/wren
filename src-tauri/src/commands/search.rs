@@ -921,7 +921,9 @@ pub async fn reindex_library(
 
         // Commit every 100 entries
         if (i + 1) % 100 == 0 {
-            let _ = state.search_index.commit().await;
+            if let Err(e) = state.search_index.commit().await {
+                tracing::error!("Failed to commit search index at batch {}: {}", i + 1, e);
+            }
         }
     }
 

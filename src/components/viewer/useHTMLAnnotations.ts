@@ -333,10 +333,14 @@ export function useHTMLAnnotations(
   }, [injectCSS, removeRenderedElements, renderTextHighlight, renderSpatialHighlight]);
 
   // Load annotations from database
+  const loadRequestId = useRef(0);
   const loadAnnotations = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     try {
       const annotations = await getAnnotations(Number(attachmentId));
+      // Discard stale results if attachment changed during fetch
+      if (requestId !== loadRequestId.current) return;
       const loaded: HTMLHighlight[] = annotations.map((ann: Annotation) => {
         let position: HTMLPosition;
         try {
@@ -371,9 +375,12 @@ export function useHTMLAnnotations(
 
       setHighlights(loaded);
     } catch (err) {
+      if (requestId !== loadRequestId.current) return;
       console.error("Failed to load annotations:", err);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) {
+        setLoading(false);
+      }
     }
   }, [attachmentId]);
 

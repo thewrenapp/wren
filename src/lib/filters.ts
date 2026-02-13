@@ -76,10 +76,11 @@ export function compareEntriesByField(
       return a.title.localeCompare(b.title);
     case "creator":
       return (a.creatorsDisplay || "").localeCompare(b.creatorsDisplay || "");
-    case "year":
+    case "year": {
       const yearA = a.year ? parseInt(a.year, 10) : 0;
       const yearB = b.year ? parseInt(b.year, 10) : 0;
-      return yearA - yearB;
+      return (isNaN(yearA) ? 0 : yearA) - (isNaN(yearB) ? 0 : yearB);
+    }
     case "dateAdded":
       return new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime();
     case "dateModified":

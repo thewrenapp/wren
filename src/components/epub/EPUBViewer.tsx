@@ -184,7 +184,7 @@ export function EPUBViewer({ filePath, infoPaneOpen: infoPaneOpenProp, onToggleI
             if (range) {
               savedSelectionRef.current = range.toString();
             }
-          } catch { /* ignore */ }
+          } catch (err) { console.warn("Failed to get range from selection:", err); }
         });
 
       } catch (err) {

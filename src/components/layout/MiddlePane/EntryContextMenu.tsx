@@ -6,7 +6,6 @@ import {
   Plus,
   FileText,
   File,
-  Link,
   Copy,
   Trash2,
   FolderPlus,
@@ -454,10 +453,6 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
               <DropdownMenuItem onClick={handleAddFileAttachment}>
                 <Paperclip className='h-4 w-4 mr-2' />
                 File...
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled>
-                <Link className='h-4 w-4 mr-2' />
-                Weblink...
               </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
@@ -996,10 +991,6 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
                 <ContextMenuItem onClick={handleAddFileAttachment}>
                   <Paperclip className='h-4 w-4 mr-2' />
                   File...
-                </ContextMenuItem>
-                <ContextMenuItem disabled>
-                  <Link className='h-4 w-4 mr-2' />
-                  Weblink...
                 </ContextMenuItem>
               </ContextMenuSubContent>
             </ContextMenuSub>

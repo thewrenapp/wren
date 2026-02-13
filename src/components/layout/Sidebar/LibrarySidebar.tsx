@@ -191,6 +191,8 @@ function CollapsibleSection({
           <Button
             variant='ghost'
             size='icon-xs'
+            aria-label={`Add ${title}`}
+            title={`Add ${title}`}
             onClick={(e) => {
               e.stopPropagation();
               onAdd();
@@ -1229,6 +1231,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             <Button
               variant='ghost'
               size='icon-xs'
+              aria-label='Manage collections'
               onClick={(e) => {
                 e.stopPropagation();
                 setCollectionManagementDialogOpen(true);
@@ -1359,6 +1362,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
                 <Button
                   variant='ghost'
                   size='icon-xs'
+                  aria-label='Exit tag filter'
                   onClick={(e) => {
                     e.stopPropagation();
                     clearActiveTags();
@@ -1376,6 +1380,7 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
               <Button
                 variant='ghost'
                 size='icon-xs'
+                aria-label='Manage tags'
                 onClick={(e) => {
                   e.stopPropagation();
                   setTagManagementDialogOpen(true);
@@ -1779,13 +1784,34 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
             </div>
             <div>
               <Label htmlFor='rename-tag-color'>Color</Label>
-              <Input
-                id='rename-tag-color'
-                type='color'
-                value={renameTagColor || '#808080'}
-                onChange={(e) => setRenameTagColor(e.target.value)}
-                className='mt-2 h-10 w-20'
-              />
+              <div className='flex items-center gap-2 mt-2'>
+                <div className='flex gap-1'>
+                  {['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'].map((color) => (
+                    <button
+                      key={color}
+                      type='button'
+                      className={cn(
+                        'w-6 h-6 rounded-full border-2 transition-all',
+                        renameTagColor === color ? 'border-foreground scale-110' : 'border-transparent hover:scale-105'
+                      )}
+                      style={{ backgroundColor: color }}
+                      onClick={() => setRenameTagColor(color)}
+                    />
+                  ))}
+                </div>
+                <Input
+                  id='rename-tag-color'
+                  type='color'
+                  value={renameTagColor || '#808080'}
+                  onChange={(e) => setRenameTagColor(e.target.value)}
+                  className='w-10 h-6 p-0 border-0'
+                />
+                {renameTagColor && (
+                  <Button variant='ghost' size='sm' className='h-6 px-2' onClick={() => setRenameTagColor('')}>
+                    Clear
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
           <DialogFooter>

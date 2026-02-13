@@ -288,7 +288,10 @@ fn apply_advanced_criterion(qb: &mut QueryBuilder<Sqlite>, criterion: &AdvancedC
         "is_after" => ("after", value.clone()),
         "is_empty" => ("empty", value.clone()),
         "is_not_empty" => ("not_empty", value.clone()),
-        _ => ("like", format!("%{}%", value)),
+        unknown => {
+            tracing::warn!("Unknown search operator '{}', defaulting to 'contains'", unknown);
+            ("like", format!("%{}%", value))
+        }
     };
 
     match field {
@@ -302,7 +305,10 @@ fn apply_advanced_criterion(qb: &mut QueryBuilder<Sqlite>, criterion: &AdvancedC
         "date_added" => apply_date_column(qb, "e.date_added", op_kind, pattern.clone(), has_value),
         "collection" => apply_collection_match(qb, op_kind, &value, has_value),
         "saved_search" => apply_saved_search_match(qb, op_kind, &value, saved_searches),
-        _ => apply_text_column(qb, "e.title", op_kind, pattern, has_value),
+        unknown => {
+            tracing::warn!("Unknown search field '{}', defaulting to 'title'", unknown);
+            apply_text_column(qb, "e.title", op_kind, pattern, has_value);
+        }
     }
 }
 
@@ -1564,7 +1570,7 @@ pub async fn get_entry(
     id: i64,
     include_deleted: Option<bool>,
 ) -> Result<Entry, String> {
-    tracing::info!("get_entry called with id: {}", id);
+    tracing::debug!("get_entry called with id: {}", id);
 
     // Build query based on whether to include deleted entries
     let query = if include_deleted.unwrap_or(false) {
@@ -1606,7 +1612,7 @@ pub async fn get_entry(
     let collections = get_entry_collections(&state, id).await?;
     let attachments = get_entry_attachments_internal(&state, id).await?;
 
-    tracing::info!(
+    tracing::debug!(
         "Found {} fields, {} creators, {} attachments for entry {}",
         fields.len(),
         creators.len(),
@@ -2101,7 +2107,7 @@ pub async fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), Str
         tracing::warn!("Failed to delete entry from search index: {}", e);
     }
     if let Err(e) = state.search_index.commit().await {
-        tracing::warn!("Failed to commit search index: {}", e);
+        tracing::error!("Failed to commit search index: {}", e);
     }
 
     Ok(())
@@ -2298,7 +2304,7 @@ pub async fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), St
         }
 
         if let Err(e) = state.search_index.commit().await {
-            tracing::warn!("Failed to commit search index: {}", e);
+            tracing::error!("Failed to commit search index: {}", e);
         }
     }
 
@@ -2908,7 +2914,7 @@ pub async fn add_pdf_attachment(
 
     // Commit index changes
     if let Err(e) = state.search_index.commit().await {
-        tracing::warn!("Failed to commit search index: {}", e);
+        tracing::error!("Failed to commit search index: {}", e);
     }
 
     get_attachment(state, attachment_id).await

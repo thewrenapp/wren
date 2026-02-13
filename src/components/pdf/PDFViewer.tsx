@@ -775,7 +775,8 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
     };
   }
 
-  const getNextId = () => `temp-${Date.now()}`;
+  const tempIdCounter = useRef(0);
+  const getNextId = () => `temp-${Date.now()}-${++tempIdCounter.current}`;
 
   // Create text or area highlight based on selection type
   const handleSelection = useCallback(

@@ -236,6 +236,7 @@ export const useLibraryStore = create<LibraryState>()((set) => ({
       entries: state.entries.filter((entry) => entry.id !== id),
       selectedEntryIds: state.selectedEntryIds.filter((i) => i !== id),
       expandedEntryIds: state.expandedEntryIds.filter((i) => i !== id),
+      currentEntry: state.currentEntry?.id === id ? null : state.currentEntry,
     })),
 
   setCurrentEntry: (entry) => set({ currentEntry: entry }),

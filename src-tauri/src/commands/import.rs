@@ -188,6 +188,17 @@ async fn import_single_pdf_with_handle(
     source_path: &Path,
     app_handle: Option<&AppHandle>,
 ) -> Result<ImportResult, String> {
+    // Check file size before reading (reject files > 500MB)
+    const MAX_FILE_SIZE: u64 = 500 * 1024 * 1024;
+    let metadata = fs::metadata(source_path)
+        .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    if metadata.len() > MAX_FILE_SIZE {
+        return Err(format!(
+            "File too large ({:.0} MB). Maximum supported size is 500 MB.",
+            metadata.len() as f64 / (1024.0 * 1024.0)
+        ));
+    }
+
     // Calculate file hash
     let file_content = fs::read(source_path)
         .map_err(|e| format!("Failed to read file: {}", e))?;
@@ -615,7 +626,7 @@ async fn import_single_pdf_with_handle(
 
     // Commit index changes
     if let Err(e) = state.search_index.commit().await {
-        tracing::warn!("Failed to commit search index: {}", e);
+        tracing::error!("Failed to commit search index: {}", e);
     }
 
     Ok(ImportResult {
@@ -951,7 +962,7 @@ pub async fn import_bibtex(
 
     // Commit search index changes
     if let Err(e) = state.search_index.commit().await {
-        tracing::warn!("Failed to commit search index: {}", e);
+        tracing::error!("Failed to commit search index: {}", e);
     }
 
     Ok(BibtexImportResult {
@@ -1336,7 +1347,7 @@ pub async fn import_csl_json(
 
     // Commit search index changes
     if let Err(e) = state.search_index.commit().await {
-        tracing::warn!("Failed to commit search index: {}", e);
+        tracing::error!("Failed to commit search index: {}", e);
     }
 
     Ok(CslJsonImportResult {
@@ -2305,7 +2316,7 @@ pub async fn import_biblatex_with_files(
 
     // Commit search index changes
     if let Err(e) = state.search_index.commit().await {
-        tracing::warn!("Failed to commit search index: {}", e);
+        tracing::error!("Failed to commit search index: {}", e);
     }
 
     tracing::info!(

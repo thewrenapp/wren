@@ -88,6 +88,9 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
     const needsReindexRef = useRef(false);
     const attachmentIdRef = useRef(attachmentId);
     const savedFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const onDirtyChangeRef = useRef(onDirtyChange);
+    onDirtyChangeRef.current = onDirtyChange;
+    const loadedCommentIdsRef = useRef<Set<number>>(new Set());
 
     // Search hook
     const mdSearch = useMarkdownSearch(editorView);
@@ -118,7 +121,7 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
         syncNoteEntryLinks(aid, text).catch(() => {});
         needsReindexRef.current = true;
         setSaveStatus("saved");
-        onDirtyChange?.(false);
+        onDirtyChangeRef.current?.(false);
         // Fade "Saved" after 2s
         if (savedFadeTimerRef.current) clearTimeout(savedFadeTimerRef.current);
         savedFadeTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
@@ -198,6 +201,7 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
           dateModified: ann.dateModified,
         };
         view.dispatch({ effects: addComment.of(nc) });
+        loadedCommentIdsRef.current.add(ann.id);
         // Immediately open the popover for the new comment
         const coords = view.coordsAtPos(to);
         if (coords) {
@@ -241,6 +245,7 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       try {
         await deleteAnnotation(id, attachmentIdRef.current);
         viewRef.current?.dispatch({ effects: removeComment.of(id) });
+        loadedCommentIdsRef.current.delete(id);
         setActiveCommentState(null);
       } catch (err) {
         console.error("Failed to delete comment:", err);
@@ -405,6 +410,7 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
         if (cancelled) return;
         const docText = view.state.doc.toString();
         const comments: NoteComment[] = [];
+        const orphanedIds: number[] = [];
         for (const ann of annotations) {
           if (ann.annotationType !== "comment") continue;
           const nc = annotationToComment(ann);
@@ -416,9 +422,20 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
           );
           if (reanchored) {
             comments.push({ ...nc, startOffset: reanchored.startOffset, endOffset: reanchored.endOffset });
+          } else {
+            // Comment text no longer exists in document — clean up from DB
+            orphanedIds.push(ann.id);
           }
         }
+        // Track loaded comment IDs for orphan detection on save
+        loadedCommentIdsRef.current = new Set(comments.map((c) => c.id));
         view.dispatch({ effects: loadComments.of(comments) });
+        // Delete orphaned comments from database
+        for (const id of orphanedIds) {
+          deleteAnnotation(id, attachmentId).catch((err) =>
+            console.error("Failed to delete orphaned comment:", err)
+          );
+        }
       }).catch(console.error);
 
       return () => { cancelled = true; };
@@ -444,18 +461,29 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       return () => window.removeEventListener("wren:comment-click", handleCommentClick);
     }, []);
 
-    // Persist comment positions on save (fire-and-forget)
+    // Persist comment positions on save and clean up collapsed comments
     useEffect(() => {
       const view = viewRef.current;
       if (!view) return;
       if (saveStatus !== "saved") return;
 
       const comments = getCommentPositions(view);
+      const currentIds = new Set(comments.map((c) => c.id));
       for (const c of comments) {
         const docText = view.state.doc.toString();
         const posJson = buildPositionJson(c.startOffset, c.endOffset, c.selectedText, docText);
         updateAnnotation(c.id, { positionJson: posJson }).catch(() => {});
       }
+      // Delete comments that were in the editor but got collapsed during editing
+      for (const id of loadedCommentIdsRef.current) {
+        if (!currentIds.has(id)) {
+          deleteAnnotation(id, attachmentIdRef.current).catch((err) =>
+            console.error("Failed to delete collapsed comment:", err)
+          );
+        }
+      }
+      // Update tracked IDs to match current state
+      loadedCommentIdsRef.current = currentIds;
     }, [saveStatus]);
 
     // Listen for toolbar/palette "add comment" events

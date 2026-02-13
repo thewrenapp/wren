@@ -16,7 +16,7 @@ interface SchemaState {
   attachmentTypes: AttachmentType[];
 
   // Cache for item type info (includes fields and creator types per type)
-  itemTypeInfoCache: Map<string, ItemTypeInfo>;
+  itemTypeInfoCache: Record<string, ItemTypeInfo>;
 
   // Loading state
   isLoaded: boolean;
@@ -36,7 +36,7 @@ export const useSchemaStore = create<SchemaState>()((set, get) => ({
   creatorTypes: [],
   fields: [],
   attachmentTypes: [],
-  itemTypeInfoCache: new Map(),
+  itemTypeInfoCache: {},
   isLoaded: false,
   isLoading: false,
   error: null,
@@ -80,8 +80,8 @@ export const useSchemaStore = create<SchemaState>()((set, get) => ({
     const { itemTypeInfoCache } = get();
 
     // Check cache first
-    if (itemTypeInfoCache.has(itemType)) {
-      return itemTypeInfoCache.get(itemType)!;
+    if (itemType in itemTypeInfoCache) {
+      return itemTypeInfoCache[itemType];
     }
 
     try {
@@ -91,7 +91,7 @@ export const useSchemaStore = create<SchemaState>()((set, get) => ({
 
       // Update cache
       set((state) => ({
-        itemTypeInfoCache: new Map(state.itemTypeInfoCache).set(itemType, info),
+        itemTypeInfoCache: { ...state.itemTypeInfoCache, [itemType]: info },
       }));
 
       return info;

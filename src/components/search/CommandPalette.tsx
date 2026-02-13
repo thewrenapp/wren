@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import DOMPurify from "dompurify";
 import { Command } from "cmdk";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
@@ -2242,7 +2243,15 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       {/* Dialog */}
       <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
         <Command
-          shouldFilter={false}
+          filter={(value, search) => {
+            if (!search) return 1;
+            const searchLower = search.toLowerCase();
+            const valueLower = value.toLowerCase();
+            const words = searchLower.split(/\s+/).filter(Boolean);
+            if (words.every(w => valueLower.includes(w))) return 1;
+            if (valueLower.includes(searchLower)) return 1;
+            return 0;
+          }}
           className="rounded-xl border border-border/50 shadow-2xl bg-popover/95 backdrop-blur-xl overflow-hidden"
         >
           {/* Search input */}
@@ -2369,6 +2378,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                   <Command.Item
                     key={entry.id}
                     value={entry.title}
+                    forceMount
                     onSelect={() =>
                       handleSelect(() =>
                         openTab({
@@ -2423,6 +2433,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                   <Command.Item
                     key={`${result.entryId}-${result.attachmentId ?? 'meta'}-${idx}`}
                     value={`${result.title} ${result.snippet}`}
+                    forceMount
                     onSelect={() =>
                       handleSelect(() =>
                         openTab({
@@ -2453,7 +2464,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                       {result.snippet && (
                         <p
                           className="text-xs text-muted-foreground line-clamp-2 mt-0.5"
-                          dangerouslySetInnerHTML={{ __html: result.snippet }}
+                          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.snippet) }}
                         />
                       )}
                       <span className="text-xs text-muted-foreground/60 mt-0.5">
@@ -3274,7 +3285,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                       value="find in finder reveal file current tab"
                       onSelect={() => handleSelect(async () => {
                         if (!activeTab.entryId) return;
-                        try { await showEntryInFinder(Number(activeTab.entryId)); } catch {}
+                        try { await showEntryInFinder(Number(activeTab.entryId)); } catch (err) { console.error("Failed to show in Finder:", err); }
                       })}
                       className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                     >
