@@ -1034,3 +1034,38 @@ export async function getInlineTableRefs(tableKey: string): Promise<TableRef[]> 
 export async function getInlineTableInfo(key: string): Promise<InlineTableInfo> {
   return invoke('get_inline_table_info', { key });
 }
+
+// =====================================================
+// Entry Links / Backlinks
+// =====================================================
+
+export interface BacklinkInfo {
+  id: number;
+  sourceEntryId: number;
+  sourceEntryTitle: string;
+  sourceEntryKey: string;
+  noteAttachmentId?: number;
+  context?: string;
+  dateAdded: string;
+}
+
+export async function getEntryBacklinks(entryId: number): Promise<BacklinkInfo[]> {
+  return invoke('get_entry_backlinks', { entryId });
+}
+
+export async function syncNoteEntryLinks(attachmentId: number, markdownContent: string): Promise<void> {
+  return invoke('sync_note_entry_links', { attachmentId, markdownContent });
+}
+
+export async function createEntryLink(
+  sourceEntryId: number,
+  targetEntryId: number,
+  linkType: string,
+  context?: string,
+): Promise<number> {
+  return invoke('create_entry_link', { sourceEntryId, targetEntryId, linkType, context: context ?? null });
+}
+
+export async function deleteEntryLink(id: number): Promise<void> {
+  return invoke('delete_entry_link', { id });
+}

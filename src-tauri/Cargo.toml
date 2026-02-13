@@ -55,6 +55,9 @@ tantivy = "0.22"
 # BibTeX/BibLaTeX parsing and writing
 biblatex = "0.11"
 
+# Regex
+regex = "1"
+
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

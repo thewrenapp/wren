@@ -916,6 +916,144 @@ export const markdownRenderTheme = EditorView.theme({
   },
 
   // =====================================================
+  // Internal link widgets (entry, attachment, tag, collection)
+  // =====================================================
+  '.cm-md-entry-link, .cm-md-attachment-link, .cm-md-tag-link, .cm-md-collection-link': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '2px 8px',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '0.9em',
+    textDecoration: 'none',
+    transition: 'background-color 0.15s',
+    verticalAlign: 'middle',
+  },
+  // Entry links — primary/blue tint
+  '.cm-md-entry-link': {
+    backgroundColor: 'hsl(var(--primary) / 0.08)',
+    border: '1px solid hsl(var(--primary) / 0.2)',
+    color: 'hsl(var(--primary))',
+  },
+  '.cm-md-entry-link:hover': {
+    backgroundColor: 'hsl(var(--primary) / 0.15)',
+  },
+  '.cm-md-entry-link-icon': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    color: 'hsl(var(--primary) / 0.7)',
+  },
+  '.cm-md-entry-link-icon svg': {
+    width: '14px',
+    height: '14px',
+  },
+  // Attachment links — amber/orange tint
+  '.cm-md-attachment-link': {
+    backgroundColor: 'hsl(30 80% 55% / 0.08)',
+    border: '1px solid hsl(30 80% 55% / 0.2)',
+    color: 'hsl(30 80% 40%)',
+  },
+  '.cm-md-attachment-link:hover': {
+    backgroundColor: 'hsl(30 80% 55% / 0.15)',
+  },
+  '.cm-md-attachment-link-icon': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    color: 'hsl(30 80% 55% / 0.7)',
+  },
+  '.cm-md-attachment-link-icon svg': {
+    width: '14px',
+    height: '14px',
+  },
+  // Tag links — green tint
+  '.cm-md-tag-link': {
+    backgroundColor: 'hsl(142 50% 45% / 0.08)',
+    border: '1px solid hsl(142 50% 45% / 0.2)',
+    color: 'hsl(142 50% 35%)',
+  },
+  '.cm-md-tag-link:hover': {
+    backgroundColor: 'hsl(142 50% 45% / 0.15)',
+  },
+  '.cm-md-tag-link-icon': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    color: 'hsl(142 50% 45% / 0.7)',
+  },
+  '.cm-md-tag-link-icon svg': {
+    width: '14px',
+    height: '14px',
+  },
+  // Collection links — purple tint
+  '.cm-md-collection-link': {
+    backgroundColor: 'hsl(270 60% 55% / 0.08)',
+    border: '1px solid hsl(270 60% 55% / 0.2)',
+    color: 'hsl(270 60% 40%)',
+  },
+  '.cm-md-collection-link:hover': {
+    backgroundColor: 'hsl(270 60% 55% / 0.15)',
+  },
+  '.cm-md-collection-link-icon': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    color: 'hsl(270 60% 55% / 0.7)',
+  },
+  '.cm-md-collection-link-icon svg': {
+    width: '14px',
+    height: '14px',
+  },
+
+  // =====================================================
+  // Text highlight (==text==)
+  // =====================================================
+  '.cm-md-highlight': {
+    backgroundColor: 'rgba(255, 213, 0, 0.3)',
+    borderRadius: '2px',
+    padding: '1px 0',
+    boxDecorationBreak: 'clone',
+  },
+
+  // =====================================================
+  // Comment annotations
+  // =====================================================
+  '.cm-md-comment-highlight': {
+    backgroundColor: 'rgba(147, 130, 255, 0.15)',
+    borderBottom: '2px solid rgba(147, 130, 255, 0.5)',
+    borderRadius: '1px',
+    cursor: 'pointer',
+    transition: 'background-color 0.15s ease',
+  },
+  '.cm-md-comment-highlight.active': {
+    backgroundColor: 'rgba(147, 130, 255, 0.3)',
+    borderBottomColor: 'rgba(147, 130, 255, 0.8)',
+  },
+  '.cm-md-comment-indicator': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+    marginLeft: '2px',
+    verticalAlign: 'text-bottom',
+    cursor: 'pointer',
+    color: 'rgba(147, 130, 255, 0.6)',
+    borderRadius: '3px',
+    transition: 'color 0.15s ease, background-color 0.15s ease',
+  },
+  '.cm-md-comment-indicator:hover': {
+    color: 'rgba(147, 130, 255, 1)',
+    backgroundColor: 'rgba(147, 130, 255, 0.1)',
+  },
+  '.cm-md-comment-indicator.active': {
+    color: 'rgba(147, 130, 255, 1)',
+    backgroundColor: 'rgba(147, 130, 255, 0.15)',
+  },
+  '.cm-md-comment-indicator svg': {
+    width: '14px',
+    height: '14px',
+  },
+
+  // =====================================================
   // Search highlights
   // =====================================================
   '.cm-search-match': {

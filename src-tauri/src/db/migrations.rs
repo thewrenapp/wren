@@ -149,6 +149,9 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
     let _ = sqlx::query("INSERT OR IGNORE INTO annotation_types (id, name) VALUES (9, 'shape')")
         .execute(pool)
         .await;
+    let _ = sqlx::query("INSERT OR IGNORE INTO annotation_types (id, name) VALUES (10, 'comment')")
+        .execute(pool)
+        .await;
 
     // Migration: Add saved_searches table for Smart Filters
     let _ = sqlx::query(

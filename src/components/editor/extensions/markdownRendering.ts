@@ -1218,6 +1218,194 @@ class TableLinkWidget extends WidgetType {
   }
 }
 
+// =====================================================
+// EntryLinkWidget — clickable reference to a library entry
+// =====================================================
+
+class EntryLinkWidget extends WidgetType {
+  constructor(
+    readonly entryId: string,
+    readonly label: string,
+  ) {
+    super();
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-md-entry-link";
+
+    const icon = document.createElement("span");
+    icon.className = "cm-md-entry-link-icon";
+    icon.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`;
+    span.appendChild(icon);
+
+    const text = document.createElement("span");
+    text.textContent = this.label;
+    span.appendChild(text);
+
+    span.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(
+        new CustomEvent("wren:open-entry", {
+          detail: { entryId: parseInt(this.entryId) },
+        }),
+      );
+    });
+
+    span.addEventListener("mouseenter", () => {
+      span.title = this.label;
+    });
+
+    return span;
+  }
+
+  eq(other: EntryLinkWidget) {
+    return this.entryId === other.entryId && this.label === other.label;
+  }
+}
+
+// =====================================================
+// AttachmentLinkWidget — clickable reference to an attachment
+// =====================================================
+
+class AttachmentLinkWidget extends WidgetType {
+  constructor(
+    readonly attachmentId: string,
+    readonly label: string,
+  ) {
+    super();
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-md-attachment-link";
+
+    const icon = document.createElement("span");
+    icon.className = "cm-md-attachment-link-icon";
+    icon.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`;
+    span.appendChild(icon);
+
+    const text = document.createElement("span");
+    text.textContent = this.label;
+    span.appendChild(text);
+
+    span.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(
+        new CustomEvent("wren:open-attachment", {
+          detail: { attachmentId: parseInt(this.attachmentId) },
+        }),
+      );
+    });
+
+    span.addEventListener("mouseenter", () => {
+      span.title = this.label;
+    });
+
+    return span;
+  }
+
+  eq(other: AttachmentLinkWidget) {
+    return this.attachmentId === other.attachmentId && this.label === other.label;
+  }
+}
+
+// =====================================================
+// TagLinkWidget — clickable reference to a tag
+// =====================================================
+
+class TagLinkWidget extends WidgetType {
+  constructor(
+    readonly tagId: string,
+    readonly label: string,
+  ) {
+    super();
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-md-tag-link";
+
+    const icon = document.createElement("span");
+    icon.className = "cm-md-tag-link-icon";
+    icon.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>`;
+    span.appendChild(icon);
+
+    const text = document.createElement("span");
+    text.textContent = this.label;
+    span.appendChild(text);
+
+    span.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(
+        new CustomEvent("wren:navigate-tag", {
+          detail: { tagId: parseInt(this.tagId) },
+        }),
+      );
+    });
+
+    span.addEventListener("mouseenter", () => {
+      span.title = `Tag: ${this.label}`;
+    });
+
+    return span;
+  }
+
+  eq(other: TagLinkWidget) {
+    return this.tagId === other.tagId && this.label === other.label;
+  }
+}
+
+// =====================================================
+// CollectionLinkWidget — clickable reference to a collection
+// =====================================================
+
+class CollectionLinkWidget extends WidgetType {
+  constructor(
+    readonly collectionId: string,
+    readonly label: string,
+  ) {
+    super();
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-md-collection-link";
+
+    const icon = document.createElement("span");
+    icon.className = "cm-md-collection-link-icon";
+    icon.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+    span.appendChild(icon);
+
+    const text = document.createElement("span");
+    text.textContent = this.label;
+    span.appendChild(text);
+
+    span.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(
+        new CustomEvent("wren:navigate-collection", {
+          detail: { collectionId: parseInt(this.collectionId) },
+        }),
+      );
+    });
+
+    span.addEventListener("mouseenter", () => {
+      span.title = `Collection: ${this.label}`;
+    });
+
+    return span;
+  }
+
+  eq(other: CollectionLinkWidget) {
+    return this.collectionId === other.collectionId && this.label === other.label;
+  }
+}
+
 const CALLOUT_ICONS: Record<string, string> = {
   note: "\u270F\uFE0F",
   tip: "\uD83D\uDCA1",
@@ -1425,6 +1613,7 @@ const linkDeco = Decoration.mark({ class: "cm-md-link" });
 const blockquoteLineDeco = Decoration.line({ class: "cm-md-blockquote" });
 
 const hideDeco = Decoration.replace({});
+const highlightDeco = Decoration.mark({ class: "cm-md-highlight" });
 
 // =====================================================
 // Build decorations from syntax tree
@@ -1573,13 +1762,41 @@ function buildDecorations(view: EditorView): DecorationSet {
             const text = state.doc.sliceString(from, to);
             const labelMatch = text.match(/^\[([^\]]*)\]\(/);
 
-            // Check for wren-table: protocol — render as table link widget
+            // Check for wren-*: protocol — render as styled link widgets
             if (urlText.startsWith("wren-table:") && labelMatch) {
               const uuid = urlText.slice("wren-table:".length);
               const linkLabel = labelMatch[1];
               markDecorations.push(
                 Decoration.replace({
                   widget: new TableLinkWidget(uuid, linkLabel),
+                }).range(from, to),
+              );
+            } else if (urlText.startsWith("wren-entry:") && labelMatch) {
+              const entryId = urlText.slice("wren-entry:".length);
+              markDecorations.push(
+                Decoration.replace({
+                  widget: new EntryLinkWidget(entryId, labelMatch[1]),
+                }).range(from, to),
+              );
+            } else if (urlText.startsWith("wren-attachment:") && labelMatch) {
+              const attachmentId = urlText.slice("wren-attachment:".length);
+              markDecorations.push(
+                Decoration.replace({
+                  widget: new AttachmentLinkWidget(attachmentId, labelMatch[1]),
+                }).range(from, to),
+              );
+            } else if (urlText.startsWith("wren-tag:") && labelMatch) {
+              const tagId = urlText.slice("wren-tag:".length);
+              markDecorations.push(
+                Decoration.replace({
+                  widget: new TagLinkWidget(tagId, labelMatch[1]),
+                }).range(from, to),
+              );
+            } else if (urlText.startsWith("wren-collection:") && labelMatch) {
+              const collectionId = urlText.slice("wren-collection:".length);
+              markDecorations.push(
+                Decoration.replace({
+                  widget: new CollectionLinkWidget(collectionId, labelMatch[1]),
                 }).range(from, to),
               );
             } else if (labelMatch) {
@@ -1731,6 +1948,30 @@ function buildDecorations(view: EditorView): DecorationSet {
   }
 
   // =====================================================
+  // Highlight scanning (==text==)
+  // =====================================================
+  for (const { from: vpFrom, to: vpTo } of view.visibleRanges) {
+    const text = state.doc.sliceString(vpFrom, vpTo);
+
+    let hlMatch;
+    const highlightRegex = /==((?:(?!==).)+)==/g;
+    while ((hlMatch = highlightRegex.exec(text)) !== null) {
+      const matchFrom = vpFrom + hlMatch.index;
+      const matchTo = matchFrom + hlMatch[0].length;
+      const matchLineNum = state.doc.lineAt(matchFrom).number;
+      if (codeBlockLines.has(matchLineNum)) continue;
+      if (cursorInRange(view, matchFrom, matchTo)) continue;
+
+      // Hide opening ==
+      markDecorations.push(hideDeco.range(matchFrom, matchFrom + 2));
+      // Apply highlight to inner text
+      markDecorations.push(highlightDeco.range(matchFrom + 2, matchTo - 2));
+      // Hide closing ==
+      markDecorations.push(hideDeco.range(matchTo - 2, matchTo));
+    }
+  }
+
+  // =====================================================
   // Build final decoration set
   // =====================================================
 
@@ -1818,8 +2059,21 @@ export const markdownClickHandler = EditorView.domEventHandlers({
       },
     });
 
-    if (url) {
-      window.open(url, "_blank");
+    const resolvedUrl = url as string | null;
+    if (resolvedUrl) {
+      if (resolvedUrl.startsWith("wren-entry:")) {
+        window.dispatchEvent(new CustomEvent("wren:open-entry", { detail: { entryId: parseInt(resolvedUrl.slice("wren-entry:".length)) } }));
+      } else if (resolvedUrl.startsWith("wren-attachment:")) {
+        window.dispatchEvent(new CustomEvent("wren:open-attachment", { detail: { attachmentId: parseInt(resolvedUrl.slice("wren-attachment:".length)) } }));
+      } else if (resolvedUrl.startsWith("wren-tag:")) {
+        window.dispatchEvent(new CustomEvent("wren:navigate-tag", { detail: { tagId: parseInt(resolvedUrl.slice("wren-tag:".length)) } }));
+      } else if (resolvedUrl.startsWith("wren-collection:")) {
+        window.dispatchEvent(new CustomEvent("wren:navigate-collection", { detail: { collectionId: parseInt(resolvedUrl.slice("wren-collection:".length)) } }));
+      } else if (resolvedUrl.startsWith("wren-table:")) {
+        // Table links are handled by the widget click handler
+      } else {
+        window.open(resolvedUrl, "_blank");
+      }
       return true;
     }
     return false;

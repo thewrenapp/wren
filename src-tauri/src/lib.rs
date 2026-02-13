@@ -266,6 +266,11 @@ pub fn run() {
             commands::inline_tables::get_inline_table_as_markdown,
             commands::inline_tables::get_inline_table_refs,
             commands::inline_tables::get_inline_table_info,
+            // Entry Links / Backlinks
+            commands::entry_links::get_entry_backlinks,
+            commands::entry_links::sync_note_entry_links,
+            commands::entry_links::create_entry_link,
+            commands::entry_links::delete_entry_link,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

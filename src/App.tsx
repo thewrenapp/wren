@@ -7,6 +7,8 @@ import { AdvancedSearchDialog } from "@/components/search/AdvancedSearchDialog";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { getEntry, getAttachment } from "@/services/tauri";
 
 function AppShell() {
   const { theme, showWelcomeOnStartup } = useSettingsStore();
@@ -62,6 +64,58 @@ function AppShell() {
     };
     document.addEventListener("contextmenu", handleContextMenu);
     return () => document.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
+
+  // Global navigation event listeners for internal links (wren-entry:, wren-tag:, etc.)
+  useEffect(() => {
+    const handleOpenEntry = async (e: Event) => {
+      const { entryId } = (e as CustomEvent).detail;
+      // Navigate to library and select the entry
+      useTabStore.getState().openTab({ type: 'library', title: 'Library' });
+      useLibraryStore.getState().selectEntries([entryId]);
+    };
+
+    const handleOpenAttachment = async (e: Event) => {
+      const { attachmentId } = (e as CustomEvent).detail;
+      try {
+        // Look up which entry owns this attachment
+        const attachment = await getAttachment(attachmentId);
+        const entry = await getEntry(attachment.entryId);
+        useTabStore.getState().openTab({
+          type: 'entry',
+          title: entry.title,
+          entryId: String(attachment.entryId),
+          attachmentId: String(attachmentId),
+        });
+      } catch {
+        console.error('Failed to open attachment', attachmentId);
+      }
+    };
+
+    const handleNavigateTag = (e: Event) => {
+      const { tagId } = (e as CustomEvent).detail;
+      // Switch to library tab and apply tag filter
+      useTabStore.getState().openTab({ type: 'library', title: 'Library' });
+      useLibraryStore.getState().setFilter({ type: 'tag', ids: [tagId] });
+    };
+
+    const handleNavigateCollection = (e: Event) => {
+      const { collectionId } = (e as CustomEvent).detail;
+      // Switch to library tab and apply collection filter
+      useTabStore.getState().openTab({ type: 'library', title: 'Library' });
+      useLibraryStore.getState().setActiveCollection(collectionId);
+    };
+
+    window.addEventListener("wren:open-entry", handleOpenEntry);
+    window.addEventListener("wren:open-attachment", handleOpenAttachment);
+    window.addEventListener("wren:navigate-tag", handleNavigateTag);
+    window.addEventListener("wren:navigate-collection", handleNavigateCollection);
+    return () => {
+      window.removeEventListener("wren:open-entry", handleOpenEntry);
+      window.removeEventListener("wren:open-attachment", handleOpenAttachment);
+      window.removeEventListener("wren:navigate-tag", handleNavigateTag);
+      window.removeEventListener("wren:navigate-collection", handleNavigateCollection);
+    };
   }, []);
 
   return (

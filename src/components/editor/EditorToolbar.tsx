@@ -26,6 +26,8 @@ import {
   ChevronUp,
   ChevronDown,
   X,
+  Highlighter,
+  MessageCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -453,6 +455,22 @@ export function EditorToolbar({
     const handleMath = () => { if (v) insertInlineMath(v); };
     const handleCallout = () => { if (v) insertCallout(v, "Note"); };
     const handleHr = () => { if (v) insertHorizontalRule(v); };
+    const handleHighlight = () => { if (v) wrapSelection(v, "==", "=="); };
+    const handleLinkEntry = () => {
+      if (!v) return;
+      const cursor = v.state.selection.main.head;
+      window.dispatchEvent(new CustomEvent("wren:slash-search", { detail: { type: "entry", replaceFrom: cursor, replaceTo: cursor } }));
+    };
+    const handleLinkTag = () => {
+      if (!v) return;
+      const cursor = v.state.selection.main.head;
+      window.dispatchEvent(new CustomEvent("wren:slash-search", { detail: { type: "tag", replaceFrom: cursor, replaceTo: cursor } }));
+    };
+    const handleLinkCollection = () => {
+      if (!v) return;
+      const cursor = v.state.selection.main.head;
+      window.dispatchEvent(new CustomEvent("wren:slash-search", { detail: { type: "collection", replaceFrom: cursor, replaceTo: cursor } }));
+    };
 
     const events: [string, () => void][] = [
       ["wren:insert-new-table", handleInsertNewTable],
@@ -472,6 +490,10 @@ export function EditorToolbar({
       ["wren:editor-math", handleMath],
       ["wren:editor-callout", handleCallout],
       ["wren:editor-hr", handleHr],
+      ["wren:editor-highlight", handleHighlight],
+      ["wren:editor-link-entry", handleLinkEntry],
+      ["wren:editor-link-tag", handleLinkTag],
+      ["wren:editor-link-collection", handleLinkCollection],
     ];
     for (const [name, handler] of events) window.addEventListener(name, handler);
     return () => { for (const [name, handler] of events) window.removeEventListener(name, handler); };
@@ -511,6 +533,20 @@ export function EditorToolbar({
             label="Inline Code"
             shortcut="⌘E"
             onClick={() => v && wrapSelection(v, "`", "`")}
+          />
+          <ToolbarButton
+            icon={Highlighter}
+            label="Highlight"
+            shortcut="⌘⇧H"
+            onClick={() => v && wrapSelection(v, "==", "==")}
+          />
+          <ToolbarButton
+            icon={MessageCircle}
+            label="Comment"
+            shortcut="⌘⇧M"
+            onClick={() => {
+              if (v) window.dispatchEvent(new CustomEvent("wren:editor-add-comment", { detail: { view: v } }));
+            }}
           />
 
           <Divider />

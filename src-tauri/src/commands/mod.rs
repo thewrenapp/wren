@@ -2,6 +2,7 @@ pub mod annotations;
 pub mod collections;
 pub mod duplicates;
 pub mod entries;
+pub mod entry_links;
 pub mod export;
 pub mod import;
 pub mod inline_tables;

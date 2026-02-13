@@ -9048,6 +9048,7 @@ dependencies = [
  "hex",
  "kreuzberg",
  "lopdf 0.34.0",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

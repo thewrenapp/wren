@@ -69,6 +69,8 @@ import {
   Columns2,
   PanelLeftClose,
   ArrowRightFromLine,
+  Highlighter,
+  MessageCircle,
 } from "lucide-react";
 import { sidebarIcons } from "@/lib/icons";
 import { IconTagOff } from "@tabler/icons-react";
@@ -2927,6 +2929,32 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     <div className="flex-1"><span className="block text-sm font-medium">Horizontal Rule</span></div>
                   </Command.Item>
                   <Command.Item
+                    value="highlight mark yellow editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-highlight")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Highlighter className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Highlight</span>
+                      <span className="block text-xs text-muted-foreground">Highlight selected text</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="comment annotate note editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-add-comment")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <MessageCircle className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Add Comment</span>
+                      <span className="block text-xs text-muted-foreground">Comment on selected text</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
                     value="insert new table database editor"
                     onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:insert-new-table")); }}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
@@ -2950,6 +2978,45 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Insert Existing Table...</span>
                       <span className="block text-xs text-muted-foreground">Browse and embed or link to a table</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="insert link entry reference cite paper editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-link-entry")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <FileText className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Insert Entry Link</span>
+                      <span className="block text-xs text-muted-foreground">Link to a library entry</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="insert link tag reference label editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-link-tag")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Tag className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Insert Tag Link</span>
+                      <span className="block text-xs text-muted-foreground">Link to a tag</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="insert link collection folder group editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-link-collection")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <FolderOpen className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Insert Collection Link</span>
+                      <span className="block text-xs text-muted-foreground">Link to a collection</span>
                     </div>
                   </Command.Item>
                 </Command.Group>

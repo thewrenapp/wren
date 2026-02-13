@@ -35,8 +35,10 @@ import {
   removeEntryFromCollection,
   getTags,
   getCollections,
+  getEntryBacklinks,
   type Entry as TauriEntry,
   type Creator,
+  type BacklinkInfo,
 } from "@/services/tauri";
 import { openFileWithDefaultApp, getLibraryPath } from "@/services/tauri/commands";
 import type { ItemTypeInfo } from "@/types/schema";
@@ -70,6 +72,9 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   const [newTagName, setNewTagName] = useState("");
   const [isAddingCollection, setIsAddingCollection] = useState(false);
 
+  // Backlinks state
+  const [backlinks, setBacklinks] = useState<BacklinkInfo[]>([]);
+
   // Load schema on mount
   useEffect(() => {
     if (!isLoaded) {
@@ -86,6 +91,13 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
       })
       .catch(console.error);
   }, [entry.id, entryVersion, isTrashView]);
+
+  // Fetch backlinks
+  useEffect(() => {
+    getEntryBacklinks(entry.id)
+      .then(setBacklinks)
+      .catch(() => setBacklinks([]));
+  }, [entry.id, entryVersion]);
 
   // Fetch item type info when entry changes or edited item type changes
   useEffect(() => {
@@ -692,6 +704,38 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
           count={0}
         >
           <p className="text-sm text-muted-foreground">No related items</p>
+        </InfoSection>
+
+        {/* Backlinks Section */}
+        <InfoSection
+          title="Backlinks"
+          icon={<Link2 className="h-4 w-4" />}
+          count={backlinks.length}
+        >
+          {backlinks.length > 0 ? (
+            <div className="space-y-1">
+              {backlinks.map((bl) => (
+                <div
+                  key={bl.id}
+                  className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer"
+                  onClick={() => {
+                    const { openTab } = useTabStore.getState();
+                    openTab({
+                      type: "entry",
+                      title: bl.sourceEntryTitle,
+                      entryId: String(bl.sourceEntryId),
+                      attachmentId: bl.noteAttachmentId ? String(bl.noteAttachmentId) : undefined,
+                    });
+                  }}
+                >
+                  <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  <span className="text-sm flex-1 truncate">{bl.sourceEntryTitle}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No notes reference this entry</p>
+          )}
         </InfoSection>
 
         {/* Actions */}

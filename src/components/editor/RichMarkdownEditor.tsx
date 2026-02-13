@@ -9,9 +9,34 @@ import "katex/dist/katex.min.css";
 import debounce from "lodash.debounce";
 import { markdownRenderPlugin, markdownClickHandler, blockDecorationField, refreshBlockDecorations } from "./extensions/markdownRendering";
 import { markdownRenderTheme } from "./extensions/markdownTheme";
+import { slashCommandPlugin } from "./extensions/slashCommands";
+import {
+  noteAnnotationsField,
+  commentClickHandler,
+  loadComments,
+  addComment,
+  removeComment,
+  updateCommentText,
+  setActiveComment,
+  annotationToComment,
+  buildPositionJson,
+  reanchorComment,
+  getCommentPositions,
+  type NoteComment,
+} from "./extensions/noteAnnotations";
+import { SlashSearchPanel } from "./SlashSearchPanel";
+import { NoteCommentPopover } from "./NoteCommentPopover";
 import { EditorToolbar } from "./EditorToolbar";
 import { useMarkdownSearch, searchHighlightField } from "./useMarkdownSearch";
-import { saveMarkdownContent, reindexAttachment } from "@/services/tauri/commands";
+import {
+  saveMarkdownContent,
+  reindexAttachment,
+  syncNoteEntryLinks,
+  getAnnotations,
+  createAnnotation,
+  updateAnnotation,
+  deleteAnnotation,
+} from "@/services/tauri/commands";
 import { cn } from "@/lib/utils";
 import { initShiki, changeTheme } from "./extensions/shikiHighlighter";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -67,6 +92,20 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
     // Search hook
     const mdSearch = useMarkdownSearch(editorView);
 
+    // Slash search panel state
+    const [slashSearch, setSlashSearch] = useState<{
+      type: "entry" | "attachment" | "tag" | "collection";
+      replaceFrom: number;
+      replaceTo: number;
+      anchor: { x: number; y: number };
+    } | null>(null);
+
+    // Comment popover state
+    const [activeComment, setActiveCommentState] = useState<{
+      comment: NoteComment;
+      anchor: { x: number; y: number };
+    } | null>(null);
+
     // Keep attachmentId ref in sync
     attachmentIdRef.current = attachmentId;
 
@@ -75,6 +114,8 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       try {
         setSaveStatus("saving");
         await saveMarkdownContent(aid, text);
+        // Sync backlinks (fire-and-forget, don't block save indicator)
+        syncNoteEntryLinks(aid, text).catch(() => {});
         needsReindexRef.current = true;
         setSaveStatus("saved");
         onDirtyChange?.(false);
@@ -128,6 +169,90 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       }
     }, []);
 
+    // Add comment on current selection
+    const handleAddComment = useCallback(async (view: EditorView) => {
+      const { from, to } = view.state.selection.main;
+      if (from === to) return; // Need a selection
+      const selectedText = view.state.doc.sliceString(from, to);
+      const docText = view.state.doc.toString();
+      const posJson = buildPositionJson(from, to, selectedText, docText);
+      try {
+        const ann = await createAnnotation({
+          attachmentId: attachmentIdRef.current,
+          annotationType: "comment",
+          pageNumber: 0,
+          positionJson: posJson,
+          selectedText,
+          comment: "",
+          color: "#9382FF",
+        });
+        const nc: NoteComment = {
+          id: ann.id,
+          key: ann.key,
+          startOffset: from,
+          endOffset: to,
+          selectedText,
+          comment: "",
+          color: ann.color,
+          dateAdded: ann.dateAdded,
+          dateModified: ann.dateModified,
+        };
+        view.dispatch({ effects: addComment.of(nc) });
+        // Immediately open the popover for the new comment
+        const coords = view.coordsAtPos(to);
+        if (coords) {
+          // Small delay to let the decoration render first
+          setTimeout(() => {
+            const indicator = view.dom.querySelector(
+              `.cm-md-comment-indicator[data-comment-id="${ann.id}"]`,
+            );
+            const rect = indicator?.getBoundingClientRect();
+            const anchorX = (rect ? rect.left + rect.width / 2 : coords.left);
+            const anchorY = (rect ? rect.bottom : coords.bottom);
+            view.dispatch({ effects: setActiveComment.of(ann.id) });
+            setActiveCommentState({
+              comment: nc,
+              anchor: { x: anchorX, y: anchorY },
+            });
+          }, 50);
+        }
+      } catch (err) {
+        console.error("Failed to create comment:", err);
+      }
+    }, []);
+
+    // Update comment text
+    const handleUpdateComment = useCallback(async (id: number, text: string) => {
+      try {
+        await updateAnnotation(id, { comment: text }, attachmentIdRef.current);
+        viewRef.current?.dispatch({ effects: updateCommentText.of({ id, comment: text }) });
+        setActiveCommentState((prev) =>
+          prev && prev.comment.id === id
+            ? { ...prev, comment: { ...prev.comment, comment: text } }
+            : prev,
+        );
+      } catch (err) {
+        console.error("Failed to update comment:", err);
+      }
+    }, []);
+
+    // Delete comment
+    const handleDeleteComment = useCallback(async (id: number) => {
+      try {
+        await deleteAnnotation(id, attachmentIdRef.current);
+        viewRef.current?.dispatch({ effects: removeComment.of(id) });
+        setActiveCommentState(null);
+      } catch (err) {
+        console.error("Failed to delete comment:", err);
+      }
+    }, []);
+
+    // Close comment popover
+    const handleCloseComment = useCallback(() => {
+      setActiveCommentState(null);
+      viewRef.current?.dispatch({ effects: setActiveComment.of(null) });
+    }, []);
+
     // Keyboard shortcuts for formatting
     const formattingKeymap = keymap.of([
       {
@@ -166,6 +291,20 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
         },
       },
       {
+        key: "Mod-Shift-h",
+        run(view) {
+          wrapSelection(view, "==", "==");
+          return true;
+        },
+      },
+      {
+        key: "Mod-Shift-m",
+        run(view) {
+          handleAddComment(view);
+          return true;
+        },
+      },
+      {
         key: "Mod-Shift-r",
         run() {
           handleReindex();
@@ -186,6 +325,9 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
         markdownClickHandler,
         markdownRenderTheme,
         searchHighlightField,
+        slashCommandPlugin,
+        noteAnnotationsField,
+        commentClickHandler,
         EditorView.lineWrapping,
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -253,6 +395,98 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       return unsub;
     }, []);
 
+    // Load comment annotations when attachmentId changes
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+
+      let cancelled = false;
+      getAnnotations(attachmentId).then((annotations) => {
+        if (cancelled) return;
+        const docText = view.state.doc.toString();
+        const comments: NoteComment[] = [];
+        for (const ann of annotations) {
+          if (ann.annotationType !== "comment") continue;
+          const nc = annotationToComment(ann);
+          if (!nc) continue;
+          // Re-anchor if needed
+          const reanchored = reanchorComment(
+            { startOffset: nc.startOffset, endOffset: nc.endOffset, selectedText: nc.selectedText },
+            docText,
+          );
+          if (reanchored) {
+            comments.push({ ...nc, startOffset: reanchored.startOffset, endOffset: reanchored.endOffset });
+          }
+        }
+        view.dispatch({ effects: loadComments.of(comments) });
+      }).catch(console.error);
+
+      return () => { cancelled = true; };
+    }, [attachmentId]);
+
+    // Listen for comment click events (from the CM6 click handler)
+    useEffect(() => {
+      const handleCommentClick = (e: Event) => {
+        const { commentId, anchor } = (e as CustomEvent).detail;
+        if (commentId == null) {
+          setActiveCommentState(null);
+          return;
+        }
+        const view = viewRef.current;
+        if (!view) return;
+        const state = view.state.field(noteAnnotationsField);
+        const comment = state.comments.find((c) => c.id === commentId);
+        if (comment && anchor) {
+          setActiveCommentState({ comment, anchor });
+        }
+      };
+      window.addEventListener("wren:comment-click", handleCommentClick);
+      return () => window.removeEventListener("wren:comment-click", handleCommentClick);
+    }, []);
+
+    // Persist comment positions on save (fire-and-forget)
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      if (saveStatus !== "saved") return;
+
+      const comments = getCommentPositions(view);
+      for (const c of comments) {
+        const docText = view.state.doc.toString();
+        const posJson = buildPositionJson(c.startOffset, c.endOffset, c.selectedText, docText);
+        updateAnnotation(c.id, { positionJson: posJson }).catch(() => {});
+      }
+    }, [saveStatus]);
+
+    // Listen for toolbar/palette "add comment" events
+    useEffect(() => {
+      const handler = () => {
+        const view = viewRef.current;
+        if (view) handleAddComment(view);
+      };
+      window.addEventListener("wren:editor-add-comment", handler);
+      return () => window.removeEventListener("wren:editor-add-comment", handler);
+    }, [handleAddComment]);
+
+    // Listen for slash command reference search events
+    useEffect(() => {
+      const handleSlashSearch = (e: Event) => {
+        const { type, replaceFrom, replaceTo } = (e as CustomEvent).detail;
+        const view = viewRef.current;
+        if (!view) return;
+        const coords = view.coordsAtPos(replaceFrom);
+        if (!coords) return;
+        setSlashSearch({
+          type,
+          replaceFrom,
+          replaceTo,
+          anchor: { x: coords.left, y: coords.bottom },
+        });
+      };
+      window.addEventListener("wren:slash-search", handleSlashSearch);
+      return () => window.removeEventListener("wren:slash-search", handleSlashSearch);
+    }, []);
+
     // Update content when it changes externally (e.g., switching attachments)
     useEffect(() => {
       const view = viewRef.current;
@@ -290,6 +524,37 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
           />
         )}
         <div ref={containerRef} className="flex-1 overflow-hidden w-full min-w-0" />
+        {activeComment && (
+          <NoteCommentPopover
+            comment={activeComment.comment}
+            anchor={activeComment.anchor}
+            onUpdate={handleUpdateComment}
+            onDelete={handleDeleteComment}
+            onClose={handleCloseComment}
+          />
+        )}
+        {slashSearch && (
+          <SlashSearchPanel
+            type={slashSearch.type}
+            anchorPosition={slashSearch.anchor}
+            onSelect={({ label, url }) => {
+              const view = viewRef.current;
+              if (view) {
+                const linkText = `[${label}](${url})`;
+                view.dispatch({
+                  changes: {
+                    from: slashSearch.replaceFrom,
+                    to: slashSearch.replaceTo,
+                    insert: linkText,
+                  },
+                });
+                view.focus();
+              }
+              setSlashSearch(null);
+            }}
+            onClose={() => setSlashSearch(null)}
+          />
+        )}
       </div>
     );
   },
