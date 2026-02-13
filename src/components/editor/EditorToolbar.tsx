@@ -466,6 +466,11 @@ export function EditorToolbar({
       const cursor = v.state.selection.main.head;
       window.dispatchEvent(new CustomEvent("wren:slash-search", { detail: { type: "tag", replaceFrom: cursor, replaceTo: cursor } }));
     };
+    const handleLinkAttachment = () => {
+      if (!v) return;
+      const cursor = v.state.selection.main.head;
+      window.dispatchEvent(new CustomEvent("wren:slash-search", { detail: { type: "attachment", replaceFrom: cursor, replaceTo: cursor } }));
+    };
     const handleLinkCollection = () => {
       if (!v) return;
       const cursor = v.state.selection.main.head;
@@ -492,6 +497,7 @@ export function EditorToolbar({
       ["wren:editor-hr", handleHr],
       ["wren:editor-highlight", handleHighlight],
       ["wren:editor-link-entry", handleLinkEntry],
+      ["wren:editor-link-attachment", handleLinkAttachment],
       ["wren:editor-link-tag", handleLinkTag],
       ["wren:editor-link-collection", handleLinkCollection],
     ];

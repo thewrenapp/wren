@@ -71,6 +71,7 @@ import {
   ArrowRightFromLine,
   Highlighter,
   MessageCircle,
+  Paperclip,
 } from "lucide-react";
 import { sidebarIcons } from "@/lib/icons";
 import { IconTagOff } from "@tabler/icons-react";
@@ -2991,6 +2992,19 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Insert Entry Link</span>
                       <span className="block text-xs text-muted-foreground">Link to a library entry</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="insert link attachment file pdf note editor"
+                    onSelect={() => { setCommandPaletteOpen(false); window.dispatchEvent(new Event("wren:editor-link-attachment")); }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-green-500/10">
+                      <Paperclip className="h-4 w-4 text-green-500" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Insert Attachment Link</span>
+                      <span className="block text-xs text-muted-foreground">Link to an attachment</span>
                     </div>
                   </Command.Item>
                   <Command.Item

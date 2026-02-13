@@ -276,9 +276,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
         ],
       });
       if (selected) {
-        console.log('File dialog returned:', selected, typeof selected);
         const filePath = typeof selected === 'string' ? selected : (selected as any).path ?? String(selected);
-        console.log('Resolved file path:', filePath);
         await addFileAttachment(entry.id, filePath);
         invalidateAttachments();
         await refreshLibrary();

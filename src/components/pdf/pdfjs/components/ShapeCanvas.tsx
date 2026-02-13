@@ -119,8 +119,6 @@ export const ShapeCanvas = ({
       const pageInfo = findPageFromPoint(clientX, clientY);
       if (!pageInfo) return;
 
-      console.log("ShapeCanvas: Started drawing on page", pageInfo.pageNumber);
-
       setPageNumber(pageInfo.pageNumber);
       setPageRect(pageInfo.rect);
 
@@ -171,13 +169,10 @@ export const ShapeCanvas = ({
 
     // Minimum size check
     if (width < 10 || height < 10) {
-      console.log("ShapeCanvas: Shape too small, ignoring");
       setStartPoint(null);
       setCurrentPoint(null);
       return;
     }
-
-    console.log("ShapeCanvas: Creating shape", shapeType, "at", { minX, minY, width, height });
 
     // Create viewport position
     const viewportPosition: ViewportPosition = {
@@ -210,10 +205,8 @@ export const ShapeCanvas = ({
         x: (currentPoint.x - minX) / width,
         y: (currentPoint.y - minY) / height,
       };
-      console.log("ShapeCanvas: Arrow points", shapeData.startPoint, "->", shapeData.endPoint);
     }
 
-    console.log("ShapeCanvas: Created shape at position", scaledPosition);
     onComplete(scaledPosition, shapeData);
 
     // Reset state
@@ -274,7 +267,6 @@ export const ShapeCanvas = ({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Escape") {
-        console.log("ShapeCanvas: Cancelled via Escape");
         onCancel();
       }
     };

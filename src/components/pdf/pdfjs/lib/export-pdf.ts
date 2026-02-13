@@ -351,14 +351,6 @@ async function renderFreetextHighlight(
     parseInt(highlight.fontSize || "") || options.defaultFreetextFontSize || 14;
   const fontSize = storedFontSize * yRatio;
 
-  console.log("Freetext export:", {
-    storedFontSize,
-    yRatio,
-    fontSize,
-    boxDimensions: { x, y, width, height },
-    text: text.substring(0, 50),
-  });
-
   // Draw background (skip if transparent)
   const bgColorValue = highlight.backgroundColor || options.defaultFreetextBgColor || "#ffffc8";
   if (bgColorValue !== "transparent") {
@@ -482,12 +474,6 @@ async function renderImageHighlight(
       visualCoords.width,
       visualCoords.height
     );
-
-    console.log("Image export:", {
-      rotation: page.getRotation().angle,
-      visualCoords,
-      rawCoords,
-    });
 
     // Draw image filling the entire bounding box
     page.drawImage(image, {

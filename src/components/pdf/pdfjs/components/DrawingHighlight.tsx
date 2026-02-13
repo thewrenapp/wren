@@ -226,7 +226,6 @@ export const DrawingHighlight = ({
   const handleColorChange = useCallback((newColor: string) => {
     if (!strokes || !onStyleChange) return;
 
-    console.log("DrawingHighlight: Changing color to", newColor);
     const newStrokes = strokes.map((stroke) => ({
       ...stroke,
       color: newColor,
@@ -245,7 +244,6 @@ export const DrawingHighlight = ({
   const handleWidthChange = useCallback((newWidth: number) => {
     if (!strokes || !onStyleChange) return;
 
-    console.log("DrawingHighlight: Changing width to", newWidth);
     const newStrokes = strokes.map((stroke) => ({
       ...stroke,
       width: newWidth,

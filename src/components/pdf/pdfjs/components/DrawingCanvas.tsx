@@ -172,8 +172,6 @@ export const DrawingCanvas = ({
       const pageInfo = findPageFromPoint(clientX, clientY);
       if (!pageInfo) return;
 
-      console.log("DrawingCanvas: Started drawing on page", pageInfo.pageNumber);
-
       // Set page context if not already set
       if (pageNumber === null) {
         setPageNumber(pageInfo.pageNumber);
@@ -198,8 +196,6 @@ export const DrawingCanvas = ({
           void 0;
         }
       } else if (pageInfo.pageNumber !== pageNumber) {
-        // User trying to draw on different page - ignore
-        console.log("DrawingCanvas: Ignoring - different page");
         return;
       }
 
@@ -296,7 +292,6 @@ export const DrawingCanvas = ({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Escape") {
-        console.log("DrawingCanvas: Cancelled via Escape");
         onCancel();
       }
     };
@@ -307,7 +302,6 @@ export const DrawingCanvas = ({
 
   // Clear drawing
   const handleClear = () => {
-    console.log("DrawingCanvas: Cleared strokes");
     setStrokes([]);
     setCurrentStroke(null);
     setPageNumber(null);
@@ -318,12 +312,9 @@ export const DrawingCanvas = ({
   // Complete drawing
   const handleDone = () => {
     if (strokes.length === 0 || pageNumber === null || !viewer) {
-      console.log("DrawingCanvas: No strokes to save");
       onCancel();
       return;
     }
-
-    console.log("DrawingCanvas: Completing drawing with", strokes.length, "strokes");
 
     // Calculate bounding box of all strokes
     let minX = Infinity,
@@ -406,7 +397,6 @@ export const DrawingCanvas = ({
       })),
     }));
 
-    console.log("DrawingCanvas: Created drawing at position", scaledPosition);
     onComplete(dataUrl, scaledPosition, normalizedStrokes);
 
     // Reset state

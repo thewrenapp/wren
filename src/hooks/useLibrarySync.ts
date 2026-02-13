@@ -103,14 +103,6 @@ export function useLibrarySync() {
         tauri.getTrashCount(),
       ]);
 
-      // Debug: log first entry to check itemType fields
-      if (page.entries.length > 0) {
-        console.log('First entry itemType data:', {
-          itemType: page.entries[0].itemType,
-          itemTypeDisplay: page.entries[0].itemTypeDisplay,
-        });
-      }
-
       // Set data directly - no ID conversion needed (using numbers now)
       setEntries(page.entries);
       setCurrentTotal(page.total);

@@ -12,6 +12,7 @@ struct CollectionRow {
     description: Option<String>,
     color: Option<String>,
     icon: Option<String>,
+    parent_id: Option<i64>,
     item_count: i64,
 }
 
@@ -26,6 +27,7 @@ pub async fn get_collections(state: State<'_, AppState>) -> Result<Vec<Collectio
             c.description,
             c.color,
             c.icon,
+            c.parent_id,
             COALESCE((
                 SELECT COUNT(*)
                 FROM collection_entries ce
@@ -49,7 +51,7 @@ pub async fn get_collections(state: State<'_, AppState>) -> Result<Vec<Collectio
             description: c.description,
             color: c.color,
             icon: c.icon,
-            parent_id: None, // TODO: Add parent_id to query
+            parent_id: c.parent_id,
             item_count: c.item_count,
         })
         .collect())
