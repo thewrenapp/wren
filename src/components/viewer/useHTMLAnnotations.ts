@@ -333,55 +333,67 @@ export function useHTMLAnnotations(
   }, [injectCSS, removeRenderedElements, renderTextHighlight, renderSpatialHighlight]);
 
   // Load annotations from database
-  useEffect(() => {
-    async function loadAnnotations() {
-      setLoading(true);
-      try {
-        const annotations = await getAnnotations(Number(attachmentId));
-        const loaded: HTMLHighlight[] = annotations.map((ann: Annotation) => {
-          let position: HTMLPosition;
-          try {
-            position = JSON.parse(ann.positionJson) as HTMLPosition;
-          } catch {
-            // Fallback position
-            position = {
-              type: "text",
-              startContainerXPath: "",
-              startOffset: 0,
-              endContainerXPath: "",
-              endOffset: 0,
-              selectedText: ann.selectedText || "",
-              prefix: "",
-              suffix: "",
-              pageNumber: 1,
-            };
-          }
-
-          return {
-            id: String(ann.id),
-            dbId: ann.id,
-            type: ann.annotationType as HTMLAnnotationType,
-            position,
-            selectedText: ann.selectedText,
-            comment: ann.comment,
-            color: ann.color,
-            sectionHeading: (position as HTMLTextPosition).sectionHeading ||
-              (position as HTMLSpatialPosition).sectionHeading,
+  const loadAnnotations = useCallback(async () => {
+    setLoading(true);
+    try {
+      const annotations = await getAnnotations(Number(attachmentId));
+      const loaded: HTMLHighlight[] = annotations.map((ann: Annotation) => {
+        let position: HTMLPosition;
+        try {
+          position = JSON.parse(ann.positionJson) as HTMLPosition;
+        } catch {
+          // Fallback position
+          position = {
+            type: "text",
+            startContainerXPath: "",
+            startOffset: 0,
+            endContainerXPath: "",
+            endOffset: 0,
+            selectedText: ann.selectedText || "",
+            prefix: "",
+            suffix: "",
+            pageNumber: 1,
           };
-        });
+        }
 
-        setHighlights(loaded);
-      } catch (err) {
-        console.error("Failed to load annotations:", err);
-      } finally {
-        setLoading(false);
-      }
+        return {
+          id: String(ann.id),
+          dbId: ann.id,
+          type: ann.annotationType as HTMLAnnotationType,
+          position,
+          selectedText: ann.selectedText,
+          comment: ann.comment,
+          color: ann.color,
+          sectionHeading: (position as HTMLTextPosition).sectionHeading ||
+            (position as HTMLSpatialPosition).sectionHeading,
+        };
+      });
+
+      setHighlights(loaded);
+    } catch (err) {
+      console.error("Failed to load annotations:", err);
+    } finally {
+      setLoading(false);
     }
+  }, [attachmentId]);
 
+  useEffect(() => {
     if (attachmentId) {
       loadAnnotations();
     }
-  }, [attachmentId]);
+  }, [attachmentId, loadAnnotations]);
+
+  // Reload annotations when another view of the same attachment changes them
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { attachmentId: changedId } = (e as CustomEvent).detail;
+      if (changedId === Number(attachmentId)) {
+        loadAnnotations();
+      }
+    };
+    window.addEventListener("wren:annotations-changed", handler);
+    return () => window.removeEventListener("wren:annotations-changed", handler);
+  }, [attachmentId, loadAnnotations]);
 
   // Add text highlight from current selection
   const addTextHighlight = useCallback(
@@ -602,7 +614,7 @@ export function useHTMLAnnotations(
       if (!highlight) return;
 
       try {
-        await deleteAnnotation(highlight.dbId);
+        await deleteAnnotation(highlight.dbId, Number(attachmentId));
         removeRenderedElements(highlight);
         setHighlights((prev) => prev.filter((h) => h.id !== id));
       } catch (err) {
@@ -610,7 +622,7 @@ export function useHTMLAnnotations(
         toast.error("Failed to delete annotation");
       }
     },
-    [removeRenderedElements]
+    [removeRenderedElements, attachmentId]
   );
 
   // Update highlight color
@@ -641,7 +653,7 @@ export function useHTMLAnnotations(
         await updateAnnotation(highlight.dbId, {
           color,
           comment: updatedComment,
-        });
+        }, Number(attachmentId));
 
         // Update runtime elements
         if (highlight.runtimeElements) {
@@ -674,7 +686,7 @@ export function useHTMLAnnotations(
         toast.error("Failed to update annotation");
       }
     },
-    []
+    [attachmentId]
   );
 
   return {

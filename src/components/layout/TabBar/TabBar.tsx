@@ -145,6 +145,7 @@ function TabContextMenu({ tab, tabIndex, totalTabs, pane = "left", children }: {
       type: "entry",
       title: tab.title,
       entryId: tab.entryId,
+      attachmentId: tab.attachmentId,
     });
   }, [tab, openTab]);
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Bold,
   Italic,
@@ -23,6 +23,9 @@ import {
   TableProperties,
   PanelRight,
   PanelRightClose,
+  ChevronUp,
+  ChevronDown,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,6 +48,14 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { EditorView } from "@codemirror/view";
 import { cn } from "@/lib/utils";
 import {
@@ -53,6 +64,7 @@ import {
   type InlineTableSummary,
 } from "@/services/tauri";
 import { useUIStore } from "@/stores/uiStore";
+import type { SearchOptions } from "./useMarkdownSearch";
 
 // =====================================================
 // Formatting commands that dispatch CM6 transactions
@@ -219,6 +231,12 @@ interface EditorToolbarProps {
   onReindex?: () => void;
   infoPaneOpen?: boolean;
   onToggleInfoPane?: () => void;
+  onSearch?: (query: string, options: SearchOptions) => void;
+  onSearchNext?: () => void;
+  onSearchPrev?: () => void;
+  onSearchClear?: () => void;
+  searchMatchCount?: number;
+  searchCurrentMatch?: number;
 }
 
 interface ToolbarButtonProps {
@@ -299,6 +317,12 @@ export function EditorToolbar({
   onReindex,
   infoPaneOpen: infoPaneOpenProp,
   onToggleInfoPane,
+  onSearch,
+  onSearchNext,
+  onSearchPrev,
+  onSearchClear,
+  searchMatchCount = 0,
+  searchCurrentMatch = 0,
 }: EditorToolbarProps) {
   const v = editorView;
   const { infoPaneOpen: globalInfoPaneOpen, toggleInfoPane: globalToggleInfoPane, libraryLayout } = useUIStore();
@@ -309,6 +333,14 @@ export function EditorToolbar({
   const [existingTables, setExistingTables] = useState<InlineTableSummary[]>([]);
   const [tableSearch, setTableSearch] = useState("");
   const [tablePickerLoading, setTablePickerLoading] = useState(false);
+
+  // Search state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [highlightAll, setHighlightAll] = useState(true);
+  const [matchCase, setMatchCase] = useState(false);
+  const [wholeWords, setWholeWords] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const openTablePicker = useCallback(async () => {
     setTablePickerOpen(true);
@@ -322,6 +354,84 @@ export function EditorToolbar({
     } finally {
       setTablePickerLoading(false);
     }
+  }, []);
+
+  // Search handlers
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      setSearchQuery(value);
+      if (value) {
+        onSearch?.(value, { highlightAll, matchCase, wholeWords });
+      } else {
+        onSearchClear?.();
+      }
+    },
+    [onSearch, onSearchClear, highlightAll, matchCase, wholeWords],
+  );
+
+  const handleHighlightAllChange = useCallback(
+    (checked: boolean) => {
+      setHighlightAll(checked);
+      if (searchQuery) {
+        onSearch?.(searchQuery, { highlightAll: checked, matchCase, wholeWords });
+      }
+    },
+    [searchQuery, onSearch, matchCase, wholeWords],
+  );
+
+  const handleMatchCaseChange = useCallback(
+    (checked: boolean) => {
+      setMatchCase(checked);
+      if (searchQuery) {
+        onSearch?.(searchQuery, { highlightAll, matchCase: checked, wholeWords });
+      }
+    },
+    [searchQuery, onSearch, highlightAll, wholeWords],
+  );
+
+  const handleWholeWordsChange = useCallback(
+    (checked: boolean) => {
+      setWholeWords(checked);
+      if (searchQuery) {
+        onSearch?.(searchQuery, { highlightAll, matchCase, wholeWords: checked });
+      }
+    },
+    [searchQuery, onSearch, highlightAll, matchCase],
+  );
+
+  const handleCloseSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    onSearchClear?.();
+  }, [onSearchClear]);
+
+  useEffect(() => {
+    if (searchOpen) {
+      setTimeout(() => searchInputRef.current?.focus(), 100);
+    }
+  }, [searchOpen]);
+
+  // Keyboard shortcuts for search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+      if (e.key === "Escape" && searchOpen) {
+        handleCloseSearch();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [searchOpen, handleCloseSearch]);
+
+  // Listen for Command Palette search event
+  useEffect(() => {
+    const handleMdSearch = () => setSearchOpen(true);
+    window.addEventListener("wren:md-search", handleMdSearch);
+    return () => window.removeEventListener("wren:md-search", handleMdSearch);
   }, []);
 
   // Listen for Command Palette events
@@ -528,6 +638,80 @@ export function EditorToolbar({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Search popover */}
+          <Popover open={searchOpen} onOpenChange={(open) => {
+            if (open) {
+              setSearchOpen(true);
+            } else {
+              handleCloseSearch();
+            }
+          }}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn("h-7 w-7", searchOpen && "bg-accent")}
+              >
+                <Search className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80 p-3">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Input
+                    ref={searchInputRef}
+                    type="text"
+                    placeholder="Find in Document"
+                    value={searchQuery}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        if (e.shiftKey) {
+                          onSearchPrev?.();
+                        } else {
+                          onSearchNext?.();
+                        }
+                      }
+                    }}
+                    className="flex-1 h-8"
+                  />
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onSearchPrev} disabled={searchMatchCount === 0}>
+                    <ChevronUp className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onSearchNext} disabled={searchMatchCount === 0}>
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={handleCloseSearch}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                {searchQuery && (
+                  <div className="text-xs text-muted-foreground">
+                    {searchMatchCount > 0
+                      ? `${searchCurrentMatch} of ${searchMatchCount} matches`
+                      : "No matches found"}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-1.5">
+                    <Checkbox id="md-highlight-all" checked={highlightAll} onCheckedChange={(checked) => handleHighlightAllChange(checked === true)} />
+                    <Label htmlFor="md-highlight-all" className="text-xs cursor-pointer">Highlight all</Label>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Checkbox id="md-match-case" checked={matchCase} onCheckedChange={(checked) => handleMatchCaseChange(checked === true)} />
+                    <Label htmlFor="md-match-case" className="text-xs cursor-pointer">Match case</Label>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Checkbox id="md-whole-words" checked={wholeWords} onCheckedChange={(checked) => handleWholeWordsChange(checked === true)} />
+                    <Label htmlFor="md-whole-words" className="text-xs cursor-pointer">Whole words</Label>
+                  </div>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+
           {/* Save status */}
           {saveStatus !== "idle" && (
             <span

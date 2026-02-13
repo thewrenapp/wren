@@ -914,4 +914,37 @@ export const markdownRenderTheme = EditorView.theme({
     width: '14px',
     height: '14px',
   },
+
+  // =====================================================
+  // Search highlights
+  // =====================================================
+  '.cm-search-match': {
+    backgroundColor: 'rgba(255, 213, 0, 0.4)',
+    borderRadius: '2px',
+  },
+  '.cm-search-match.current': {
+    backgroundColor: 'rgba(255, 150, 0, 0.6)',
+  },
+  // Marks injected into table widget DOMs
+  '& .cm-md-itable-wrapper mark.cm-search-match': {
+    backgroundColor: 'rgba(255, 213, 0, 0.4)',
+    borderRadius: '2px',
+  },
+  '& .cm-md-itable-wrapper mark.cm-search-match.current': {
+    backgroundColor: 'rgba(255, 150, 0, 0.6)',
+  },
+  '& .cm-md-table-wrapper mark.cm-search-match': {
+    backgroundColor: 'rgba(255, 213, 0, 0.4)',
+    borderRadius: '2px',
+  },
+  '& .cm-md-table-wrapper mark.cm-search-match.current': {
+    backgroundColor: 'rgba(255, 150, 0, 0.6)',
+  },
+  '& .cm-md-codeblock-widget mark.cm-search-match': {
+    backgroundColor: 'rgba(255, 213, 0, 0.4)',
+    borderRadius: '2px',
+  },
+  '& .cm-md-codeblock-widget mark.cm-search-match.current': {
+    backgroundColor: 'rgba(255, 150, 0, 0.6)',
+  },
 });

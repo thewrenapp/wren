@@ -658,18 +658,31 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
   }, [filePath]);
 
   // Load annotations from database
-  useEffect(() => {
-    async function loadAnnotations() {
-      try {
-        const annotations = await getAnnotations(parseInt(attachmentId, 10));
-        const appHighlights = annotations.map(convertAnnotationToHighlight);
-        setHighlights(appHighlights);
-      } catch {
-        // Failed to load annotations
-      }
+  const loadAnnotations = useCallback(async () => {
+    try {
+      const annotations = await getAnnotations(parseInt(attachmentId, 10));
+      const appHighlights = annotations.map(convertAnnotationToHighlight);
+      setHighlights(appHighlights);
+    } catch {
+      // Failed to load annotations
     }
-    loadAnnotations();
   }, [attachmentId]);
+
+  useEffect(() => {
+    loadAnnotations();
+  }, [loadAnnotations]);
+
+  // Reload annotations when another view of the same attachment changes them
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { attachmentId: changedId } = (e as CustomEvent).detail;
+      if (changedId === parseInt(attachmentId, 10)) {
+        loadAnnotations();
+      }
+    };
+    window.addEventListener("wren:annotations-changed", handler);
+    return () => window.removeEventListener("wren:annotations-changed", handler);
+  }, [attachmentId, loadAnnotations]);
 
   function convertAnnotationToHighlight(annotation: Annotation): AppHighlight {
     const position = JSON.parse(annotation.positionJson) as ScaledPosition;
@@ -943,12 +956,12 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
       }
 
       try {
-        await updateAnnotation(parseInt(highlightId, 10), { color: newColor });
+        await updateAnnotation(parseInt(highlightId, 10), { color: newColor }, parseInt(attachmentId, 10));
       } catch {
         // Failed to update in DB
       }
     },
-    []
+    [attachmentId]
   );
 
   // Edit highlight
@@ -1008,13 +1021,13 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
           }
         }
         if (Object.keys(updates).length > 0) {
-          await updateAnnotation(parseInt(highlightId, 10), updates);
+          await updateAnnotation(parseInt(highlightId, 10), updates, parseInt(attachmentId, 10));
         }
       } catch {
         // Failed to update
       }
     },
-    [highlights]
+    [highlights, attachmentId]
   );
 
   // Delete highlight
@@ -1027,13 +1040,13 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
     }
 
     try {
-      await deleteAnnotation(parseInt(highlightId, 10));
+      await deleteAnnotation(parseInt(highlightId, 10), parseInt(attachmentId, 10));
       setHighlights((prev) => prev.filter((h) => h.id !== highlightId));
     } catch {
       // Failed to delete from DB, but still remove from UI
       setHighlights((prev) => prev.filter((h) => h.id !== highlightId));
     }
-  }, []);
+  }, [attachmentId]);
 
   // Zoom controls - apply scale directly to viewer
   const zoomIn = useCallback(() => {

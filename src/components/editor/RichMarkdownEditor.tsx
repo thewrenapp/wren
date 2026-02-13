@@ -10,6 +10,7 @@ import debounce from "lodash.debounce";
 import { markdownRenderPlugin, markdownClickHandler, blockDecorationField, refreshBlockDecorations } from "./extensions/markdownRendering";
 import { markdownRenderTheme } from "./extensions/markdownTheme";
 import { EditorToolbar } from "./EditorToolbar";
+import { useMarkdownSearch, searchHighlightField } from "./useMarkdownSearch";
 import { saveMarkdownContent, reindexAttachment } from "@/services/tauri/commands";
 import { cn } from "@/lib/utils";
 import { initShiki, changeTheme } from "./extensions/shikiHighlighter";
@@ -62,6 +63,9 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
     const needsReindexRef = useRef(false);
     const attachmentIdRef = useRef(attachmentId);
     const savedFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Search hook
+    const mdSearch = useMarkdownSearch(editorView);
 
     // Keep attachmentId ref in sync
     attachmentIdRef.current = attachmentId;
@@ -181,6 +185,7 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
         blockDecorationField,
         markdownClickHandler,
         markdownRenderTheme,
+        searchHighlightField,
         EditorView.lineWrapping,
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -276,6 +281,12 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
             onReindex={handleReindex}
             infoPaneOpen={infoPaneOpen}
             onToggleInfoPane={onToggleInfoPane}
+            onSearch={mdSearch.search}
+            onSearchNext={mdSearch.searchNext}
+            onSearchPrev={mdSearch.searchPrev}
+            onSearchClear={mdSearch.clearSearch}
+            searchMatchCount={mdSearch.matchCount}
+            searchCurrentMatch={mdSearch.currentMatch}
           />
         )}
         <div ref={containerRef} className="flex-1 overflow-hidden w-full min-w-0" />

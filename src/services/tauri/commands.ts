@@ -630,15 +630,23 @@ export async function getAnnotations(attachmentId: number): Promise<Annotation[]
 }
 
 export async function createAnnotation(input: CreateAnnotationInput): Promise<Annotation> {
-  return invoke('create_annotation', { input });
+  const result = await invoke<Annotation>('create_annotation', { input });
+  window.dispatchEvent(new CustomEvent('wren:annotations-changed', { detail: { attachmentId: input.attachmentId } }));
+  return result;
 }
 
-export async function updateAnnotation(id: number, input: UpdateAnnotationInput): Promise<void> {
-  return invoke('update_annotation', { id, input });
+export async function updateAnnotation(id: number, input: UpdateAnnotationInput, attachmentId?: number): Promise<void> {
+  await invoke('update_annotation', { id, input });
+  if (attachmentId != null) {
+    window.dispatchEvent(new CustomEvent('wren:annotations-changed', { detail: { attachmentId } }));
+  }
 }
 
-export async function deleteAnnotation(id: number): Promise<void> {
-  return invoke('delete_annotation', { id });
+export async function deleteAnnotation(id: number, attachmentId?: number): Promise<void> {
+  await invoke('delete_annotation', { id });
+  if (attachmentId != null) {
+    window.dispatchEvent(new CustomEvent('wren:annotations-changed', { detail: { attachmentId } }));
+  }
 }
 
 // =====================================================
