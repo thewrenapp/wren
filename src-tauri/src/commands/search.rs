@@ -223,14 +223,9 @@ pub async fn save_markdown_content(
 pub async fn reindex_attachment(
     state: State<'_, AppState>,
     attachment_id: i64,
-    enable_ocr: Option<bool>,
-    force_ocr: Option<bool>,
+    _enable_ocr: Option<bool>,
+    _force_ocr: Option<bool>,
 ) -> Result<(), String> {
-    let config = ExtractionConfig {
-        enable_ocr: enable_ocr.unwrap_or(true),
-        force_ocr: force_ocr.unwrap_or(false),
-    };
-
     // Get attachment info
     #[derive(Debug, FromRow)]
     struct AttachmentInfoRow {
@@ -258,55 +253,48 @@ pub async fn reindex_attachment(
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "Attachment not found".to_string())?;
 
-    let library_path = state.library_path.read().await;
     let is_note = attachment.attachment_type == "note";
 
-    // Resolve the file path to read from.
-    // For notes, markdown_path may be set even if file_path is NULL (legacy notes).
-    let full_path = if let Some(ref fp) = attachment.file_path {
-        library_path.join(fp)
-    } else {
-        // Fall back to markdown_path (for notes that haven't been re-saved with file_path)
-        let md_row: Option<MarkdownPathRow> = sqlx::query_as(
-            "SELECT markdown_path FROM attachments WHERE id = ?",
-        )
-        .bind(attachment_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        match md_row.and_then(|r| r.markdown_path) {
-            Some(md_path) => library_path.join(&md_path),
-            None => return Err("Attachment has no file path".to_string()),
-        }
-    };
-
-    if !full_path.exists() {
-        return Err(format!("File not found: {}", full_path.display()));
-    }
-
-    // Delete existing index document for this attachment
-    state
-        .search_index
-        .delete_attachment(attachment_id)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let attachment_data = crate::search::indexer::AttachmentData {
-        entry_id: attachment.entry_id,
-        entry_key: attachment.entry_key,
-        attachment_id: attachment.id,
-        title: attachment.entry_title,
-        file_path: full_path.to_string_lossy().to_string(),
-        content_source: attachment.attachment_type,
-    };
-
     if is_note {
-        // Notes: read markdown, expand inline tables, index the expanded text.
-        // Do NOT call save_markdown (the .md file IS the note itself).
-        let raw_text = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
+        // Notes: read markdown, expand inline tables, index inline (fast, no OCR).
+        let library_path = state.library_path.read().await;
+        let full_path = if let Some(ref fp) = attachment.file_path {
+            library_path.join(fp)
+        } else {
+            let md_row: Option<MarkdownPathRow> = sqlx::query_as(
+                "SELECT markdown_path FROM attachments WHERE id = ?",
+            )
+            .bind(attachment_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
 
-        // Expand <!-- wren-table:UUID --> placeholders to actual markdown tables
+            match md_row.and_then(|r| r.markdown_path) {
+                Some(md_path) => library_path.join(&md_path),
+                None => return Err("Attachment has no file path".to_string()),
+            }
+        };
+
+        if !full_path.exists() {
+            return Err(format!("File not found: {}", full_path.display()));
+        }
+
+        state
+            .search_index
+            .delete_attachment(attachment_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let attachment_data = crate::search::indexer::AttachmentData {
+            entry_id: attachment.entry_id,
+            entry_key: attachment.entry_key,
+            attachment_id: attachment.id,
+            title: attachment.entry_title,
+            file_path: full_path.to_string_lossy().to_string(),
+            content_source: attachment.attachment_type,
+        };
+
+        let raw_text = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
         let expanded_text = expand_inline_tables(&state.db, &raw_text).await;
 
         match state
@@ -331,105 +319,37 @@ pub async fn reindex_attachment(
             }
         }
 
-        // Update inline table refs from the raw (unexpanded) content
         update_inline_table_refs(&state.db, attachment_id, &raw_text).await;
-    } else {
-        // Non-note attachments: extract text, index, save markdown alongside original file
-        match state
+
+        state
             .search_index
-            .index_attachment_content(&attachment_data, &config)
+            .commit()
             .await
-        {
-            Ok(result) => {
-                let worth_saving = result
-                    .extracted_text
-                    .as_ref()
-                    .map_or(false, |t| is_worth_saving(t));
-                if worth_saving {
-                    if let Some(ref text) = result.extracted_text {
-                        if let Ok(md_path) = save_markdown(&full_path, text) {
-                            let relative_md = md_path
-                                .strip_prefix(&*library_path)
-                                .ok()
-                                .map(|p| p.to_string_lossy().to_string());
-                            if let Some(rel) = relative_md {
-                                let _ = sqlx::query(
-                                    "UPDATE attachments SET markdown_path = ? WHERE id = ?",
-                                )
-                                .bind(&rel)
-                                .bind(attachment_id)
-                                .execute(&state.db)
-                                .await;
-                            }
-                        }
-                    }
-                } else {
-                    // Clear stale markdown_path and remove old .md file
-                    let stale_md = markdown_path_for(&full_path);
-                    let _ = std::fs::remove_file(&stale_md);
-                    let _ = sqlx::query(
-                        "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
-                    )
-                    .bind(attachment_id)
-                    .execute(&state.db)
-                    .await;
-                }
-                tracing::info!(
-                    "Reindexed attachment {}: method={}, chars={}",
-                    attachment_id,
-                    result.method.as_str(),
-                    result
-                        .extracted_text
-                        .as_ref()
-                        .map_or(0, |t| t.len())
-                );
-            }
-            Err(e) => {
-                tracing::warn!("Failed to reindex attachment {}: {}", attachment_id, e);
-                return Err(format!("Extraction failed: {}", e));
-            }
-        }
-
-        // Update inline table refs from the markdown file for non-note attachments
-        let md_row: Option<MarkdownPathRow> = sqlx::query_as(
-            "SELECT markdown_path FROM attachments WHERE id = ?",
-        )
-        .bind(attachment_id)
-        .fetch_optional(&state.db)
-        .await
-        .unwrap_or(None);
-
-        if let Some(md_path) = md_row.and_then(|r| r.markdown_path) {
-            let md_full = library_path.join(&md_path);
-            if let Ok(md_content) = std::fs::read_to_string(&md_full) {
-                update_inline_table_refs(&state.db, attachment_id, &md_content).await;
-            }
-        }
+            .map_err(|e| e.to_string())?;
+    } else {
+        // Non-note attachments: enqueue background OCR extraction job
+        let title = attachment.entry_title.as_deref().unwrap_or("attachment");
+        state.job_queue.enqueue(
+            crate::jobs::types::JobType::OcrExtract,
+            Some(format!("Re-extract: {}", title)),
+            serde_json::json!({ "attachmentId": attachment_id }),
+            0,
+        ).await.map_err(|e| format!("Failed to enqueue OCR job: {}", e))?;
     }
-
-    // Commit changes
-    state
-        .search_index
-        .commit()
-        .await
-        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
-/// Reindex a single entry and its attachments
+/// Reindex a single entry and its attachments.
+/// Metadata and annotations are indexed inline (fast).
+/// Non-note attachment OCR extraction is enqueued as a background job.
 #[tauri::command]
 pub async fn reindex_entry(
     state: State<'_, AppState>,
     entry_id: i64,
-    enable_ocr: Option<bool>,
-    force_ocr: Option<bool>,
+    _enable_ocr: Option<bool>,
+    _force_ocr: Option<bool>,
 ) -> Result<(), String> {
-    let config = ExtractionConfig {
-        enable_ocr: enable_ocr.unwrap_or(true),
-        force_ocr: force_ocr.unwrap_or(false),
-    };
-
     // First delete existing documents for this entry
     state
         .search_index
@@ -493,7 +413,7 @@ pub async fn reindex_entry(
 
     let abstract_text = abstract_row.and_then(|r| r.value);
 
-    // Index metadata
+    // Index metadata (fast, inline)
     let metadata = crate::search::indexer::EntryMetadata {
         entry_id,
         entry_key: entry.key.clone(),
@@ -514,7 +434,6 @@ pub async fn reindex_entry(
         .map_err(|e| e.to_string())?;
 
     // Get attachments
-    let library_path = state.library_path.read().await;
     let attachments: Vec<AttachmentRow> = sqlx::query_as(
         r#"
         SELECT a.id, a.file_path, at.name as attachment_type
@@ -528,65 +447,21 @@ pub async fn reindex_entry(
     .await
     .unwrap_or_default();
 
-    for attachment in attachments {
-        if let Some(file_path) = attachment.file_path {
-            let full_path = library_path.join(&file_path);
-            if full_path.exists() {
-                let attachment_data = crate::search::indexer::AttachmentData {
-                    entry_id,
-                    entry_key: entry.key.clone(),
-                    attachment_id: attachment.id,
-                    title: entry.title.clone(),
-                    file_path: full_path.to_string_lossy().to_string(),
-                    content_source: attachment.attachment_type.clone(),
-                };
-
-                match state
-                    .search_index
-                    .index_attachment_content(&attachment_data, &config)
-                    .await
-                {
-                    Ok(result) => {
-                        // Save markdown alongside original if extraction is substantial
-                        let worth_saving = result.extracted_text.as_ref().map_or(false, |t| is_worth_saving(t));
-                        if worth_saving {
-                            if let Some(ref text) = result.extracted_text {
-                                if let Ok(md_path) = save_markdown(&full_path, text) {
-                                    let relative_md =
-                                        md_path.strip_prefix(&*library_path).ok().map(|p| {
-                                            p.to_string_lossy().to_string()
-                                        });
-                                    if let Some(rel) = relative_md {
-                                        let _ = sqlx::query(
-                                            "UPDATE attachments SET markdown_path = ? WHERE id = ?",
-                                        )
-                                        .bind(&rel)
-                                        .bind(attachment.id)
-                                        .execute(&state.db)
-                                        .await;
-                                    }
-                                }
-                            }
-                        } else {
-                            // Clear stale markdown_path and remove old .md file
-                            let stale_md = markdown_path_for(&full_path);
-                            let _ = std::fs::remove_file(&stale_md);
-                            let _ = sqlx::query(
-                                "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
-                            )
-                            .bind(attachment.id)
-                            .execute(&state.db)
-                            .await;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to index attachment {}: {}", attachment.id, e);
-                    }
-                }
+    for attachment in &attachments {
+        // Enqueue OCR extraction job for non-note attachments
+        if attachment.file_path.is_some() && attachment.attachment_type != "note" {
+            let title = entry.title.as_deref().unwrap_or("attachment");
+            if let Err(e) = state.job_queue.enqueue(
+                crate::jobs::types::JobType::OcrExtract,
+                Some(format!("Re-extract: {}", title)),
+                serde_json::json!({ "attachmentId": attachment.id }),
+                0,
+            ).await {
+                tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", attachment.id, e);
             }
         }
 
-        // Index annotations for this attachment
+        // Index annotations inline (no OCR, just text from DB)
         let annotations: Vec<AnnotationRow> = sqlx::query_as(
             r#"
             SELECT selected_text, comment
@@ -600,7 +475,6 @@ pub async fn reindex_entry(
         .unwrap_or_default();
 
         if !annotations.is_empty() {
-            // Combine all annotations for this attachment
             let selected_texts: Vec<String> = annotations
                 .iter()
                 .filter_map(|a| a.selected_text.clone())
@@ -641,7 +515,7 @@ pub async fn reindex_entry(
         }
     }
 
-    // Commit changes
+    // Commit metadata and annotation index changes
     state
         .search_index
         .commit()

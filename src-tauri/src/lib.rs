@@ -1,13 +1,14 @@
 pub mod commands;
 pub mod db;
 pub mod filename;
+pub mod jobs;
 pub mod pdf;
 pub mod search;
 pub mod state;
 
 use state::AppState;
 use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, RunEvent};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -271,7 +272,22 @@ pub fn run() {
             commands::entry_links::sync_note_entry_links,
             commands::entry_links::create_entry_link,
             commands::entry_links::delete_entry_link,
+            // Jobs
+            jobs::commands::enqueue_job,
+            jobs::commands::get_jobs,
+            jobs::commands::get_job,
+            jobs::commands::cancel_job,
+            jobs::commands::retry_job,
+            jobs::commands::clear_finished_jobs,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error building tauri application")
+        .run(|app_handle, event| {
+            if let RunEvent::Exit = event {
+                // Graceful shutdown: cancel running jobs and let restartable
+                // ones be recovered on next startup
+                let state = app_handle.state::<AppState>();
+                tauri::async_runtime::block_on(state.job_queue.shutdown());
+            }
+        });
 }

@@ -18,6 +18,7 @@ import { useLibrarySync } from '@/hooks/useLibrarySync';
 import { useEffect, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from '@/stores/toastStore';
+import { useJobStore } from '@/stores/jobStore';
 import { cn } from '@/lib/utils';
 import {
   DndContext,
@@ -138,6 +139,12 @@ export function AppLayout() {
     return () => {
       unlisten.then((fn) => fn());
     };
+  }, []);
+
+  // Initialize job queue listener
+  useEffect(() => {
+    useJobStore.getState().startListening();
+    return () => useJobStore.getState().stopListening();
   }, []);
 
   // Auto-hide sidebar when window is narrow

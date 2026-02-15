@@ -106,6 +106,7 @@ import {
   permanentDeleteEntry,
   getTrashCount,
   addPdfAttachment,
+  addFileAttachment,
   deleteCollection,
   updateCollection,
   getCollections,
@@ -121,7 +122,6 @@ import {
   importAnnotationsFromPdf,
   getEntryAttachments,
   fullTextSearch,
-  reindexLibrary,
   type ExportOptions,
   type BiblatexPreviewResult,
   type Attachment,
@@ -1255,6 +1255,30 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       toast.error("Failed to create note");
     }
     setCommandPaletteOpen(false);
+  };
+
+  // Attach existing markdown file handler
+  const handleAddMarkdownAttachment = async () => {
+    if (selectedEntryIds.length !== 1) {
+      toast.warning("Select exactly one entry to attach a file");
+      return;
+    }
+    setCommandPaletteOpen(false);
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Markdown", extensions: ["md", "txt"] }],
+      });
+      if (selected && typeof selected === "string") {
+        await addFileAttachment(selectedEntryIds[0], selected);
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.success("Markdown file attached");
+      }
+    } catch (err) {
+      console.error("Add markdown attachment error:", err);
+      toast.error("Failed to attach markdown file");
+    }
   };
 
   // Navigation handler
@@ -3509,7 +3533,21 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                             <StickyNote className="h-4 w-4 text-green-500" />
                           </div>
                           <div className="flex-1">
-                            <span className="block text-sm font-medium">Create Note</span>
+                            <span className="block text-sm font-medium">Add Note</span>
+                            <span className="block text-xs text-muted-foreground">Create a new note for this entry</span>
+                          </div>
+                        </Command.Item>
+                        <Command.Item
+                          value="attach markdown file md text"
+                          onSelect={handleAddMarkdownAttachment}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                        >
+                          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                            <FileText className="h-4 w-4 text-blue-500" />
+                          </div>
+                          <div className="flex-1">
+                            <span className="block text-sm font-medium">Attach Markdown File...</span>
+                            <span className="block text-xs text-muted-foreground">Attach an existing markdown file</span>
                           </div>
                         </Command.Item>
                         <Command.Item
@@ -4168,18 +4206,19 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     <div className="flex-1"><span className="block text-sm font-medium">Reset Columns to Default</span></div>
                   </Command.Item>
                   <Command.Item
-                    value="reindex entire library re-extract all"
+                    value="reindex entire library re-extract all background"
                     onSelect={async () => {
                       setCommandPaletteOpen(false);
-                      const loadingId = toast.loading("Re-extracting entire library...");
                       try {
-                        await reindexLibrary();
-                        toast.dismiss(loadingId);
-                        toast.success("Library re-extraction complete");
-                        refreshLibrary();
+                        const { useJobStore } = await import("@/stores/jobStore");
+                        await useJobStore.getState().enqueueJob(
+                          "reindex_library",
+                          { enableOcr: true, forceOcr: false },
+                          { title: "Reindex Library" }
+                        );
+                        toast.info("Library reindex started in background");
                       } catch (err) {
-                        toast.dismiss(loadingId);
-                        toast.error(`Re-extraction failed: ${err}`);
+                        toast.error(`Failed to start reindex: ${err}`);
                       }
                     }}
                     className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
@@ -4189,7 +4228,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     </div>
                     <div className="flex-1">
                       <span className="block text-sm font-medium">Reindex Entire Library</span>
-                      <span className="text-xs text-muted-foreground">Re-extract text from all documents</span>
+                      <span className="text-xs text-muted-foreground">Re-extract text from all documents (background task)</span>
                     </div>
                   </Command.Item>
                 </Command.Group>

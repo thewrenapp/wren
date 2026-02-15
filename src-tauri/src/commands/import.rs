@@ -1,7 +1,6 @@
 use crate::filename;
 use crate::pdf;
-use crate::search::extractor::{is_worth_saving, save_markdown, ExtractionConfig};
-use crate::search::indexer::{AttachmentData, EntryMetadata};
+use crate::search::indexer::EntryMetadata;
 use crate::state::AppState;
 use crate::commands::settings::is_setting_enabled;
 use biblatex::{Bibliography, Chunk, Entry, EntryType, Spanned, Type};
@@ -534,97 +533,36 @@ async fn import_single_pdf_with_handle(
         tracing::warn!("Failed to index entry metadata: {}", e);
     }
 
-    // Index PDF content for full-text search
-    let attachment_data = AttachmentData {
-        entry_id,
-        entry_key: entry_key.clone(),
-        attachment_id,
-        title: Some(final_title.clone()),
-        file_path: final_dest_path_str.clone(),
-        content_source: "pdf".to_string(),
-    };
-
-    // Read OCR settings from the database
-    let config = ExtractionConfig {
-        // enable_ocr defaults to true; only disable if explicitly set to "false"
-        enable_ocr: crate::commands::settings::get_setting_value(&state.db, "enable_ocr")
-            .await
-            .map(|v| v == "true")
-            .unwrap_or(true),
-        force_ocr: is_setting_enabled(&state.db, "force_ocr").await,
-    };
-
-    // Get file name for progress reporting
+    // Enqueue background OCR extraction job (non-blocking)
     let file_name = final_dest_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string();
 
-    // Emit progress: extracting
+    if let Err(e) = state.job_queue.enqueue(
+        crate::jobs::types::JobType::OcrExtract,
+        Some(format!("Extract: {}", file_name)),
+        serde_json::json!({ "attachmentId": attachment_id }),
+        0,
+    ).await {
+        tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", attachment_id, e);
+    }
+
     if let Some(handle) = app_handle {
         let _ = handle.emit(
             "import:detail",
             ImportDetailProgress {
                 file_name: file_name.clone(),
                 step: "extracting".to_string(),
-                method: Some("kreuzberg".to_string()),
-                status: "processing".to_string(),
-                message: None,
+                method: Some("background".to_string()),
+                status: "queued".to_string(),
+                message: Some("Text extraction queued as background task".to_string()),
             },
         );
     }
 
-    match state.search_index.index_attachment_content(&attachment_data, &config).await {
-        Ok(result) => {
-            // Save markdown alongside original file if extraction is substantial
-            if let Some(ref text) = result.extracted_text {
-                if is_worth_saving(text) {
-                    if let Ok(md_path) = save_markdown(&final_dest_path, text) {
-                        let library_path = state.library_path.read().await;
-                        let relative_md = md_path.strip_prefix(&*library_path).ok().map(|p| p.to_string_lossy().to_string());
-                        if let Some(rel) = relative_md {
-                            let _ = sqlx::query("UPDATE attachments SET markdown_path = ? WHERE id = ?")
-                                .bind(&rel)
-                                .bind(attachment_id)
-                                .execute(&state.db)
-                                .await;
-                        }
-                    }
-                }
-            }
-
-            if let Some(handle) = app_handle {
-                let _ = handle.emit(
-                    "import:detail",
-                    ImportDetailProgress {
-                        file_name: file_name.clone(),
-                        step: "indexing".to_string(),
-                        method: Some(result.method.as_str().to_string()),
-                        status: if result.indexed { "success" } else { "skipped" }.to_string(),
-                        message: result.message,
-                    },
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to index PDF content: {}", e);
-            if let Some(handle) = app_handle {
-                let _ = handle.emit(
-                    "import:detail",
-                    ImportDetailProgress {
-                        file_name: file_name.clone(),
-                        step: "indexing".to_string(),
-                        method: None,
-                        status: "failed".to_string(),
-                        message: Some(e.to_string()),
-                    },
-                );
-            }
-        }
-    }
-
-    // Commit index changes
+    // Commit metadata index changes
     if let Err(e) = state.search_index.commit().await {
         tracing::error!("Failed to commit search index: {}", e);
     }
@@ -2206,94 +2144,32 @@ pub async fn import_biblatex_with_files(
                 if let Ok(row) = attachment_result {
                     let attachment_id: i64 = row.get("id");
 
-                    // Index attachment content for full-text search
-                    let attachment_data = AttachmentData {
-                        entry_id,
-                        entry_key: entry_key.clone(),
-                        attachment_id,
-                        title: Some(attachment_title.clone()),
-                        file_path: final_dest_path_str.clone(),
-                        content_source: attachment_type.to_string(),
-                    };
-
-                    // Read OCR settings from the database
-                    let config = ExtractionConfig {
-                        enable_ocr: crate::commands::settings::get_setting_value(&state.db, "enable_ocr")
-                            .await
-                            .map(|v| v == "true")
-                            .unwrap_or(true),
-                        force_ocr: is_setting_enabled(&state.db, "force_ocr").await,
-                    };
-
-                    // Get file name for progress reporting
+                    // Enqueue background OCR extraction job
                     let progress_file_name = final_dest_path
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown")
                         .to_string();
 
-                    // Determine expected extraction method based on config
-                    let expected_method = if config.enable_ocr {
-                        "kreuzberg (OCR enabled)"
-                    } else {
-                        "kreuzberg"
-                    };
+                    if let Err(e) = state.job_queue.enqueue(
+                        crate::jobs::types::JobType::OcrExtract,
+                        Some(format!("Extract: {}", progress_file_name)),
+                        serde_json::json!({ "attachmentId": attachment_id }),
+                        0,
+                    ).await {
+                        tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", attachment_id, e);
+                    }
 
-                    // Emit progress: extracting
                     let _ = app_handle.emit(
                         "import:detail",
                         ImportDetailProgress {
                             file_name: progress_file_name.clone(),
                             step: "extracting".to_string(),
-                            method: Some(expected_method.to_string()),
-                            status: "processing".to_string(),
-                            message: None,
+                            method: Some("background".to_string()),
+                            status: "queued".to_string(),
+                            message: Some("Text extraction queued as background task".to_string()),
                         },
                     );
-
-                    match state.search_index.index_attachment_content(&attachment_data, &config).await {
-                        Ok(result) => {
-                            // Save markdown alongside original if extraction is substantial
-                            if let Some(ref text) = result.extracted_text {
-                                if is_worth_saving(text) {
-                                    if let Ok(md_path) = save_markdown(&final_dest_path, text) {
-                                        let relative_md = md_path.strip_prefix(&*library_path).ok().map(|p| p.to_string_lossy().to_string());
-                                        if let Some(rel) = relative_md {
-                                            let _ = sqlx::query("UPDATE attachments SET markdown_path = ? WHERE id = ?")
-                                                .bind(&rel)
-                                                .bind(attachment_id)
-                                                .execute(&state.db)
-                                                .await;
-                                        }
-                                    }
-                                }
-                            }
-
-                            let _ = app_handle.emit(
-                                "import:detail",
-                                ImportDetailProgress {
-                                    file_name: progress_file_name.clone(),
-                                    step: "indexing".to_string(),
-                                    method: Some(result.method.as_str().to_string()),
-                                    status: if result.indexed { "success" } else { "skipped" }.to_string(),
-                                    message: result.message,
-                                },
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to index attachment content for {}: {}", attachment_key, e);
-                            let _ = app_handle.emit(
-                                "import:detail",
-                                ImportDetailProgress {
-                                    file_name: progress_file_name.clone(),
-                                    step: "indexing".to_string(),
-                                    method: None,
-                                    status: "failed".to_string(),
-                                    message: Some(e.to_string()),
-                                },
-                            );
-                        }
-                    }
 
                     files_imported += 1;
                 }

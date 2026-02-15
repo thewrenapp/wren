@@ -2,8 +2,7 @@ use crate::db::models::{
     Attachment, CreateAttachmentInput, CreateEntryInput, Creator, CreatorInput, Entry,
     EntrySummary, SavedSearch, SavedSearchCriterion, Tag, UpdateEntryInput,
 };
-use crate::search::extractor::ExtractionConfig;
-use crate::search::indexer::{AttachmentData, EntryMetadata};
+use crate::search::indexer::EntryMetadata;
 use crate::state::AppState;
 use sqlx::{FromRow, Row, Sqlite, SqlitePool, QueryBuilder};
 use std::collections::HashMap;
@@ -2279,26 +2278,16 @@ pub async fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), St
         .await
         .unwrap_or_default();
 
-        let config = ExtractionConfig {
-            enable_ocr: crate::commands::settings::get_setting_value(&state.db, "enable_ocr")
-                .await
-                .map(|v| v == "true")
-                .unwrap_or(true),
-            force_ocr: crate::commands::settings::is_setting_enabled(&state.db, "force_ocr").await,
-        };
+        // Enqueue background OCR extraction jobs for each attachment
         for att in attachments {
-            if let Some(file_path) = att.file_path {
-                let attachment_data = AttachmentData {
-                    entry_id: id,
-                    entry_key: entry_row.key.clone(),
-                    attachment_id: att.id,
-                    title: att.title,
-                    file_path,
-                    content_source: att.attachment_type,
-                };
-
-                if let Err(e) = state.search_index.index_attachment_content(&attachment_data, &config).await {
-                    tracing::warn!("Failed to re-index attachment: {}", e);
+            if att.file_path.is_some() && att.attachment_type != "note" {
+                if let Err(e) = state.job_queue.enqueue(
+                    crate::jobs::types::JobType::OcrExtract,
+                    Some(format!("Extract: {}", att.title.as_deref().unwrap_or("attachment"))),
+                    serde_json::json!({ "attachmentId": att.id }),
+                    0,
+                ).await {
+                    tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", att.id, e);
                 }
             }
         }
@@ -2636,18 +2625,25 @@ pub async fn create_attachment(
     get_attachment(state, attachment_id).await
 }
 
-/// Delete an attachment (DB record + file from disk)
+/// Delete an attachment (DB record + file + search index + markdown)
 #[tauri::command]
 pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     use std::fs;
 
-    // Get file path before deletion
-    let file_path: Option<String> =
-        sqlx::query_scalar("SELECT file_path FROM attachments WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| e.to_string())?;
+    // Get file path and markdown path before deletion
+    #[derive(sqlx::FromRow)]
+    struct AttachmentPaths {
+        file_path: Option<String>,
+        markdown_path: Option<String>,
+    }
+
+    let paths: Option<AttachmentPaths> = sqlx::query_as(
+        "SELECT file_path, markdown_path FROM attachments WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
 
     // Delete from DB
     sqlx::query("DELETE FROM attachments WHERE id = ?")
@@ -2656,11 +2652,43 @@ pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<()
         .await
         .map_err(|e| e.to_string())?;
 
-    // Delete file from disk if it exists
-    if let Some(path) = file_path {
-        if let Err(e) = fs::remove_file(&path) {
-            tracing::warn!("Failed to delete attachment file {}: {}", path, e);
+    // Remove from search index
+    if let Err(e) = state.search_index.delete_attachment(id).await {
+        tracing::warn!("Failed to delete attachment {} from search index: {}", id, e);
+    }
+    if let Err(e) = state.search_index.commit().await {
+        tracing::error!("Failed to commit search index: {}", e);
+    }
+
+    if let Some(paths) = paths {
+        let library_path = state.library_path.read().await;
+
+        // Delete file from disk
+        if let Some(ref fp) = paths.file_path {
+            let full_path = library_path.join(fp);
+            if let Err(e) = fs::remove_file(&full_path) {
+                tracing::warn!("Failed to delete attachment file {}: {}", full_path.display(), e);
+            }
         }
+
+        // Delete companion markdown file
+        if let Some(ref mp) = paths.markdown_path {
+            let md_path = library_path.join(mp);
+            let _ = fs::remove_file(&md_path);
+        }
+    }
+
+    // Cancel any pending OCR jobs for this attachment
+    let pending_jobs: Vec<(String,)> = sqlx::query_as(
+        "SELECT id FROM jobs WHERE job_type = 'ocr_extract' AND status = 'pending' AND payload_json LIKE ?",
+    )
+    .bind(format!("%\"attachmentId\":{}%", id))
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (job_id,) in pending_jobs {
+        let _ = state.job_queue.cancel(&job_id).await;
     }
 
     Ok(())
@@ -2670,19 +2698,15 @@ pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<()
 #[tauri::command]
 pub async fn add_pdf_attachment(
     state: State<'_, AppState>,
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     entry_id: i64,
     file_path: String,
 ) -> Result<Attachment, String> {
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::path::PathBuf;
-    use tauri::Emitter;
     use crate::filename;
     use crate::commands::settings::is_setting_enabled;
-    use crate::search::extractor::ExtractionConfig;
-    use crate::search::indexer::AttachmentData;
-    use crate::commands::import::ImportDetailProgress;
 
     let source_path = PathBuf::from(&file_path);
     if !source_path.exists() {
@@ -2839,82 +2863,20 @@ pub async fn add_pdf_attachment(
         dest_path.file_name().unwrap_or_default().to_string_lossy()
     );
 
-    // Index attachment content for full-text search
-    let attachment_data = AttachmentData {
-        entry_id,
-        entry_key: entry_key.clone(),
-        attachment_id,
-        title: Some(title.clone()),
-        file_path: dest_path_str.clone(),
-        content_source: "pdf".to_string(),
-    };
-
-    // Read OCR settings from DB
-    let config = ExtractionConfig {
-        enable_ocr: crate::commands::settings::get_setting_value(&state.db, "enable_ocr")
-            .await
-            .map(|v| v == "true")
-            .unwrap_or(true),
-        force_ocr: is_setting_enabled(&state.db, "force_ocr").await,
-    };
-
-    // Get file name for progress reporting
+    // Enqueue background OCR extraction job
     let file_name_for_progress = dest_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string();
 
-    // Determine expected extraction method based on config
-    let expected_method = if config.enable_ocr {
-        "kreuzberg (OCR enabled)"
-    } else {
-        "kreuzberg"
-    };
-
-    // Emit progress: extracting
-    let _ = app_handle.emit(
-        "import:detail",
-        ImportDetailProgress {
-            file_name: file_name_for_progress.clone(),
-            step: "extracting".to_string(),
-            method: Some(expected_method.to_string()),
-            status: "processing".to_string(),
-            message: None,
-        },
-    );
-
-    match state.search_index.index_attachment_content(&attachment_data, &config).await {
-        Ok(result) => {
-            let _ = app_handle.emit(
-                "import:detail",
-                ImportDetailProgress {
-                    file_name: file_name_for_progress.clone(),
-                    step: "indexing".to_string(),
-                    method: Some(result.method.as_str().to_string()),
-                    status: if result.indexed { "success" } else { "skipped" }.to_string(),
-                    message: result.message,
-                },
-            );
-        }
-        Err(e) => {
-            tracing::warn!("Failed to index PDF attachment content: {}", e);
-            let _ = app_handle.emit(
-                "import:detail",
-                ImportDetailProgress {
-                    file_name: file_name_for_progress.clone(),
-                    step: "indexing".to_string(),
-                    method: None,
-                    status: "failed".to_string(),
-                    message: Some(e.to_string()),
-                },
-            );
-        }
-    }
-
-    // Commit index changes
-    if let Err(e) = state.search_index.commit().await {
-        tracing::error!("Failed to commit search index: {}", e);
+    if let Err(e) = state.job_queue.enqueue(
+        crate::jobs::types::JobType::OcrExtract,
+        Some(format!("Extract: {}", file_name_for_progress)),
+        serde_json::json!({ "attachmentId": attachment_id }),
+        0,
+    ).await {
+        tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", attachment_id, e);
     }
 
     get_attachment(state, attachment_id).await
@@ -3184,6 +3146,28 @@ pub async fn add_file_attachment(
         entry_id,
         dest_path.file_name().unwrap_or_default().to_string_lossy()
     );
+
+    // Enqueue background text extraction job for extractable file types
+    // (kreuzberg supports PDF, EPUB, HTML, DOCX, images, etc.)
+    let extractable = matches!(
+        attachment_type,
+        "pdf" | "snapshot" | "generic" | "image" | "epub"
+    );
+    if extractable {
+        let extract_title = dest_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment")
+            .to_string();
+        if let Err(e) = state.job_queue.enqueue(
+            crate::jobs::types::JobType::OcrExtract,
+            Some(format!("Extract: {}", extract_title)),
+            serde_json::json!({ "attachmentId": attachment_id }),
+            0,
+        ).await {
+            tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", attachment_id, e);
+        }
+    }
 
     get_attachment(state, attachment_id).await
 }

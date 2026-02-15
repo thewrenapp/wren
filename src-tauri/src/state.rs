@@ -5,16 +5,18 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::db;
+use crate::jobs::queue::JobQueue;
 use crate::search::SearchIndex;
 
 pub struct AppState {
     pub db: SqlitePool,
     pub library_path: Arc<RwLock<PathBuf>>,
     pub search_index: Arc<SearchIndex>,
+    pub job_queue: Arc<JobQueue>,
 }
 
 impl AppState {
-    pub async fn new(_app_handle: &tauri::AppHandle) -> Result<Self> {
+    pub async fn new(app_handle: &tauri::AppHandle) -> Result<Self> {
         let library_path = Self::get_library_path()?;
 
         // Ensure library directory exists
@@ -36,10 +38,32 @@ impl AppState {
         let search_index = SearchIndex::open_or_create(&index_path)?;
         tracing::info!("Search index initialized at {:?}", index_path);
 
+        let search_index = Arc::new(search_index);
+        let library_path = Arc::new(RwLock::new(library_path));
+
+        // Initialize job queue
+        let job_queue = Arc::new(JobQueue::new(
+            db.clone(),
+            app_handle.clone(),
+            search_index.clone(),
+            library_path.clone(),
+            2, // max concurrent jobs
+        ));
+
+        // Recover jobs that were interrupted by app shutdown
+        if let Err(e) = job_queue.recover_interrupted_jobs().await {
+            tracing::warn!("Failed to recover interrupted jobs: {}", e);
+        }
+
+        // Start the background job scheduler
+        job_queue.start_scheduler();
+        tracing::info!("Job queue initialized");
+
         Ok(Self {
             db,
-            library_path: Arc::new(RwLock::new(library_path)),
-            search_index: Arc::new(search_index),
+            library_path,
+            search_index,
+            job_queue,
         })
     }
 

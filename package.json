@@ -40,7 +40,7 @@
     "@radix-ui/react-tooltip": "^1.1.6",
     "@tabler/icons-react": "^3.36.1",
     "@tanstack/react-virtual": "^3.13.18",
-    "@tauri-apps/api": "^2.5.5",
+    "@tauri-apps/api": "^2.10.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.0",
     "@tauri-apps/plugin-dialog": "^2.4.2",
     "@tauri-apps/plugin-fs": "^2.4.5",
@@ -69,7 +69,7 @@
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.19",
-    "@tauri-apps/cli": "^2.5.5",
+    "@tauri-apps/cli": "^2.10.0",
     "@types/dompurify": "^3.0.5",
     "@types/katex": "^0.16.8",
     "@types/react": "^19.2.0",

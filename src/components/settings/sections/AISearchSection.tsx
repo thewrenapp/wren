@@ -1,10 +1,8 @@
-import { useState, useEffect } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { reindexLibrary } from "@/services/tauri/commands";
+import { useJobStore } from "@/stores/jobStore";
+import { toast } from "@/stores/toastStore";
 import { Loader2 } from "lucide-react";
 
 export function AISearchSection() {
@@ -17,104 +15,24 @@ export function AISearchSection() {
     setForceOcr,
   } = useSettingsStore();
 
-  const [isReindexing, setIsReindexing] = useState(false);
-  const [reindexProgress, setReindexProgress] = useState<{
-    current: number;
-    total: number;
-  } | null>(null);
-  const [reindexDetail, setReindexDetail] = useState<{
-    entryTitle: string | null;
-    fileName: string | null;
-    step: string;
-    method: string | null;
-    status: string;
-    message: string | null;
-  } | null>(null);
-  const [reindexStatus, setReindexStatus] = useState<{
-    success: boolean;
-    message: string;
-  } | null>(null);
-
-  // Listen for reindex progress events
-  useEffect(() => {
-    const unlisteners: UnlistenFn[] = [];
-
-    const setupListeners = async () => {
-      unlisteners.push(
-        await listen<number>("reindex:start", (event) => {
-          setReindexProgress({ current: 0, total: event.payload });
-          setReindexStatus(null);
-        })
-      );
-
-      unlisteners.push(
-        await listen<[number, number]>("reindex:progress", (event) => {
-          const [current, total] = event.payload;
-          setReindexProgress({ current, total });
-        })
-      );
-
-      unlisteners.push(
-        await listen<number>("reindex:complete", (event) => {
-          setReindexProgress(null);
-          setReindexDetail(null);
-          setReindexStatus({
-            success: true,
-            message: `Indexed ${event.payload} entries successfully!`,
-          });
-          setIsReindexing(false);
-        })
-      );
-
-      // Listen for detailed progress events
-      unlisteners.push(
-        await listen<{
-          current: number;
-          total: number;
-          entry_title: string | null;
-          file_name: string | null;
-          step: string;
-          method: string | null;
-          status: string;
-          message: string | null;
-        }>("reindex:detail", (event) => {
-          const p = event.payload;
-          setReindexDetail({
-            entryTitle: p.entry_title,
-            fileName: p.file_name,
-            step: p.step,
-            method: p.method,
-            status: p.status,
-            message: p.message,
-          });
-        })
-      );
-    };
-
-    setupListeners();
-
-    return () => {
-      unlisteners.forEach((unlisten) => unlisten());
-    };
-  }, []);
+  const hasActiveReindex = useJobStore((s) =>
+    s.jobs.some(
+      (j) =>
+        j.jobType === "reindex_library" &&
+        (j.status === "pending" || j.status === "running")
+    )
+  );
 
   const handleRebuildIndex = async () => {
-    setIsReindexing(true);
-    setReindexStatus(null);
-    setReindexProgress(null);
     try {
-      await reindexLibrary({
-        enableOcr,
-        forceOcr,
-      });
-      // Success is handled by the reindex:complete event listener
+      await useJobStore.getState().enqueueJob(
+        "reindex_library",
+        { enableOcr, forceOcr },
+        { title: "Reindex Library" }
+      );
+      toast.info("Library reindex started in background");
     } catch (err) {
-      setReindexProgress(null);
-      setReindexStatus({
-        success: false,
-        message: `Failed to rebuild index: ${err}`,
-      });
-      setIsReindexing(false);
+      toast.error(`Failed to start reindex: ${err}`);
     }
   };
 
@@ -219,81 +137,23 @@ export function AISearchSection() {
               variant="outline"
               size="sm"
               onClick={handleRebuildIndex}
-              disabled={isReindexing}
+              disabled={hasActiveReindex}
             >
-              {isReindexing && (
+              {hasActiveReindex && (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               )}
               Rebuild Search Index
             </Button>
-            {reindexStatus && !isReindexing && (
-              <span
-                className={`text-xs ${reindexStatus.success ? "text-green-600" : "text-destructive"}`}
-              >
-                {reindexStatus.message}
+            {hasActiveReindex && (
+              <span className="text-xs text-muted-foreground">
+                Running in background — check the task tracker for progress
               </span>
             )}
           </div>
-          {reindexProgress && (
-            <div className="space-y-2">
-              <Progress
-                value={(reindexProgress.current / reindexProgress.total) * 100}
-                className="h-2"
-              />
-              <p className="text-xs text-muted-foreground">
-                Entry {reindexProgress.current + 1} of {reindexProgress.total}
-              </p>
-              {reindexDetail && (
-                <div className="text-xs font-mono space-y-1 p-2 bg-muted/50 rounded border">
-                  {reindexDetail.entryTitle && (
-                    <p className="truncate">
-                      <span className="text-muted-foreground">Entry: </span>
-                      <span className="text-foreground font-medium">{reindexDetail.entryTitle}</span>
-                    </p>
-                  )}
-                  {reindexDetail.fileName && (
-                    <p className="truncate">
-                      <span className="text-muted-foreground">File: </span>
-                      <span className="text-blue-500">{reindexDetail.fileName}</span>
-                    </p>
-                  )}
-                  <p>
-                    <span className="text-muted-foreground">Step: </span>
-                    <span className="text-purple-500">{reindexDetail.step}</span>
-                    {reindexDetail.method && (
-                      <>
-                        <span className="text-muted-foreground"> via </span>
-                        <span className="text-cyan-500">{reindexDetail.method}</span>
-                      </>
-                    )}
-                  </p>
-                  <p>
-                    <span className="text-muted-foreground">Status: </span>
-                    <span
-                      className={
-                        reindexDetail.status === "success"
-                          ? "text-green-500"
-                          : reindexDetail.status === "failed"
-                          ? "text-red-500"
-                          : reindexDetail.status === "skipped"
-                          ? "text-yellow-500"
-                          : "text-blue-500"
-                      }
-                    >
-                      {reindexDetail.status}
-                    </span>
-                    {reindexDetail.message && (
-                      <span className="text-muted-foreground"> - {reindexDetail.message}</span>
-                    )}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-          {!isReindexing && (
+          {!hasActiveReindex && (
             <p className="text-xs text-muted-foreground">
               Recreates the full-text search index from scratch. Also extracts and saves
-              markdown versions of all documents. Use this if search results seem incorrect.
+              markdown versions of all documents. Runs as a background task.
             </p>
           )}
         </div>

@@ -17,6 +17,7 @@ import {
   FolderOutput,
   Paperclip,
   RefreshCw,
+  StickyNote,
 } from 'lucide-react';
 import { IconTagOff } from '@tabler/icons-react';
 import {
@@ -288,6 +289,26 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
     onClose?.();
   };
 
+  const handleAddMarkdownAttachment = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'Markdown', extensions: ['md', 'txt'] }],
+      });
+      if (selected) {
+        const filePath = typeof selected === 'string' ? selected : (selected as any).path ?? String(selected);
+        await addFileAttachment(entry.id, filePath);
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.success('Markdown file attached');
+      }
+    } catch (err) {
+      console.error('Failed to add markdown attachment:', err);
+      toast.error('Failed to attach markdown file');
+    }
+    onClose?.();
+  };
+
   const handleCreateNote = async () => {
     try {
       const note = await createAttachment({
@@ -436,6 +457,11 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
 
       {!isMultiSelect && (
         <>
+          <DropdownMenuItem onClick={handleCreateNote}>
+            <StickyNote className='h-4 w-4 mr-2' />
+            Add Note
+          </DropdownMenuItem>
+
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
               <Plus className='h-4 w-4 mr-2' />
@@ -446,9 +472,9 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
                 <File className='h-4 w-4 mr-2' />
                 PDF...
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleCreateNote}>
+              <DropdownMenuItem onClick={handleAddMarkdownAttachment}>
                 <FileText className='h-4 w-4 mr-2' />
-                Note
+                Markdown...
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleAddFileAttachment}>
                 <Paperclip className='h-4 w-4 mr-2' />
@@ -808,6 +834,25 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
     }
   };
 
+  const handleAddMarkdownAttachment = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'Markdown', extensions: ['md', 'txt'] }],
+      });
+      if (selected) {
+        const filePath = typeof selected === 'string' ? selected : (selected as any).path ?? String(selected);
+        await addFileAttachment(entry.id, filePath);
+        invalidateAttachments();
+        await refreshLibrary();
+        toast.success('Markdown file attached');
+      }
+    } catch (err) {
+      console.error('Failed to add markdown attachment:', err);
+      toast.error('Failed to attach markdown file');
+    }
+  };
+
   const handleCreateNote = async () => {
     try {
       const note = await createAttachment({
@@ -974,6 +1019,11 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
 
         {!isMultiSelect && (
           <>
+            <ContextMenuItem onClick={handleCreateNote}>
+              <StickyNote className='h-4 w-4 mr-2' />
+              Add Note
+            </ContextMenuItem>
+
             <ContextMenuSub>
               <ContextMenuSubTrigger>
                 <Plus className='h-4 w-4 mr-2' />
@@ -984,9 +1034,9 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
                   <File className='h-4 w-4 mr-2' />
                   PDF...
                 </ContextMenuItem>
-                <ContextMenuItem onClick={handleCreateNote}>
+                <ContextMenuItem onClick={handleAddMarkdownAttachment}>
                   <FileText className='h-4 w-4 mr-2' />
-                  Note
+                  Markdown...
                 </ContextMenuItem>
                 <ContextMenuItem onClick={handleAddFileAttachment}>
                   <Paperclip className='h-4 w-4 mr-2' />

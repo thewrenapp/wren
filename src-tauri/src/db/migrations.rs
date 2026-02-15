@@ -231,6 +231,40 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await;
 
+    // Migration: Job queue table for background task persistence
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            title TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            result_json TEXT,
+            error_message TEXT,
+            progress_current INTEGER DEFAULT 0,
+            progress_total INTEGER DEFAULT 0,
+            progress_message TEXT,
+            priority INTEGER DEFAULT 0,
+            max_retries INTEGER DEFAULT 1,
+            retry_count INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            started_at TEXT,
+            completed_at TEXT
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at)")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
