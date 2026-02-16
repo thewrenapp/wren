@@ -122,6 +122,7 @@ import {
   importAnnotationsFromPdf,
   getEntryAttachments,
   fullTextSearch,
+  parseEntries,
   type ExportOptions,
   type BiblatexPreviewResult,
   type Attachment,
@@ -795,6 +796,25 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       showDeleteConfirmation(selectedEntryIds, performDelete);
     } else {
       performDelete();
+    }
+  };
+
+  // Parse with AI handler
+  const handleParseWithAI = async () => {
+    if (selectedEntryIds.length === 0) {
+      toast.warning("No entries selected");
+      return;
+    }
+    setCommandPaletteOpen(false);
+    try {
+      const jobIds = await parseEntries(selectedEntryIds);
+      if (jobIds.length > 0) {
+        toast.info(`Started parsing ${jobIds.length} document${jobIds.length !== 1 ? "s" : ""} with AI`);
+      } else {
+        toast.warning("No documents with extracted text found for selected entries");
+      }
+    } catch (err) {
+      toast.error(`Failed to start AI parsing: ${err}`);
     }
   };
 
@@ -3634,6 +3654,19 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                         </Command.Item>
                       </>
                     )}
+                    <Command.Item
+                      value="parse with ai llm structure document sections"
+                      onSelect={handleParseWithAI}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-purple-500/10">
+                        <Sparkles className="h-4 w-4 text-purple-500" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="block text-sm font-medium">Parse Attachments with AI</span>
+                        <span className="block text-xs text-muted-foreground">Extract structured sections from all attachments using LLM</span>
+                      </div>
+                    </Command.Item>
                     <Command.Item
                       value="delete move trash"
                       onSelect={handleDeleteSelected}

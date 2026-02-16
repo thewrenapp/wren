@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 
 export interface Tab {
   id: string;
-  type: "item" | "entry" | "markdown" | "search" | "collection" | "welcome" | "library";
+  type: "item" | "entry" | "markdown" | "parsed" | "search" | "collection" | "welcome" | "library";
   title: string;
   itemId?: string;
   entryId?: string;

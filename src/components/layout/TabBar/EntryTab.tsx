@@ -9,7 +9,7 @@ import { HTMLViewer } from "@/components/viewer/HTMLViewer";
 import { EPUBViewer } from "@/components/epub/EPUBViewer";
 import { ImageViewer } from "@/components/viewer/ImageViewer";
 import { NoteEditor } from "@/components/editor/NoteEditor";
-import { MarkdownViewer } from "@/components/viewer/MarkdownViewer";
+import { ExtractedContentViewer } from "@/components/viewer/ExtractedContentViewer";
 import { EntryInfoPanel } from "@/components/layout/RightPane/EntryInfoPanel";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ function AutoOpenFile({ filePath, entryId }: { filePath: string; entryId: string
 interface EntryTabProps {
   entryId: string;
   attachmentId?: string; // Specific attachment to display
-  viewMode?: "default" | "extracted"; // "extracted" shows markdown viewer for extracted text
+  viewMode?: "default" | "extracted" | "parsed"; // "extracted" shows markdown viewer, "parsed" shows AI-structured content
 }
 
 export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryTabProps) {
@@ -158,9 +158,9 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
 
   // Render main content based on attachment type
   const renderMainContent = () => {
-    // Extracted text view: show markdown viewer for any attachment that has markdown content
-    if (viewMode === "extracted" && targetAttachment) {
-      return <MarkdownViewer attachmentId={targetAttachment.id} title={targetAttachment.title} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
+    // Extracted/parsed text view: unified viewer handles both raw and structured
+    if ((viewMode === "extracted" || viewMode === "parsed") && targetAttachment) {
+      return <ExtractedContentViewer attachmentId={targetAttachment.id} entryId={entry.id} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
     }
 
     if (targetAttachment?.attachmentType === "pdf" && targetAttachment.filePath) {

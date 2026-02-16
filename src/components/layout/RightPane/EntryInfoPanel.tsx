@@ -15,6 +15,7 @@ import {
   X,
   Save,
   Trash2,
+  Sparkles,
 } from "lucide-react";
 import { AttachmentIcon } from "@/lib/icons";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -40,7 +41,7 @@ import {
   type Creator,
   type BacklinkInfo,
 } from "@/services/tauri";
-import { openFileWithDefaultApp, getLibraryPath } from "@/services/tauri/commands";
+import { openFileWithDefaultApp, getLibraryPath, parseDocument } from "@/services/tauri/commands";
 import type { ItemTypeInfo } from "@/types/schema";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
@@ -550,7 +551,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
               {fullEntry.attachments.map((attachment) => (
                 <div
                   key={attachment.id}
-                  className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer"
+                  className="group flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer"
                   onClick={() => {
                     const { openTab } = useTabStore.getState();
                     openTab({
@@ -565,6 +566,22 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
                   <span className="text-sm flex-1 truncate">
                     {attachment.title || getAttachmentTitle(attachment)}
                   </span>
+                  {attachment.markdownPath && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Parse with AI"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        parseDocument(attachment.id, entry.id)
+                          .then(() => toast.info("Parsing started"))
+                          .catch((err) => toast.error(`Failed to start parsing: ${err}`));
+                      }}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>

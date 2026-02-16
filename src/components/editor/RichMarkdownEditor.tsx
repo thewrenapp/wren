@@ -50,6 +50,11 @@ export interface RichMarkdownEditorRef {
   flush: () => void;
   /** Reindex if content changed since last reindex */
   reindexIfNeeded: () => Promise<void>;
+  /** Search methods for external toolbar integration */
+  search: (query: string, options: import("./useMarkdownSearch").SearchOptions) => void;
+  searchNext: () => void;
+  searchPrev: () => void;
+  clearSearch: () => void;
 }
 
 interface RichMarkdownEditorProps {
@@ -57,10 +62,14 @@ interface RichMarkdownEditorProps {
   attachmentId: number;
   showToolbar?: boolean;
   showReindex?: boolean;
+  /** Whether to auto-reindex the attachment when the editor unmounts. Defaults to true. */
+  reindexOnUnmount?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   className?: string;
   infoPaneOpen?: boolean;
   onToggleInfoPane?: () => void;
+  /** Callback fired when search match state changes (for external toolbar integration) */
+  onSearchStateChange?: (matchCount: number, currentMatch: number) => void;
 }
 
 // =====================================================
@@ -74,10 +83,12 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       attachmentId,
       showToolbar = true,
       showReindex = false,
+      reindexOnUnmount = true,
       onDirtyChange,
       className,
       infoPaneOpen,
       onToggleInfoPane,
+      onSearchStateChange,
     },
     ref,
   ) {
@@ -137,11 +148,15 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       }) as any, 1500),
     ).current;
 
+    // Keep reindexOnUnmount in a ref so the cleanup closure sees the latest value
+    const reindexOnUnmountRef = useRef(reindexOnUnmount);
+    reindexOnUnmountRef.current = reindexOnUnmount;
+
     // Flush + reindex on unmount
     useEffect(() => {
       return () => {
         debouncedSave.flush();
-        if (needsReindexRef.current) {
+        if (reindexOnUnmountRef.current && needsReindexRef.current) {
           reindexAttachment(attachmentIdRef.current).catch(console.error);
         }
         if (savedFadeTimerRef.current) clearTimeout(savedFadeTimerRef.current);
@@ -159,7 +174,16 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
           await reindexAttachment(attachmentIdRef.current);
         }
       },
-    }));
+      search: mdSearch.search,
+      searchNext: mdSearch.searchNext,
+      searchPrev: mdSearch.searchPrev,
+      clearSearch: mdSearch.clearSearch,
+    }), [mdSearch.search, mdSearch.searchNext, mdSearch.searchPrev, mdSearch.clearSearch]);
+
+    // Notify parent of search state changes
+    useEffect(() => {
+      onSearchStateChange?.(mdSearch.matchCount, mdSearch.currentMatch);
+    }, [mdSearch.matchCount, mdSearch.currentMatch, onSearchStateChange]);
 
     // Reindex handler for toolbar button
     const handleReindex = useCallback(async () => {

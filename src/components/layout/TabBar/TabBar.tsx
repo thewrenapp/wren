@@ -25,6 +25,7 @@ const tabIcons: Record<Tab["type"], React.ReactNode> = {
   item: <tabIconMap.item className="h-4 w-4" />,
   entry: <tabIconMap.entry className="h-4 w-4" />,
   markdown: <tabIconMap.markdown className="h-4 w-4" />,
+  parsed: <tabIconMap.parsed className="h-4 w-4" />,
   search: <tabIconMap.search className="h-4 w-4" />,
   collection: <tabIconMap.collection className="h-4 w-4" />,
   welcome: <tabIconMap.welcome className="h-4 w-4" />,

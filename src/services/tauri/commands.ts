@@ -1069,3 +1069,71 @@ export async function createEntryLink(
 export async function deleteEntryLink(id: number): Promise<void> {
   return invoke('delete_entry_link', { id });
 }
+
+// =====================================================
+// LLM Document Parsing
+// =====================================================
+
+export interface ParsedContentFull {
+  attachmentId: number;
+  entryId: number;
+  documentType: string | null;
+  language: string | null;
+  sectionsJson: string | null;
+  structuredMarkdown: string | null;
+  modelUsed: string;
+  provider: string;
+  totalTokensUsed: number;
+  discoveryChunks: number;
+  sectionsCount: number;
+  pipelineStagesJson: string | null;
+  status: string;
+  dateStarted: string;
+  dateCompleted: string | null;
+}
+
+export interface ParsedContentSummary {
+  attachmentId: number;
+  documentType: string | null;
+  language: string | null;
+  sectionsCount: number;
+  totalTokensUsed: number;
+  modelUsed: string;
+  provider: string;
+  status: string;
+  dateStarted: string;
+  dateCompleted: string | null;
+}
+
+export interface LlmModelInfo {
+  id: string;
+  name: string;
+}
+
+export async function parseDocument(attachmentId: number, entryId: number): Promise<string> {
+  return invoke('parse_document', { attachmentId, entryId });
+}
+
+export async function parseEntries(entryIds: number[]): Promise<string[]> {
+  return invoke('parse_entries', { entryIds });
+}
+
+export async function getParsedContent(attachmentId: number): Promise<ParsedContentFull | null> {
+  return invoke('get_parsed_content', { attachmentId });
+}
+
+export async function getEntryParsedContent(entryId: number): Promise<ParsedContentSummary[]> {
+  return invoke('get_entry_parsed_content', { entryId });
+}
+
+export async function deleteParsedContent(attachmentId: number): Promise<void> {
+  return invoke('delete_parsed_content', { attachmentId });
+}
+
+export async function listLlmModels(): Promise<LlmModelInfo[]> {
+  return invoke('list_llm_models');
+}
+
+export async function validateLlmConfig(): Promise<boolean> {
+  return invoke('validate_llm_config');
+}

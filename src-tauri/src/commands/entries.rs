@@ -2688,7 +2688,7 @@ pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<()
     .unwrap_or_default();
 
     for (job_id,) in pending_jobs {
-        let _ = state.job_queue.cancel(&job_id).await;
+        let _ = state.job_queue.cancel(&job_id, true).await;
     }
 
     Ok(())

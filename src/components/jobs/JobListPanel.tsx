@@ -9,6 +9,8 @@ import {
   Clock,
   Loader2,
   Ban,
+  Pause,
+  Play,
 } from "lucide-react";
 
 function JobStatusIcon({ status }: { status: string }) {
@@ -34,13 +36,15 @@ function JobRow({
   onRetry,
 }: {
   job: Job;
-  onCancel: (id: string) => void;
+  onCancel: (id: string, force?: boolean) => void;
   onRetry: (id: string) => void;
 }) {
   const isActive = job.status === "pending" || job.status === "running";
+  const isCancelling = isActive && job.progressMessage === "Cancelling...";
+  const isPaused = job.status === "cancelled" && job.progressMessage === "Paused";
   const progress =
     job.progressTotal > 0
-      ? (job.progressCurrent / job.progressTotal) * 100
+      ? Math.min(100, (job.progressCurrent / job.progressTotal) * 100)
       : 0;
 
   return (
@@ -53,18 +57,32 @@ function JobRow({
           </span>
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
-          {isActive && (
+          {isActive && job.jobType === "llm_parse" && job.status === "running" && !isCancelling && (
             <Button
               variant="ghost"
               size="icon"
               className="h-6 w-6"
-              onClick={() => onCancel(job.id)}
+              onClick={() => onCancel(job.id, false)}
+              title="Pause (checkpoint saved, can resume)"
+            >
+              <Pause className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          {isActive && !isCancelling && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => onCancel(job.id, true)}
               title="Cancel"
             >
               <X className="h-3.5 w-3.5" />
             </Button>
           )}
-          {(job.status === "failed" || job.status === "cancelled") && (
+          {isCancelling && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          )}
+          {job.status === "failed" && (
             <Button
               variant="ghost"
               size="icon"
@@ -75,28 +93,59 @@ function JobRow({
               <RotateCcw className="h-3.5 w-3.5" />
             </Button>
           )}
+          {job.status === "cancelled" && isPaused && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => onRetry(job.id)}
+              title="Resume"
+            >
+              <Play className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
       </div>
 
       {job.status === "running" && job.progressTotal > 0 && (
-        <Progress value={progress} className="h-1.5" />
+        <div className="space-y-1">
+          <Progress value={progress} className="h-2" />
+          <div className="flex items-center justify-between gap-2">
+            {job.progressMessage ? (
+              <p className="text-xs text-muted-foreground truncate flex-1">
+                {job.progressMessage}
+              </p>
+            ) : (
+              <span />
+            )}
+            <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+              {job.progressCurrent}/{job.progressTotal} ({Math.round(progress)}%)
+            </span>
+          </div>
+        </div>
       )}
 
-      {job.progressMessage && isActive && (
+      {job.status === "running" && job.progressTotal === 0 && job.progressMessage && (
         <p className="text-xs text-muted-foreground truncate">
           {job.progressMessage}
         </p>
       )}
 
-      {isActive && job.progressTotal > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {job.progressCurrent} / {job.progressTotal}
+      {job.status === "pending" && job.progressMessage && (
+        <p className="text-xs text-muted-foreground truncate">
+          {job.progressMessage}
         </p>
       )}
 
       {job.status === "failed" && job.errorMessage && (
         <p className="text-xs text-destructive truncate" title={job.errorMessage}>
           {job.errorMessage}
+        </p>
+      )}
+
+      {job.status === "cancelled" && isPaused && (
+        <p className="text-xs text-muted-foreground truncate">
+          Paused — click play to resume
         </p>
       )}
     </div>

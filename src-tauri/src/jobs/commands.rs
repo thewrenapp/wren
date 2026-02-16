@@ -43,8 +43,9 @@ pub async fn get_job(
 pub async fn cancel_job(
     state: State<'_, AppState>,
     job_id: String,
+    force: Option<bool>,
 ) -> Result<(), String> {
-    state.job_queue.cancel(&job_id).await
+    state.job_queue.cancel(&job_id, force.unwrap_or(false)).await
 }
 
 #[tauri::command]

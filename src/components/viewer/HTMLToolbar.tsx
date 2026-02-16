@@ -22,6 +22,7 @@ import {
   ExternalLink,
   Printer,
 } from "lucide-react";
+import { isInActiveView } from "@/lib/isInActiveView";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -221,6 +222,7 @@ export function HTMLToolbar({
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isInActiveView(toolbarRef.current)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
         setSearchOpen(true);

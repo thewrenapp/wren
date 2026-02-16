@@ -46,6 +46,12 @@ pub async fn run_job(
             execute_ocr_extract(db, app_handle, search_index, library_path, job_id, &payload, cancel_flag)
                 .await
         }
+        "llm_parse" => {
+            let payload: LlmParsePayload =
+                serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
+            execute_llm_parse(db, app_handle, library_path, job_id, &payload, cancel_flag)
+                .await
+        }
         _ => Err(format!("Unknown job type: {}", job_type_str)),
     }
 }
@@ -532,6 +538,39 @@ async fn execute_ocr_extract(
 
             search_index.commit().await.map_err(|e| e.to_string())?;
 
+            // Auto-parse hook: if LLM auto-parse is enabled and we have extracted text,
+            // enqueue an LlmParse job
+            if worth_saving {
+                let auto_parse = crate::commands::settings::is_setting_enabled(db, "llm_auto_parse").await;
+                let has_api_key = crate::commands::settings::get_setting_value(db, "llm_api_key")
+                    .await
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false);
+
+                if auto_parse && has_api_key {
+                    let parse_payload = serde_json::json!({
+                        "attachmentId": payload.attachment_id,
+                        "entryId": info.entry_id,
+                    });
+                    let parse_job_id = uuid::Uuid::new_v4().to_string();
+                    let _ = sqlx::query(
+                        r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
+                           VALUES (?, 'llm_parse', 'pending', ?, ?, 0)"#,
+                    )
+                    .bind(&parse_job_id)
+                    .bind(format!("Parse Document #{}", payload.attachment_id))
+                    .bind(parse_payload.to_string())
+                    .execute(db)
+                    .await;
+
+                    tracing::info!(
+                        "Auto-enqueued LLM parse job {} for attachment {}",
+                        parse_job_id,
+                        payload.attachment_id
+                    );
+                }
+            }
+
             update_progress(app_handle, db, job_id, 1, 1, Some("Done".to_string())).await;
 
             Ok(Some(
@@ -543,5 +582,339 @@ async fn execute_ocr_extract(
             ))
         }
         Err(e) => Err(format!("Extraction failed: {}", e)),
+    }
+}
+
+/// Execute LLM-powered document parsing for a single attachment.
+async fn execute_llm_parse(
+    db: &SqlitePool,
+    app_handle: &AppHandle,
+    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+    job_id: &str,
+    payload: &LlmParsePayload,
+    cancel_flag: CancelFlag,
+) -> Result<Option<String>, String> {
+    use crate::commands::settings::get_setting_value;
+    use crate::llm::context_windows;
+    use crate::llm::openai::OpenAiProvider;
+    use crate::llm::pipeline;
+    use crate::llm::pipeline::classifier::EntryMetadata;
+
+    // ── Read LLM settings from DB ──────────────────────────────────
+    let provider_name = get_setting_value(db, "llm_provider")
+        .await
+        .unwrap_or_else(|| "openai".to_string());
+    let api_key = get_setting_value(db, "llm_api_key")
+        .await
+        .unwrap_or_default();
+    let model = get_setting_value(db, "llm_model")
+        .await
+        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+    let base_url = get_setting_value(db, "llm_base_url")
+        .await
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    let token_budget: u32 = get_setting_value(db, "llm_token_budget")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200_000);
+    let concurrent: usize = get_setting_value(db, "llm_concurrent_extractions")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+
+    if api_key.is_empty() {
+        return Err("LLM API key not configured. Go to Settings → AI & Search to set it up.".to_string());
+    }
+
+    // ── Create provider ────────────────────────────────────────────
+    let provider = OpenAiProvider::new(api_key, base_url);
+
+    // ── Read extracted text from markdown file ─────────────────────
+    let markdown_path: Option<String> = sqlx::query_scalar(
+        "SELECT markdown_path FROM attachments WHERE id = ?",
+    )
+    .bind(payload.attachment_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?
+    .flatten();
+
+    let markdown_path = markdown_path
+        .ok_or_else(|| "No extracted text found. Run text extraction first.".to_string())?;
+
+    let lib_path = library_path.read().await.clone();
+    let full_md_path = lib_path.join(&markdown_path);
+
+    let extracted_text = tokio::fs::read_to_string(&full_md_path)
+        .await
+        .map_err(|e| format!("Failed to read extracted text: {e}"))?;
+
+    if extracted_text.trim().is_empty() {
+        return Err("Extracted text is empty. Nothing to parse.".to_string());
+    }
+
+    // ── Gather entry metadata ──────────────────────────────────────
+    #[derive(FromRow)]
+    struct EntryInfo {
+        title: Option<String>,
+        item_type_name: Option<String>,
+    }
+
+    let entry_info: Option<EntryInfo> = sqlx::query_as(
+        r#"
+        SELECT e.title, it.name as item_type_name
+        FROM entries e
+        JOIN item_types it ON e.item_type_id = it.id
+        WHERE e.id = ?
+        "#,
+    )
+    .bind(payload.entry_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let abstract_text: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT ef.value FROM entry_fields ef
+        JOIN fields f ON ef.field_id = f.id
+        WHERE ef.entry_id = ? AND f.name = 'abstractNote'
+        LIMIT 1
+        "#,
+    )
+    .bind(payload.entry_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    let authors: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT GROUP_CONCAT(
+            CASE WHEN last_name IS NOT NULL AND last_name != ''
+                 THEN last_name || COALESCE(', ' || first_name, '')
+                 ELSE COALESCE(name, '')
+            END, '; '
+        ) FROM entry_creators WHERE entry_id = ? ORDER BY sort_order
+        "#,
+    )
+    .bind(payload.entry_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    let entry_metadata = EntryMetadata {
+        title: entry_info.as_ref().and_then(|i| i.title.clone()),
+        authors,
+        abstract_text,
+        item_type: entry_info.as_ref().and_then(|i| i.item_type_name.clone()),
+    };
+
+    // ── Build pipeline config ──────────────────────────────────────
+    let model_ctx = context_windows::default_context(&provider_name, &model);
+
+    let config = pipeline::PipelineConfig {
+        provider_name: provider_name.clone(),
+        model: model.clone(),
+        context_window: model_ctx.context_window,
+        max_token_budget: token_budget,
+        max_concurrent_extractions: concurrent,
+        retry_max: 3,
+    };
+
+    // ── Check for existing checkpoint ──────────────────────────────
+    let checkpoint: Option<pipeline::PipelineCheckpoint> = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT checkpoint_json FROM parsed_content WHERE attachment_id = ? AND status = 'in_progress'",
+    )
+    .bind(payload.attachment_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .and_then(|json| serde_json::from_str(&json).ok());
+
+    // ── Create or update parsed_content row ────────────────────────
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO parsed_content (attachment_id, entry_id, model_used, provider, status, date_started)
+        VALUES (?, ?, ?, ?, 'in_progress', ?)
+        ON CONFLICT(attachment_id) DO UPDATE SET
+            model_used = excluded.model_used,
+            provider = excluded.provider,
+            status = 'in_progress',
+            date_started = excluded.date_started,
+            date_completed = NULL
+        "#,
+    )
+    .bind(payload.attachment_id)
+    .bind(payload.entry_id)
+    .bind(&model)
+    .bind(&provider_name)
+    .bind(&now)
+    .execute(db)
+    .await
+    .map_err(|e| format!("Failed to create parsed_content row: {e}"))?;
+
+    // ── Progress adapter ───────────────────────────────────────────
+    struct JobProgressAdapter {
+        app_handle: AppHandle,
+        db: SqlitePool,
+        job_id: String,
+    }
+
+    impl pipeline::ProgressCallback for JobProgressAdapter {
+        fn update(&self, current: u32, total: u32, message: &str) {
+            let app = self.app_handle.clone();
+            let db = self.db.clone();
+            let jid = self.job_id.clone();
+            let msg = message.to_string();
+            tokio::spawn(async move {
+                update_progress(&app, &db, &jid, current as i64, total as i64, Some(msg)).await;
+            });
+        }
+    }
+
+    // ── Checkpoint saver ───────────────────────────────────────────
+    struct DbCheckpointSaver {
+        db: SqlitePool,
+        attachment_id: i64,
+    }
+
+    #[async_trait::async_trait]
+    impl pipeline::CheckpointSaver for DbCheckpointSaver {
+        async fn save(&self, checkpoint: &pipeline::PipelineCheckpoint) -> Result<(), String> {
+            let json = serde_json::to_string(checkpoint).map_err(|e| e.to_string())?;
+            sqlx::query(
+                "UPDATE parsed_content SET checkpoint_json = ? WHERE attachment_id = ?",
+            )
+            .bind(&json)
+            .bind(self.attachment_id)
+            .execute(&self.db)
+            .await
+            .map_err(|e| format!("Failed to save checkpoint: {e}"))?;
+            Ok(())
+        }
+    }
+
+    let progress_adapter = JobProgressAdapter {
+        app_handle: app_handle.clone(),
+        db: db.clone(),
+        job_id: job_id.to_string(),
+    };
+
+    let checkpoint_saver = DbCheckpointSaver {
+        db: db.clone(),
+        attachment_id: payload.attachment_id,
+    };
+
+    // ── Run pipeline ───────────────────────────────────────────────
+    let result = pipeline::run_pipeline(
+        &provider,
+        &config,
+        &extracted_text,
+        &entry_metadata,
+        checkpoint,
+        &progress_adapter,
+        &cancel_flag,
+        &checkpoint_saver,
+    )
+    .await;
+
+    match result {
+        Ok(parsed) => {
+            let sections_json = serde_json::to_string(&parsed.sections).unwrap_or_default();
+            let stages_json = serde_json::to_string(&parsed.pipeline_stages).unwrap_or_default();
+            let completed_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+            sqlx::query(
+                r#"
+                UPDATE parsed_content SET
+                    document_type = ?,
+                    language = ?,
+                    sections_json = ?,
+                    structured_markdown = ?,
+                    total_tokens_used = ?,
+                    discovery_chunks = ?,
+                    sections_count = ?,
+                    pipeline_stages_json = ?,
+                    checkpoint_json = NULL,
+                    status = ?,
+                    date_completed = ?
+                WHERE attachment_id = ?
+                "#,
+            )
+            .bind(&parsed.document_type)
+            .bind(&parsed.language)
+            .bind(&sections_json)
+            .bind(&parsed.structured_markdown)
+            .bind(parsed.token_usage.total_tokens as i64)
+            .bind(parsed.discovery_chunks as i64)
+            .bind(parsed.sections_extracted as i64)
+            .bind(&stages_json)
+            .bind(&parsed.status)
+            .bind(&completed_at)
+            .bind(payload.attachment_id)
+            .execute(db)
+            .await
+            .map_err(|e| format!("Failed to save parsed content: {e}"))?;
+
+            // Save structured markdown alongside the original .pdf.md
+            let structured_md_path = full_md_path.with_extension("structured.md");
+            let _ = tokio::fs::write(&structured_md_path, &parsed.structured_markdown).await;
+
+            update_progress(app_handle, db, job_id, 1, 1, Some("Done".to_string())).await;
+
+            Ok(Some(
+                serde_json::json!({
+                    "status": parsed.status,
+                    "document_type": parsed.document_type,
+                    "sections": parsed.sections_extracted,
+                    "tokens_used": parsed.token_usage.total_tokens,
+                })
+                .to_string(),
+            ))
+        }
+        Err(pipeline::PipelineError::Cancelled) => {
+            // Keep parsed_content as 'in_progress' with checkpoint intact for resume
+            // (checkpoint was saved incrementally during the pipeline)
+            Err("Pipeline paused".to_string())
+        }
+        Err(pipeline::PipelineError::TooShort) => {
+            sqlx::query(
+                "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
+            )
+            .bind(payload.attachment_id)
+            .execute(db)
+            .await
+            .ok();
+            Err("Document too short to parse (< 500 characters)".to_string())
+        }
+        Err(pipeline::PipelineError::BudgetExceeded(cp)) => {
+            // Save checkpoint for resume
+            let cp_json = serde_json::to_string(&cp).unwrap_or_default();
+            sqlx::query(
+                "UPDATE parsed_content SET status = 'partial', checkpoint_json = ? WHERE attachment_id = ?",
+            )
+            .bind(&cp_json)
+            .bind(payload.attachment_id)
+            .execute(db)
+            .await
+            .ok();
+            Err("Token budget exceeded. Partial results saved — you can resume later.".to_string())
+        }
+        Err(e) => {
+            sqlx::query(
+                "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
+            )
+            .bind(payload.attachment_id)
+            .execute(db)
+            .await
+            .ok();
+            Err(format!("LLM parsing failed: {e}"))
+        }
     }
 }

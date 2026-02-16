@@ -6,6 +6,7 @@ pub mod entry_links;
 pub mod export;
 pub mod import;
 pub mod inline_tables;
+pub mod llm;
 pub mod saved_searches;
 pub mod schema;
 pub mod search;

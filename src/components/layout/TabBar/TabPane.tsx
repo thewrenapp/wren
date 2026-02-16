@@ -8,6 +8,7 @@ export function TabPane({ pane }: { pane: "left" | "right" }) {
 
   return (
     <div
+      data-pane={pane}
       className={cn(
         "flex-1 h-full flex flex-col min-w-0",
         splitEnabled && focusedPane === pane && "ring-1 ring-inset ring-primary/20"

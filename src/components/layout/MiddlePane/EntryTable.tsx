@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from 'react';
-import { Trash2, ExternalLink, ScrollText, RefreshCw } from 'lucide-react';
+import { Trash2, ExternalLink, ScrollText, RefreshCw, Sparkles } from 'lucide-react';
 import { type EntrySummary, type Attachment, useLibraryStore } from '@/stores/libraryStore';
 import { AttachmentIcon, getAttachmentIcon, getEntryTypeIcon } from '@/lib/icons';
 import { useUIStore, type SortField, type SortDirection } from '@/stores/uiStore';
@@ -8,6 +8,7 @@ import { EntryContextMenuContent } from './EntryContextMenu';
 import { TrashContextMenuContent } from './TrashContextMenu';
 import { DataTable, type Column } from './DataTable';
 import { deleteAttachment, reindexAttachment, exportToBiblatexWithFiles, type ExportOptions } from '@/services/tauri';
+import { parseDocument } from '@/services/tauri/commands';
 import { useTabStore } from '@/stores/tabStore';
 import { toast } from '@/stores/toastStore';
 import type { EntryDragData } from '@/components/dnd/DragDropProvider';
@@ -166,6 +167,18 @@ export function EntryTable({
       data: { attachmentId: attachment.id },
     });
     closeContextMenu();
+  };
+
+  const handleParseAttachment = async () => {
+    if (!contextMenuAttachment) return;
+    const { attachment, entryId } = contextMenuAttachment;
+    closeContextMenu();
+    try {
+      await parseDocument(attachment.id, entryId);
+      toast.info('Parsing started');
+    } catch (err) {
+      toast.error(`Failed to start parsing: ${err}`);
+    }
   };
 
   const handleReindexAttachment = (forceOcr = false) => {
@@ -508,10 +521,16 @@ export function EntryTable({
           </DropdownMenuItem>
 
           {contextMenuAttachment?.attachment.markdownPath && (
-            <DropdownMenuItem onClick={handleViewExtractedText}>
-              <ScrollText className='h-4 w-4 mr-2' />
-              View Extracted Text
-            </DropdownMenuItem>
+            <>
+              <DropdownMenuItem onClick={handleViewExtractedText}>
+                <ScrollText className='h-4 w-4 mr-2' />
+                View Extracted Text
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleParseAttachment}>
+                <Sparkles className='h-4 w-4 mr-2' />
+                Parse with AI
+              </DropdownMenuItem>
+            </>
           )}
 
           <DropdownMenuSeparator />

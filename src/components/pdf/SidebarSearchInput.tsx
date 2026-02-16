@@ -1,6 +1,7 @@
 import { useRef, useEffect } from "react";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isInActiveView } from "@/lib/isInActiveView";
 
 interface SidebarSearchInputProps {
   value: string;
@@ -21,8 +22,8 @@ export function SidebarSearchInput({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-        // Check if we're in the annotation panel by looking for our input
         if (inputRef.current) {
+          if (!isInActiveView(inputRef.current)) return;
           const panel = inputRef.current.closest("[data-sidebar-panel]");
           if (panel) {
             e.preventDefault();

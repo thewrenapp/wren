@@ -40,6 +40,7 @@ pub enum JobType {
     BulkImportPdfs,
     BulkImportFolder,
     OcrExtract,
+    LlmParse,
 }
 
 impl JobType {
@@ -49,6 +50,7 @@ impl JobType {
             JobType::BulkImportPdfs => "bulk_import_pdfs",
             JobType::BulkImportFolder => "bulk_import_folder",
             JobType::OcrExtract => "ocr_extract",
+            JobType::LlmParse => "llm_parse",
         }
     }
 
@@ -58,6 +60,7 @@ impl JobType {
             JobType::BulkImportPdfs => "Import PDFs",
             JobType::BulkImportFolder => "Import Folder",
             JobType::OcrExtract => "OCR Extraction",
+            JobType::LlmParse => "Parse Document Structure",
         }
     }
 
@@ -67,6 +70,7 @@ impl JobType {
             "bulk_import_pdfs" => Some(JobType::BulkImportPdfs),
             "bulk_import_folder" => Some(JobType::BulkImportFolder),
             "ocr_extract" => Some(JobType::OcrExtract),
+            "llm_parse" => Some(JobType::LlmParse),
             _ => None,
         }
     }
@@ -79,6 +83,7 @@ impl JobType {
             JobType::BulkImportPdfs => true,   // import has SHA256 dedup
             JobType::BulkImportFolder => true,  // same dedup
             JobType::OcrExtract => true,
+            JobType::LlmParse => true,          // checkpointed, can resume
         }
     }
 
@@ -91,7 +96,7 @@ impl JobType {
             JobType::BulkImportPdfs => false,
             JobType::BulkImportFolder => false,
             JobType::OcrExtract => false,       // kreuzberg is async internally
-            // Future: LlmAnalysis => true,
+            JobType::LlmParse => false,         // network I/O (API calls)
         }
     }
 }
@@ -142,4 +147,11 @@ pub struct BulkImportFolderPayload {
 #[serde(rename_all = "camelCase")]
 pub struct OcrExtractPayload {
     pub attachment_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmParsePayload {
+    pub attachment_id: i64,
+    pub entry_id: i64,
 }

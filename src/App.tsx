@@ -33,9 +33,14 @@ function AppShell() {
         e.preventDefault();
         setAdvancedSearchOpen(true);
       }
+      // Prevent native WebView find bar — each viewer toolbar handles its own Cmd+F search
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "f") {
+        e.preventDefault();
+      }
     };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    // Use capture phase to intercept before native WebView handlers
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [setAdvancedSearchOpen]);
 
   // Apply theme on mount and when it changes

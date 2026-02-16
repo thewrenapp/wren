@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { BookOpen, FileSearch, Search, Sparkles, X } from "lucide-react";
+import { isInActiveView } from "@/lib/isInActiveView";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,10 +19,12 @@ export function QuickSearchBar() {
   const { searchQuery, setSearchQuery, searchScope, setSearchScope } = useLibraryStore();
   const { setCommandPaletteOpen, setCommandPaletteMode } = useUIStore();
   const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isInActiveView(containerRef.current)) return;
       // Cmd/Ctrl+F to focus search
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
@@ -39,7 +42,7 @@ export function QuickSearchBar() {
   }, [setSearchQuery]);
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <Input
         ref={inputRef}
         type="text"

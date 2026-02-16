@@ -26,6 +26,7 @@ const JOB_TYPE_NAMES: Record<string, string> = {
   bulk_import_pdfs: "Import PDFs",
   bulk_import_folder: "Import Folder",
   ocr_extract: "OCR Extraction",
+  llm_parse: "Parse Document Structure",
 };
 
 export function jobDisplayName(job: Job): string {
@@ -44,7 +45,7 @@ interface JobState {
     payload: Record<string, unknown>,
     options?: { priority?: number; title?: string }
   ) => Promise<string>;
-  cancelJob: (jobId: string) => Promise<void>;
+  cancelJob: (jobId: string, force?: boolean) => Promise<void>;
   retryJob: (jobId: string) => Promise<void>;
   clearFinished: () => Promise<void>;
 
@@ -85,8 +86,8 @@ export const useJobStore = create<JobState>()((set, get) => ({
     return jobId;
   },
 
-  cancelJob: async (jobId) => {
-    await invoke("cancel_job", { jobId });
+  cancelJob: async (jobId, force) => {
+    await invoke("cancel_job", { jobId, force: force ?? false });
   },
 
   retryJob: async (jobId) => {

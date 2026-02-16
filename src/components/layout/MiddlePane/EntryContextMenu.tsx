@@ -18,6 +18,7 @@ import {
   Paperclip,
   RefreshCw,
   StickyNote,
+  Sparkles,
 } from 'lucide-react';
 import { IconTagOff } from '@tabler/icons-react';
 import {
@@ -61,6 +62,7 @@ import {
   reindexEntry,
   type ExportOptions,
 } from '@/services/tauri';
+import { parseEntries } from '@/services/tauri/commands';
 import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
@@ -359,6 +361,20 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
     onClose?.();
   };
 
+  const handleParseWithAI = async () => {
+    try {
+      const jobIds = await parseEntries(targetIds);
+      if (jobIds.length === 0) {
+        toast.warning('No attachments with extracted text found. Run text extraction first.');
+      } else {
+        toast.info(isMultiSelect ? `Parsing attachments for ${targetIds.length} entries...` : 'Document parsing started');
+      }
+    } catch (err) {
+      toast.error(`Failed to start parsing: ${err}`);
+    }
+    onClose?.();
+  };
+
   const handleReextractAttachments = (forceOcr = false) => {
     onClose?.();
     const ocrLabel = forceOcr ? ' with OCR' : '';
@@ -600,6 +616,11 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
       </DropdownMenuItem>
 
       <DropdownMenuSeparator />
+
+      <DropdownMenuItem onClick={handleParseWithAI}>
+        <Sparkles className='h-4 w-4 mr-2' />
+        {isMultiSelect ? `Parse Attachments (${targetIds.length} Entries)` : 'Parse Attachments with AI'}
+      </DropdownMenuItem>
 
       <DropdownMenuSub>
         <DropdownMenuSubTrigger>
@@ -901,6 +922,19 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
     }
   };
 
+  const handleParseWithAI = async () => {
+    try {
+      const jobIds = await parseEntries(targetIds);
+      if (jobIds.length === 0) {
+        toast.warning('No attachments with extracted text found. Run text extraction first.');
+      } else {
+        toast.info(isMultiSelect ? `Parsing attachments for ${targetIds.length} entries...` : 'Document parsing started');
+      }
+    } catch (err) {
+      toast.error(`Failed to start parsing: ${err}`);
+    }
+  };
+
   const handleReextractAttachments = (forceOcr = false) => {
     const ocrLabel = forceOcr ? ' with OCR' : '';
     const label = isMultiSelect
@@ -1162,6 +1196,11 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
         </ContextMenuItem>
 
         <ContextMenuSeparator />
+
+        <ContextMenuItem onClick={handleParseWithAI}>
+          <Sparkles className='h-4 w-4 mr-2' />
+          {isMultiSelect ? `Parse Attachments (${targetIds.length} Entries)` : 'Parse Attachments with AI'}
+        </ContextMenuItem>
 
         <ContextMenuSub>
           <ContextMenuSubTrigger>

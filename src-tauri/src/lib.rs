@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod filename;
 pub mod jobs;
+pub mod llm;
 pub mod pdf;
 pub mod search;
 pub mod state;
@@ -279,6 +280,14 @@ pub fn run() {
             jobs::commands::cancel_job,
             jobs::commands::retry_job,
             jobs::commands::clear_finished_jobs,
+            // LLM Document Parsing
+            commands::llm::parse_document,
+            commands::llm::parse_entries,
+            commands::llm::get_parsed_content,
+            commands::llm::get_entry_parsed_content,
+            commands::llm::delete_parsed_content,
+            commands::llm::list_llm_models,
+            commands::llm::validate_llm_config,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

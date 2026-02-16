@@ -23,9 +23,6 @@ import {
   TableProperties,
   PanelRight,
   PanelRightClose,
-  ChevronUp,
-  ChevronDown,
-  X,
   Highlighter,
   MessageCircle,
 } from "lucide-react";
@@ -50,14 +47,6 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { EditorView } from "@codemirror/view";
 import { cn } from "@/lib/utils";
 import {
@@ -65,7 +54,14 @@ import {
   getInlineTables,
   type InlineTableSummary,
 } from "@/services/tauri";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useUIStore } from "@/stores/uiStore";
+import { isInActiveView } from "@/lib/isInActiveView";
+import { EditorSearchBar } from "./EditorSearchBar";
 import type { SearchOptions } from "./useMarkdownSearch";
 
 // =====================================================
@@ -338,11 +334,7 @@ export function EditorToolbar({
 
   // Search state
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [highlightAll, setHighlightAll] = useState(true);
-  const [matchCase, setMatchCase] = useState(false);
-  const [wholeWords, setWholeWords] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
 
   const openTablePicker = useCallback(async () => {
     setTablePickerOpen(true);
@@ -358,76 +350,24 @@ export function EditorToolbar({
     }
   }, []);
 
-  // Search handlers
-  const handleSearchChange = useCallback(
-    (value: string) => {
-      setSearchQuery(value);
-      if (value) {
-        onSearch?.(value, { highlightAll, matchCase, wholeWords });
-      } else {
-        onSearchClear?.();
-      }
-    },
-    [onSearch, onSearchClear, highlightAll, matchCase, wholeWords],
-  );
-
-  const handleHighlightAllChange = useCallback(
-    (checked: boolean) => {
-      setHighlightAll(checked);
-      if (searchQuery) {
-        onSearch?.(searchQuery, { highlightAll: checked, matchCase, wholeWords });
-      }
-    },
-    [searchQuery, onSearch, matchCase, wholeWords],
-  );
-
-  const handleMatchCaseChange = useCallback(
-    (checked: boolean) => {
-      setMatchCase(checked);
-      if (searchQuery) {
-        onSearch?.(searchQuery, { highlightAll, matchCase: checked, wholeWords });
-      }
-    },
-    [searchQuery, onSearch, highlightAll, wholeWords],
-  );
-
-  const handleWholeWordsChange = useCallback(
-    (checked: boolean) => {
-      setWholeWords(checked);
-      if (searchQuery) {
-        onSearch?.(searchQuery, { highlightAll, matchCase, wholeWords: checked });
-      }
-    },
-    [searchQuery, onSearch, highlightAll, matchCase],
-  );
-
   const handleCloseSearch = useCallback(() => {
     setSearchOpen(false);
-    setSearchQuery("");
     onSearchClear?.();
   }, [onSearchClear]);
-
-  useEffect(() => {
-    if (searchOpen) {
-      setTimeout(() => searchInputRef.current?.focus(), 100);
-    }
-  }, [searchOpen]);
 
   // Keyboard shortcuts for search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isInActiveView(toolbarRef.current)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
         setSearchOpen(true);
-      }
-      if (e.key === "Escape" && searchOpen) {
-        handleCloseSearch();
       }
     };
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [searchOpen, handleCloseSearch]);
+  }, []);
 
   // Listen for Command Palette search event
   useEffect(() => {
@@ -513,7 +453,7 @@ export function EditorToolbar({
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex items-center justify-between px-3 py-1.5 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 overflow-hidden">
+      <div ref={toolbarRef} className="flex items-center justify-between px-3 py-1.5 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 overflow-hidden">
         <div className="flex items-center gap-0.5 min-w-0 overflow-x-auto scrollbar-none">
           {/* Text formatting */}
           <ToolbarButton
@@ -680,14 +620,8 @@ export function EditorToolbar({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Search popover */}
-          <Popover open={searchOpen} onOpenChange={(open) => {
-            if (open) {
-              setSearchOpen(true);
-            } else {
-              handleCloseSearch();
-            }
-          }}>
+          {/* Search */}
+          <Popover open={searchOpen} onOpenChange={setSearchOpen}>
             <PopoverTrigger asChild>
               <Button
                 variant="ghost"
@@ -698,59 +632,15 @@ export function EditorToolbar({
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-80 p-3">
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Input
-                    ref={searchInputRef}
-                    type="text"
-                    placeholder="Find in Document"
-                    value={searchQuery}
-                    onChange={(e) => handleSearchChange(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        if (e.shiftKey) {
-                          onSearchPrev?.();
-                        } else {
-                          onSearchNext?.();
-                        }
-                      }
-                    }}
-                    className="flex-1 h-8"
-                  />
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onSearchPrev} disabled={searchMatchCount === 0}>
-                    <ChevronUp className="h-4 w-4" />
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onSearchNext} disabled={searchMatchCount === 0}>
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={handleCloseSearch}>
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-
-                {searchQuery && (
-                  <div className="text-xs text-muted-foreground">
-                    {searchMatchCount > 0
-                      ? `${searchCurrentMatch} of ${searchMatchCount} matches`
-                      : "No matches found"}
-                  </div>
-                )}
-
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-1.5">
-                    <Checkbox id="md-highlight-all" checked={highlightAll} onCheckedChange={(checked) => handleHighlightAllChange(checked === true)} />
-                    <Label htmlFor="md-highlight-all" className="text-xs cursor-pointer">Highlight all</Label>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <Checkbox id="md-match-case" checked={matchCase} onCheckedChange={(checked) => handleMatchCaseChange(checked === true)} />
-                    <Label htmlFor="md-match-case" className="text-xs cursor-pointer">Match case</Label>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <Checkbox id="md-whole-words" checked={wholeWords} onCheckedChange={(checked) => handleWholeWordsChange(checked === true)} />
-                    <Label htmlFor="md-whole-words" className="text-xs cursor-pointer">Whole words</Label>
-                  </div>
-                </div>
-              </div>
+              <EditorSearchBar
+                onSearch={(q, opts) => onSearch?.(q, opts)}
+                onSearchNext={() => onSearchNext?.()}
+                onSearchPrev={() => onSearchPrev?.()}
+                onSearchClear={() => onSearchClear?.()}
+                searchMatchCount={searchMatchCount ?? 0}
+                searchCurrentMatch={searchCurrentMatch ?? 0}
+                onClose={handleCloseSearch}
+              />
             </PopoverContent>
           </Popover>
 

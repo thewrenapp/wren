@@ -28,6 +28,14 @@ interface SettingsState {
   enableOcr: boolean;
   forceOcr: boolean;
 
+  // LLM Settings
+  llmProvider: string;
+  llmApiKey: string;
+  llmModel: string;
+  llmBaseUrl: string;
+  llmAutoParseOnImport: boolean;
+  llmTokenBudget: number;
+
   // Code Editor
   showCodeLineNumbers: boolean;
 
@@ -43,6 +51,12 @@ interface SettingsState {
   setEmbeddingModel: (model: string) => void;
   setEnableOcr: (enabled: boolean) => void;
   setForceOcr: (enabled: boolean) => void;
+  setLlmProvider: (provider: string) => void;
+  setLlmApiKey: (key: string) => void;
+  setLlmModel: (model: string) => void;
+  setLlmBaseUrl: (url: string) => void;
+  setLlmAutoParseOnImport: (enabled: boolean) => void;
+  setLlmTokenBudget: (budget: number) => void;
   setShowWelcomeOnStartup: (show: boolean) => void;
   loadFromBackend: () => Promise<void>;
 }
@@ -57,6 +71,12 @@ export const useSettingsStore = create<SettingsState>()(
       embeddingModel: "all-MiniLM-L6-v2",
       enableOcr: true,
       forceOcr: false,
+      llmProvider: "openai",
+      llmApiKey: "",
+      llmModel: "gpt-4o-mini",
+      llmBaseUrl: "https://api.openai.com/v1",
+      llmAutoParseOnImport: false,
+      llmTokenBudget: 200000,
       showCodeLineNumbers: false,
       showWelcomeOnStartup: true,
 
@@ -98,6 +118,72 @@ export const useSettingsStore = create<SettingsState>()(
           toast.error("Failed to update setting");
         }
       },
+      setLlmProvider: async (provider) => {
+        const prev = get().llmProvider;
+        set({ llmProvider: provider });
+        try {
+          await updateSetting("llm_provider", provider);
+        } catch (err) {
+          console.error("Failed to update llm_provider setting:", err);
+          set({ llmProvider: prev });
+          toast.error("Failed to update setting");
+        }
+      },
+      setLlmApiKey: async (key) => {
+        const prev = get().llmApiKey;
+        set({ llmApiKey: key });
+        try {
+          await updateSetting("llm_api_key", key);
+        } catch (err) {
+          console.error("Failed to update llm_api_key setting:", err);
+          set({ llmApiKey: prev });
+          toast.error("Failed to update setting");
+        }
+      },
+      setLlmModel: async (model) => {
+        const prev = get().llmModel;
+        set({ llmModel: model });
+        try {
+          await updateSetting("llm_model", model);
+        } catch (err) {
+          console.error("Failed to update llm_model setting:", err);
+          set({ llmModel: prev });
+          toast.error("Failed to update setting");
+        }
+      },
+      setLlmBaseUrl: async (url) => {
+        const prev = get().llmBaseUrl;
+        set({ llmBaseUrl: url });
+        try {
+          await updateSetting("llm_base_url", url);
+        } catch (err) {
+          console.error("Failed to update llm_base_url setting:", err);
+          set({ llmBaseUrl: prev });
+          toast.error("Failed to update setting");
+        }
+      },
+      setLlmAutoParseOnImport: async (enabled) => {
+        const prev = get().llmAutoParseOnImport;
+        set({ llmAutoParseOnImport: enabled });
+        try {
+          await updateSetting("llm_auto_parse", enabled ? "true" : "false");
+        } catch (err) {
+          console.error("Failed to update llm_auto_parse setting:", err);
+          set({ llmAutoParseOnImport: prev });
+          toast.error("Failed to update setting");
+        }
+      },
+      setLlmTokenBudget: async (budget) => {
+        const prev = get().llmTokenBudget;
+        set({ llmTokenBudget: budget });
+        try {
+          await updateSetting("llm_token_budget", String(budget));
+        } catch (err) {
+          console.error("Failed to update llm_token_budget setting:", err);
+          set({ llmTokenBudget: prev });
+          toast.error("Failed to update setting");
+        }
+      },
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
       loadFromBackend: async () => {
         try {
@@ -114,6 +200,19 @@ export const useSettingsStore = create<SettingsState>()(
           if (forceOcr) {
             set({ forceOcr: forceOcr.value === "true" });
           }
+          // LLM settings
+          const llmProvider = settings.find(s => s.key === "llm_provider");
+          if (llmProvider) set({ llmProvider: llmProvider.value });
+          const llmApiKey = settings.find(s => s.key === "llm_api_key");
+          if (llmApiKey) set({ llmApiKey: llmApiKey.value });
+          const llmModel = settings.find(s => s.key === "llm_model");
+          if (llmModel) set({ llmModel: llmModel.value });
+          const llmBaseUrl = settings.find(s => s.key === "llm_base_url");
+          if (llmBaseUrl) set({ llmBaseUrl: llmBaseUrl.value });
+          const llmAutoParse = settings.find(s => s.key === "llm_auto_parse");
+          if (llmAutoParse) set({ llmAutoParseOnImport: llmAutoParse.value === "true" });
+          const llmTokenBudget = settings.find(s => s.key === "llm_token_budget");
+          if (llmTokenBudget) set({ llmTokenBudget: parseInt(llmTokenBudget.value, 10) || 200000 });
         } catch (err) {
           console.error("Failed to load settings from backend:", err);
         }

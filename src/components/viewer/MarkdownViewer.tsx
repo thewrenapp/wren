@@ -68,6 +68,7 @@ export function MarkdownViewer({ attachmentId, infoPaneOpen, onToggleInfoPane }:
       attachmentId={attachmentId}
       showToolbar={true}
       showReindex={true}
+      reindexOnUnmount={false}
       infoPaneOpen={infoPaneOpen}
       onToggleInfoPane={onToggleInfoPane}
     />

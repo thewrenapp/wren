@@ -84,6 +84,7 @@ export function MiddlePane() {
     activeFilter,
     libraryInfoPaneEnabled,
     toggleLibraryInfoPane,
+    libraryLayout,
   } = useUIStore();
   const {
     entries,
@@ -799,9 +800,9 @@ export function MiddlePane() {
             title={libraryInfoPaneEnabled ? 'Hide Info Panel' : 'Show Info Panel'}
           >
             {libraryInfoPaneEnabled ? (
-              <PanelRightClose className='h-4 w-4' />
+              <PanelRightClose className={cn('h-4 w-4', libraryLayout === 'stacked' && 'rotate-90')} />
             ) : (
-              <PanelRight className='h-4 w-4' />
+              <PanelRight className={cn('h-4 w-4', libraryLayout === 'stacked' && 'rotate-90')} />
             )}
           </Button>
 

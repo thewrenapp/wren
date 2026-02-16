@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,6 +17,8 @@ pub struct JobQueue {
     app_handle: AppHandle,
     semaphore: Arc<Semaphore>,
     cancel_flags: Arc<RwLock<HashMap<String, CancelFlag>>>,
+    /// Jobs that were hard-cancelled (not paused) — checkpoint should be cleared
+    force_cancel_ids: Arc<RwLock<HashSet<String>>>,
     notify: Arc<Notify>,
     shutdown_flag: Arc<AtomicBool>,
     pub search_index: Arc<SearchIndex>,
@@ -36,6 +38,7 @@ impl JobQueue {
             app_handle,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             cancel_flags: Arc::new(RwLock::new(HashMap::new())),
+            force_cancel_ids: Arc::new(RwLock::new(HashSet::new())),
             notify: Arc::new(Notify::new()),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             search_index,
@@ -198,9 +201,33 @@ impl JobQueue {
                             }
                             Err(err) => {
                                 if cancel_flag.load(Ordering::Relaxed) {
+                                    // Check if this was a hard cancel (vs pause)
+                                    let was_force = {
+                                        let mut fids = q.force_cancel_ids.write().await;
+                                        fids.remove(&jid)
+                                    };
+
+                                    if was_force {
+                                        // Hard cancel: clear checkpoint so job can't be resumed
+                                        if job_type_str == "llm_parse" {
+                                            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&payload_json) {
+                                                if let Some(att_id) = payload.get("attachment_id").and_then(|v| v.as_i64()) {
+                                                    let _ = sqlx::query(
+                                                        "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
+                                                    )
+                                                    .bind(att_id)
+                                                    .execute(&q.db)
+                                                    .await;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let msg = if was_force { "Cancelled" } else { "Paused" };
                                     let _ = sqlx::query(
-                                        "UPDATE jobs SET status = 'cancelled', completed_at = datetime('now'), progress_message = 'Cancelled' WHERE id = ?",
+                                        "UPDATE jobs SET status = 'cancelled', completed_at = datetime('now'), progress_message = ? WHERE id = ?",
                                     )
+                                    .bind(msg)
                                     .bind(&jid)
                                     .execute(&q.db)
                                     .await;
@@ -231,12 +258,30 @@ impl JobQueue {
         });
     }
 
-    /// Cancel a job (running or pending)
-    pub async fn cancel(&self, job_id: &str) -> Result<(), String> {
+    /// Cancel a job (running or pending).
+    ///
+    /// When `force` is true, this is a hard cancel — any checkpoint/resume data
+    /// will be cleared after the job stops. When false (pause), checkpoints are preserved.
+    pub async fn cancel(&self, job_id: &str, force: bool) -> Result<(), String> {
+        // Track force cancellations so the scheduler can clean up checkpoints
+        if force {
+            let mut fids = self.force_cancel_ids.write().await;
+            fids.insert(job_id.to_string());
+        }
+
         // Check if running — set cancel flag
         let flags = self.cancel_flags.read().await;
         if let Some(flag) = flags.get(job_id) {
             flag.store(true, Ordering::Relaxed);
+            drop(flags);
+            // Update progress message immediately so frontend shows feedback
+            let _ = sqlx::query(
+                "UPDATE jobs SET progress_message = 'Cancelling...' WHERE id = ?",
+            )
+            .bind(job_id)
+            .execute(&self.db)
+            .await;
+            self.emit_job_update(job_id).await;
             return Ok(());
         }
         drop(flags);
@@ -252,6 +297,12 @@ impl JobQueue {
 
         self.emit_job_update(job_id).await;
         Ok(())
+    }
+
+    /// Check if a job was force-cancelled (vs paused).
+    pub async fn is_force_cancelled(&self, job_id: &str) -> bool {
+        let fids = self.force_cancel_ids.read().await;
+        fids.contains(job_id)
     }
 
     /// Retry a failed job

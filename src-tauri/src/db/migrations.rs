@@ -265,6 +265,63 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Parsed content table for LLM-powered document parsing
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS parsed_content (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            attachment_id INTEGER NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+            entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+            document_type TEXT,
+            language TEXT DEFAULT 'en',
+            sections_json TEXT,
+            structured_markdown TEXT,
+            model_used TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            total_tokens_used INTEGER DEFAULT 0,
+            discovery_chunks INTEGER DEFAULT 0,
+            sections_count INTEGER DEFAULT 0,
+            pipeline_stages_json TEXT,
+            checkpoint_json TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            date_started TEXT NOT NULL,
+            date_completed TEXT,
+            UNIQUE(attachment_id)
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_parsed_content_entry ON parsed_content(entry_id)")
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_parsed_content_attachment ON parsed_content(attachment_id)")
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_parsed_content_status ON parsed_content(status)")
+        .execute(pool)
+        .await;
+
+    // Seed default LLM settings
+    let _ = sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO settings (key, value, value_type) VALUES
+            ('llm_enabled', 'false', 'boolean'),
+            ('llm_provider', 'openai', 'string'),
+            ('llm_model', 'gpt-4o-mini', 'string'),
+            ('llm_base_url', 'https://api.openai.com/v1', 'string'),
+            ('llm_api_key', '', 'string'),
+            ('llm_token_budget', '200000', 'number'),
+            ('llm_concurrent_extractions', '3', 'number'),
+            ('llm_auto_parse', 'false', 'boolean')
+        "#
+    )
+    .execute(pool)
+    .await;
+
     Ok(())
 }
 

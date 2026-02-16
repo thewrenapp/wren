@@ -220,6 +220,7 @@ export const tabIconMap = {
   item: IconFileText,
   entry: IconArticle,
   markdown: IconFileText,
+  parsed: IconFileDescription,
   search: IconSearch,
   collection: IconFolder,
   welcome: IconHome,

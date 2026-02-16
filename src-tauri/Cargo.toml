@@ -55,6 +55,12 @@ tantivy = "0.22"
 # BibTeX/BibLaTeX parsing and writing
 biblatex = "0.11"
 
+# HTTP client (for LLM API calls)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Async trait support
+async-trait = "0.1"
+
 # Regex
 regex = "1"
 

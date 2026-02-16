@@ -37,6 +37,22 @@ function renderTab(tab: Tab) {
         />
       );
 
+    case "parsed":
+      if (!tab.entryId || !tab.attachmentId) {
+        return (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+            No attachment specified
+          </div>
+        );
+      }
+      return (
+        <EntryTab
+          entryId={tab.entryId}
+          attachmentId={tab.attachmentId}
+          viewMode="parsed"
+        />
+      );
+
     case "search":
       return (
         <div className="flex-1 flex items-center justify-center text-muted-foreground">
