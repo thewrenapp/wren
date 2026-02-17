@@ -126,6 +126,8 @@ export interface EntrySummary {
   hasNote: boolean;
   hasWeblink: boolean;
   thumbnailPath?: string;
+  hasExtractedText: boolean;
+  hasStructuredContent: boolean;
 }
 
 /**
@@ -184,6 +186,7 @@ export interface Attachment {
   frontmatter?: string;
   thumbnailPath?: string;
   markdownPath?: string;
+  hasParsedContent: boolean;
   dateAdded: string;
   dateModified: string;
 }

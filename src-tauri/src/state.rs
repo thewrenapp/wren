@@ -33,6 +33,9 @@ impl AppState {
 
         tracing::info!("Database initialized at {:?}", db_path);
 
+        // Backfill note content into parsed_content table
+        Self::backfill_note_parsed_content(&db, &library_path).await;
+
         // Initialize full-text search index
         let index_path = library_path.join(".wren").join("tantivy_index");
         let search_index = SearchIndex::open_or_create(&index_path)?;
@@ -78,5 +81,81 @@ impl AppState {
     pub async fn get_library_path_string(&self) -> String {
         let path = self.library_path.read().await;
         path.to_string_lossy().to_string()
+    }
+
+    /// Backfill existing notes into parsed_content table.
+    /// Handles two cases:
+    /// 1. Notes with markdown_path set but no parsed_content row
+    /// 2. Imported .md files with file_path but NULL markdown_path (fixes them too)
+    async fn backfill_note_parsed_content(pool: &SqlitePool, library_path: &std::path::Path) {
+        #[derive(sqlx::FromRow)]
+        struct NoteRow {
+            id: i64,
+            entry_id: i64,
+            file_path: Option<String>,
+            markdown_path: Option<String>,
+        }
+
+        // Find all note attachments missing a parsed_content row
+        let rows: Vec<NoteRow> = sqlx::query_as(
+            r#"SELECT a.id, a.entry_id, a.file_path, a.markdown_path FROM attachments a
+               JOIN attachment_types at ON a.attachment_type_id = at.id
+               LEFT JOIN parsed_content pc ON pc.attachment_id = a.id
+               WHERE at.name = 'note'
+                 AND (a.markdown_path IS NOT NULL OR a.file_path IS NOT NULL)
+                 AND pc.id IS NULL"#,
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        if rows.is_empty() {
+            return;
+        }
+
+        tracing::info!("Backfilling {} note(s) into parsed_content", rows.len());
+
+        for note in rows {
+            // Determine which path to read from
+            let (full_path, needs_markdown_path_fix) = if let Some(ref md) = note.markdown_path {
+                (library_path.join(md), false)
+            } else if let Some(ref fp) = note.file_path {
+                // Imported .md file with file_path but no markdown_path
+                let fp_path = std::path::PathBuf::from(fp);
+                if fp_path.is_absolute() {
+                    (fp_path, true)
+                } else {
+                    (library_path.join(fp), true)
+                }
+            } else {
+                continue;
+            };
+
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                // Fix missing markdown_path for imported notes
+                if needs_markdown_path_fix {
+                    if let Ok(relative) = full_path.strip_prefix(library_path) {
+                        let rel_str = relative.to_string_lossy().to_string();
+                        let _ = sqlx::query(
+                            "UPDATE attachments SET markdown_path = ? WHERE id = ?",
+                        )
+                        .bind(&rel_str)
+                        .bind(note.id)
+                        .execute(pool)
+                        .await;
+                    }
+                }
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO parsed_content (attachment_id, entry_id, structured_markdown, model_used, provider, status, date_started, date_completed)
+                       VALUES (?, ?, ?, 'user', 'manual', 'success', datetime('now'), datetime('now'))"#,
+                )
+                .bind(note.id)
+                .bind(note.entry_id)
+                .bind(&content)
+                .execute(pool)
+                .await;
+            }
+        }
     }
 }

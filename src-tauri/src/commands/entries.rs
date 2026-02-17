@@ -87,6 +87,8 @@ struct EntrySummaryRow {
     has_note: bool,
     has_weblink: bool,
     thumbnail_path: Option<String>,
+    has_extracted_text: bool,
+    has_structured_content: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -122,6 +124,8 @@ struct AttachmentRow {
     frontmatter: Option<String>,
     thumbnail_path: Option<String>,
     markdown_path: Option<String>,
+    #[sqlx(default)]
+    has_parsed_content: bool,
     date_added: String,
     date_modified: String,
 }
@@ -1222,7 +1226,11 @@ pub async fn get_entries(
             (SELECT a.thumbnail_path FROM attachments a
              JOIN attachment_types at ON a.attachment_type_id = at.id
              WHERE a.entry_id = e.id AND at.name = 'pdf'
-             LIMIT 1) as thumbnail_path
+             LIMIT 1) as thumbnail_path,
+            EXISTS(SELECT 1 FROM attachments a
+                   WHERE a.entry_id = e.id AND a.markdown_path IS NOT NULL) as has_extracted_text,
+            EXISTS(SELECT 1 FROM parsed_content pc
+                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.is_deleted = 0
@@ -1289,6 +1297,8 @@ pub async fn get_entries(
             has_note: entry.has_note,
             has_weblink: entry.has_weblink,
             thumbnail_path: entry.thumbnail_path,
+            has_extracted_text: entry.has_extracted_text,
+            has_structured_content: entry.has_structured_content,
         });
     }
 
@@ -1397,7 +1407,11 @@ pub async fn get_entries_paged(
             (SELECT a.thumbnail_path FROM attachments a
              JOIN attachment_types at ON a.attachment_type_id = at.id
              WHERE a.entry_id = e.id AND at.name = 'pdf'
-             LIMIT 1) as thumbnail_path
+             LIMIT 1) as thumbnail_path,
+            EXISTS(SELECT 1 FROM attachments a
+                   WHERE a.entry_id = e.id AND a.markdown_path IS NOT NULL) as has_extracted_text,
+            EXISTS(SELECT 1 FROM parsed_content pc
+                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.is_deleted = 0
@@ -1495,6 +1509,8 @@ pub async fn get_entries_paged(
             has_note: entry.has_note,
             has_weblink: entry.has_weblink,
             thumbnail_path: entry.thumbnail_path,
+            has_extracted_text: entry.has_extracted_text,
+            has_structured_content: entry.has_structured_content,
         });
     }
 
@@ -2133,7 +2149,11 @@ pub async fn get_trashed_entries(state: State<'_, AppState>) -> Result<Vec<Entry
             (SELECT a.thumbnail_path FROM attachments a
              JOIN attachment_types at ON a.attachment_type_id = at.id
              WHERE a.entry_id = e.id AND at.name = 'pdf'
-             LIMIT 1) as thumbnail_path
+             LIMIT 1) as thumbnail_path,
+            EXISTS(SELECT 1 FROM attachments a
+                   WHERE a.entry_id = e.id AND a.markdown_path IS NOT NULL) as has_extracted_text,
+            EXISTS(SELECT 1 FROM parsed_content pc
+                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.is_deleted = 1
@@ -2181,6 +2201,8 @@ pub async fn get_trashed_entries(state: State<'_, AppState>) -> Result<Vec<Entry
             has_note: entry.has_note,
             has_weblink: entry.has_weblink,
             thumbnail_path: entry.thumbnail_path,
+            has_extracted_text: entry.has_extracted_text,
+            has_structured_content: entry.has_structured_content,
         });
     }
 
@@ -2422,6 +2444,8 @@ async fn get_entry_attachments_internal(
             at.display_name as attachment_type_display,
             a.title, a.file_path, a.file_hash, a.file_size, a.url,
             a.page_count, a.frontmatter, a.thumbnail_path, a.markdown_path,
+            EXISTS(SELECT 1 FROM parsed_content pc
+                   WHERE pc.attachment_id = a.id AND pc.status IN ('success', 'partial')) as has_parsed_content,
             a.date_added, a.date_modified
         FROM attachments a
         JOIN attachment_types at ON a.attachment_type_id = at.id
@@ -2451,6 +2475,7 @@ async fn get_entry_attachments_internal(
             frontmatter: a.frontmatter,
             thumbnail_path: a.thumbnail_path,
             markdown_path: a.markdown_path,
+            has_parsed_content: a.has_parsed_content,
             date_added: a.date_added,
             date_modified: a.date_modified,
         })
@@ -2467,6 +2492,8 @@ pub async fn get_attachment(state: State<'_, AppState>, id: i64) -> Result<Attac
             at.display_name as attachment_type_display,
             a.title, a.file_path, a.file_hash, a.file_size, a.url,
             a.page_count, a.frontmatter, a.thumbnail_path, a.markdown_path,
+            EXISTS(SELECT 1 FROM parsed_content pc
+                   WHERE pc.attachment_id = a.id AND pc.status IN ('success', 'partial')) as has_parsed_content,
             a.date_added, a.date_modified
         FROM attachments a
         JOIN attachment_types at ON a.attachment_type_id = at.id
@@ -2494,6 +2521,7 @@ pub async fn get_attachment(state: State<'_, AppState>, id: i64) -> Result<Attac
         frontmatter: attachment.frontmatter,
         thumbnail_path: attachment.thumbnail_path,
         markdown_path: attachment.markdown_path,
+        has_parsed_content: attachment.has_parsed_content,
         date_added: attachment.date_added,
         date_modified: attachment.date_modified,
     })
@@ -3147,6 +3175,40 @@ pub async fn add_file_attachment(
         dest_path.file_name().unwrap_or_default().to_string_lossy()
     );
 
+    // For note attachments (.md files), set markdown_path and populate parsed_content
+    if attachment_type == "note" {
+        let library_path = state.library_path.read().await;
+        let md_relative = dest_path
+            .strip_prefix(&*library_path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| dest_path_str.clone());
+
+        // Set markdown_path so the editor can load the content
+        sqlx::query("UPDATE attachments SET markdown_path = ? WHERE id = ?")
+            .bind(&md_relative)
+            .bind(attachment_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| format!("Failed to update markdown_path: {}", e))?;
+
+        // Store content in parsed_content for RAG/AI features
+        if let Ok(content) = fs::read_to_string(&dest_path) {
+            let _ = sqlx::query(
+                r#"INSERT INTO parsed_content (attachment_id, entry_id, structured_markdown, model_used, provider, status, date_started, date_completed)
+                   VALUES (?, ?, ?, 'user', 'manual', 'success', datetime('now'), datetime('now'))
+                   ON CONFLICT(attachment_id) DO UPDATE SET
+                     structured_markdown = excluded.structured_markdown,
+                     date_completed = datetime('now')
+                "#,
+            )
+            .bind(attachment_id)
+            .bind(entry_id)
+            .bind(&content)
+            .execute(&state.db)
+            .await;
+        }
+    }
+
     // Enqueue background text extraction job for extractable file types
     // (kreuzberg supports PDF, EPUB, HTML, DOCX, images, etc.)
     let extractable = matches!(
@@ -3337,6 +3399,109 @@ pub async fn show_entry_in_finder(state: State<'_, AppState>, entry_id: i64) -> 
     #[cfg(target_os = "linux")]
     {
         // Try xdg-open on the parent directory
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| format!("Failed to open file manager: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Show a specific attachment's file in Finder/Explorer
+#[tauri::command]
+pub async fn show_attachment_in_finder(state: State<'_, AppState>, attachment_id: i64) -> Result<(), String> {
+    #[derive(sqlx::FromRow)]
+    struct AttachmentPaths {
+        file_path: Option<String>,
+        markdown_path: Option<String>,
+    }
+
+    let row: Option<AttachmentPaths> = sqlx::query_as(
+        "SELECT file_path, markdown_path FROM attachments WHERE id = ?",
+    )
+    .bind(attachment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let row = row.ok_or_else(|| "Attachment not found".to_string())?;
+
+    // file_path is absolute; markdown_path is relative to library
+    let path = if let Some(fp) = row.file_path {
+        fp
+    } else if let Some(mp) = row.markdown_path {
+        let library_path = state.library_path.read().await;
+        library_path.join(&mp).to_string_lossy().to_string()
+    } else {
+        return Err("No file path for this attachment".to_string());
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open Explorer: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| format!("Failed to open file manager: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Show an attachment's markdown file in Finder (for extracted/structured content tabs)
+#[tauri::command]
+pub async fn show_markdown_in_finder(state: State<'_, AppState>, attachment_id: i64) -> Result<(), String> {
+    let markdown_path: Option<String> = sqlx::query_scalar(
+        "SELECT markdown_path FROM attachments WHERE id = ?",
+    )
+    .bind(attachment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .flatten();
+
+    let mp = markdown_path.ok_or_else(|| "No markdown file for this attachment".to_string())?;
+    let library_path = state.library_path.read().await;
+    let path = library_path.join(&mp).to_string_lossy().to_string();
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open Explorer: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
         if let Some(parent) = std::path::Path::new(&path).parent() {
             std::process::Command::new("xdg-open")
                 .arg(parent)
@@ -3891,6 +4056,8 @@ pub async fn get_entries_attachments(
             at.display_name as attachment_type_display,
             a.title, a.file_path, a.file_hash, a.file_size, a.url,
             a.page_count, a.frontmatter, a.thumbnail_path, a.markdown_path,
+            EXISTS(SELECT 1 FROM parsed_content pc
+                   WHERE pc.attachment_id = a.id AND pc.status IN ('success', 'partial')) as has_parsed_content,
             a.date_added, a.date_modified
         FROM attachments a
         JOIN attachment_types at ON a.attachment_type_id = at.id
@@ -3928,6 +4095,7 @@ pub async fn get_entries_attachments(
             frontmatter: a.frontmatter,
             thumbnail_path: a.thumbnail_path,
             markdown_path: a.markdown_path,
+            has_parsed_content: a.has_parsed_content,
             date_added: a.date_added,
             date_modified: a.date_modified,
         });

@@ -2144,20 +2144,49 @@ pub async fn import_biblatex_with_files(
                 if let Ok(row) = attachment_result {
                     let attachment_id: i64 = row.get("id");
 
-                    // Enqueue background OCR extraction job
                     let progress_file_name = final_dest_path
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown")
                         .to_string();
 
-                    if let Err(e) = state.job_queue.enqueue(
-                        crate::jobs::types::JobType::OcrExtract,
-                        Some(format!("Extract: {}", progress_file_name)),
-                        serde_json::json!({ "attachmentId": attachment_id }),
-                        0,
-                    ).await {
-                        tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", attachment_id, e);
+                    if attachment_type == "note" {
+                        // Notes are already structured markdown — store in parsed_content directly
+                        let library_path_guard = state.library_path.read().await;
+                        if let Ok(relative) = final_dest_path.strip_prefix(&*library_path_guard) {
+                            let md_relative = relative.to_string_lossy().to_string();
+                            let _ = sqlx::query("UPDATE attachments SET markdown_path = ? WHERE id = ?")
+                                .bind(&md_relative)
+                                .bind(attachment_id)
+                                .execute(&state.db)
+                                .await;
+                        }
+                        drop(library_path_guard);
+
+                        if let Ok(content) = fs::read_to_string(&final_dest_path) {
+                            let _ = sqlx::query(
+                                r#"INSERT INTO parsed_content (attachment_id, entry_id, structured_markdown, model_used, provider, status, date_started, date_completed)
+                                   VALUES (?, ?, ?, 'user', 'manual', 'success', datetime('now'), datetime('now'))
+                                   ON CONFLICT(attachment_id) DO UPDATE SET
+                                     structured_markdown = excluded.structured_markdown,
+                                     date_completed = datetime('now')"#,
+                            )
+                            .bind(attachment_id)
+                            .bind(entry_id)
+                            .bind(&content)
+                            .execute(&state.db)
+                            .await;
+                        }
+                    } else {
+                        // Enqueue background OCR extraction job for non-note types
+                        if let Err(e) = state.job_queue.enqueue(
+                            crate::jobs::types::JobType::OcrExtract,
+                            Some(format!("Extract: {}", progress_file_name)),
+                            serde_json::json!({ "attachmentId": attachment_id }),
+                            0,
+                        ).await {
+                            tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", attachment_id, e);
+                        }
                     }
 
                     let _ = app_handle.emit(

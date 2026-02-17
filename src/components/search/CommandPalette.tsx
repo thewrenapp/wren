@@ -93,6 +93,7 @@ import {
   getEntriesPaged,
   deleteEntry,
   duplicateEntry,
+  getEntry,
   addEntryToCollection,
   removeEntryFromCollection,
   addEntryTag,
@@ -3306,14 +3307,27 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                   {activeTab && activeTab.entryId && (
                     <Command.Item
                       value="show in library reveal entry"
-                      onSelect={() => handleSelect(() => {
+                      onSelect={() => handleSelect(async () => {
                         if (!activeTab.entryId) return;
+                        const entryId = Number(activeTab.entryId);
                         openTab({ type: "library", title: "Library" });
-                        const { selectEntry } = useLibraryStore.getState();
-                        selectEntry(Number(activeTab.entryId));
+
+                        let isTrashed = false;
+                        try { await getEntry(entryId); } catch { isTrashed = true; }
+
+                        const { selectEntry, setFilter, setSearchQuery } = useLibraryStore.getState();
+                        const { setActiveFilter } = useUIStore.getState();
+                        if (isTrashed) {
+                          setActiveFilter("trash");
+                        } else {
+                          setActiveFilter("all");
+                          setFilter({ type: "all" });
+                          setSearchQuery("");
+                        }
+                        selectEntry(entryId);
                         setTimeout(() => {
-                          window.dispatchEvent(new CustomEvent("wren:scroll-to-entry", { detail: { entryId: Number(activeTab.entryId) } }));
-                        }, 50);
+                          window.dispatchEvent(new CustomEvent("wren:scroll-to-entry", { detail: { entryId } }));
+                        }, 200);
                       })}
                       className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                     >

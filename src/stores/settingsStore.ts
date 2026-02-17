@@ -35,6 +35,7 @@ interface SettingsState {
   llmBaseUrl: string;
   llmAutoParseOnImport: boolean;
   llmTokenBudget: number;
+  llmContextWindow: number; // 0 = auto-detect from provider defaults
 
   // Code Editor
   showCodeLineNumbers: boolean;
@@ -57,9 +58,18 @@ interface SettingsState {
   setLlmBaseUrl: (url: string) => void;
   setLlmAutoParseOnImport: (enabled: boolean) => void;
   setLlmTokenBudget: (budget: number) => void;
+  setLlmContextWindow: (size: number) => void;
   setShowWelcomeOnStartup: (show: boolean) => void;
   loadFromBackend: () => Promise<void>;
 }
+
+export const LLM_PROVIDER_DEFAULTS: Record<string, { baseUrl: string; defaultModel: string; requiresApiKey: boolean }> = {
+  openai: { baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini", requiresApiKey: true },
+  anthropic: { baseUrl: "https://api.anthropic.com/v1", defaultModel: "claude-sonnet-4-20250514", requiresApiKey: true },
+  gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta", defaultModel: "gemini-2.0-flash", requiresApiKey: true },
+  ollama: { baseUrl: "http://localhost:11434", defaultModel: "llama3.2", requiresApiKey: false },
+  lmstudio: { baseUrl: "http://localhost:1234/v1", defaultModel: "", requiresApiKey: false },
+};
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -77,6 +87,7 @@ export const useSettingsStore = create<SettingsState>()(
       llmBaseUrl: "https://api.openai.com/v1",
       llmAutoParseOnImport: false,
       llmTokenBudget: 200000,
+      llmContextWindow: 0,
       showCodeLineNumbers: false,
       showWelcomeOnStartup: true,
 
@@ -120,9 +131,18 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setLlmProvider: async (provider) => {
         const prev = get().llmProvider;
-        set({ llmProvider: provider });
+        const defaults = LLM_PROVIDER_DEFAULTS[provider] ?? LLM_PROVIDER_DEFAULTS.openai;
+        set({
+          llmProvider: provider,
+          llmBaseUrl: defaults.baseUrl,
+          llmModel: defaults.defaultModel,
+        });
         try {
-          await updateSetting("llm_provider", provider);
+          await Promise.all([
+            updateSetting("llm_provider", provider),
+            updateSetting("llm_base_url", defaults.baseUrl),
+            updateSetting("llm_model", defaults.defaultModel),
+          ]);
         } catch (err) {
           console.error("Failed to update llm_provider setting:", err);
           set({ llmProvider: prev });
@@ -184,6 +204,17 @@ export const useSettingsStore = create<SettingsState>()(
           toast.error("Failed to update setting");
         }
       },
+      setLlmContextWindow: async (size) => {
+        const prev = get().llmContextWindow;
+        set({ llmContextWindow: size });
+        try {
+          await updateSetting("llm_context_window", String(size));
+        } catch (err) {
+          console.error("Failed to update llm_context_window setting:", err);
+          set({ llmContextWindow: prev });
+          toast.error("Failed to update setting");
+        }
+      },
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
       loadFromBackend: async () => {
         try {
@@ -213,6 +244,8 @@ export const useSettingsStore = create<SettingsState>()(
           if (llmAutoParse) set({ llmAutoParseOnImport: llmAutoParse.value === "true" });
           const llmTokenBudget = settings.find(s => s.key === "llm_token_budget");
           if (llmTokenBudget) set({ llmTokenBudget: parseInt(llmTokenBudget.value, 10) || 200000 });
+          const llmContextWindow = settings.find(s => s.key === "llm_context_window");
+          if (llmContextWindow) set({ llmContextWindow: parseInt(llmContextWindow.value, 10) || 0 });
         } catch (err) {
           console.error("Failed to load settings from backend:", err);
         }

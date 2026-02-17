@@ -98,29 +98,65 @@ pub async fn get_markdown_content(
     state: State<'_, AppState>,
     attachment_id: i64,
 ) -> Result<Option<String>, String> {
-    let row: Option<MarkdownPathRow> = sqlx::query_as(
-        "SELECT markdown_path FROM attachments WHERE id = ?",
+    #[derive(FromRow)]
+    struct AttachmentPathRow {
+        markdown_path: Option<String>,
+        file_path: Option<String>,
+        attachment_type: String,
+    }
+
+    let row: Option<AttachmentPathRow> = sqlx::query_as(
+        r#"SELECT a.markdown_path, a.file_path, at.name as attachment_type
+           FROM attachments a
+           JOIN attachment_types at ON a.attachment_type_id = at.id
+           WHERE a.id = ?"#,
     )
     .bind(attachment_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| e.to_string())?;
 
-    let markdown_path = match row.and_then(|r| r.markdown_path) {
-        Some(p) => p,
+    let row = match row {
+        Some(r) => r,
         None => return Ok(None),
     };
 
-    // Resolve path relative to library
     let library_path = state.library_path.read().await;
-    let full_path = library_path.join(&markdown_path);
 
-    if full_path.exists() {
-        let content = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
-        Ok(Some(content))
-    } else {
-        Ok(None)
+    // Try markdown_path first (relative to library)
+    if let Some(ref md_path) = row.markdown_path {
+        let full_path = library_path.join(md_path);
+        if full_path.exists() {
+            let content = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
+            return Ok(Some(content));
+        }
     }
+
+    // For notes: try file_path if markdown_path was missing/broken (imported .md files)
+    if row.attachment_type == "note" && row.markdown_path.is_none() {
+        if let Some(ref fp) = row.file_path {
+            let fp_path = std::path::PathBuf::from(fp);
+            let full_path = if fp_path.is_absolute() {
+                fp_path
+            } else {
+                library_path.join(fp)
+            };
+            if full_path.exists() {
+                let content = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
+                return Ok(Some(content));
+            }
+        }
+    }
+
+    // Fallback: try parsed_content table (notes store content there as backup)
+    let fallback: Option<(String,)> = sqlx::query_as(
+        "SELECT structured_markdown FROM parsed_content WHERE attachment_id = ? AND structured_markdown IS NOT NULL",
+    )
+    .bind(attachment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(fallback.map(|r| r.0))
 }
 
 /// Save markdown content for an attachment (auto-save from editor, no reindex)
@@ -133,6 +169,7 @@ pub async fn save_markdown_content(
     // Get attachment info including file_path, markdown_path, entry_key, and type
     #[derive(Debug, FromRow)]
     struct AttachmentSaveRow {
+        entry_id: i64,
         file_path: Option<String>,
         markdown_path: Option<String>,
         entry_key: String,
@@ -142,7 +179,7 @@ pub async fn save_markdown_content(
 
     let attachment: AttachmentSaveRow = sqlx::query_as(
         r#"
-        SELECT a.file_path, a.markdown_path, e.key as entry_key, a.key as attachment_key,
+        SELECT a.entry_id, a.file_path, a.markdown_path, e.key as entry_key, a.key as attachment_key,
                at.name as attachment_type
         FROM attachments a
         JOIN entries e ON a.entry_id = e.id
@@ -214,6 +251,25 @@ pub async fn save_markdown_content(
 
     // Update inline table refs from the saved content
     update_inline_table_refs(&state.db, attachment_id, &content).await;
+
+    // For notes, store expanded content (with inline tables) in parsed_content
+    // This serves as both a DB backup and the source of truth for RAG/AI features
+    if is_note {
+        let expanded = expand_inline_tables(&state.db, &content).await;
+        let _ = sqlx::query(
+            r#"INSERT INTO parsed_content (attachment_id, entry_id, structured_markdown, model_used, provider, status, date_started, date_completed)
+               VALUES (?, ?, ?, 'user', 'manual', 'success', datetime('now'), datetime('now'))
+               ON CONFLICT(attachment_id) DO UPDATE SET
+                 structured_markdown = excluded.structured_markdown,
+                 date_completed = datetime('now')
+            "#,
+        )
+        .bind(attachment_id)
+        .bind(attachment.entry_id)
+        .bind(&expanded)
+        .execute(&state.db)
+        .await;
+    }
 
     Ok(())
 }

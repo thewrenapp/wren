@@ -5,6 +5,7 @@ pub mod classifier;
 pub mod discoverer;
 pub mod extractor;
 pub mod pre_analysis;
+pub(crate) mod utf8;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -154,10 +155,10 @@ pub async fn run_pipeline(
         return Err(PipelineError::TooShort);
     }
 
-    // Estimate total work units for progress tracking:
-    // 1 (classify) + discovery_chunks + sections (extraction)
-    // This is re-calculated after discovery when we know the actual section count.
-    let mut total_work = analysis.estimated_total_calls as u32;
+    // We don't know the real total work until after discovery (when section count
+    // is known), so classification and discovery show indeterminate progress (0,0).
+    // total_work is set after discovery to: sections + 1 (assemble).
+    let total_work: u32;
 
     // Determine which stage to start from
     let start_stage = checkpoint
@@ -173,7 +174,7 @@ pub async fn run_pipeline(
     // ── Stage 1: Classify ──────────────────────────────────────────
     let classification = if start_stage == PipelineStage::Classify {
         check_cancel(cancel)?;
-        progress.update(1, total_work, "Classifying document...");
+        progress.update(0, 0, "Classifying document...");
 
         let stage_start = std::time::Instant::now();
         let mut stage_usage = TokenUsageSummary::default();
@@ -230,11 +231,15 @@ pub async fn run_pipeline(
         classification.language
     );
 
+    // ── Prepare line-numbered text for discovery ──────────────────
+    let (numbered_text, line_offsets) = pre_analysis::add_line_numbers(extracted_text);
+
     // ── Stage 2: Discover structure ────────────────────────────────
     let discovered_sections = if start_stage == PipelineStage::Classify
         || start_stage == PipelineStage::Discover
     {
         check_cancel(cancel)?;
+        progress.update(0, 0, "Discovering document structure...");
 
         let stage_start = std::time::Instant::now();
         let mut stage_usage = TokenUsageSummary::default();
@@ -249,27 +254,23 @@ pub async fn run_pipeline(
 
         struct DiscoveryProgressAdapter<'a> {
             progress: &'a dyn ProgressCallback,
-            total_work: u32,
         }
         impl<'a> discoverer::DiscoveryProgress for DiscoveryProgressAdapter<'a> {
             fn on_chunk(&self, chunk_index: usize, total_chunks: usize) {
                 self.progress.update(
-                    1 + chunk_index as u32,
-                    self.total_work,
+                    chunk_index as u32,
+                    total_chunks as u32,
                     &format!("Discovering structure (chunk {} of {})...", chunk_index, total_chunks),
                 );
             }
         }
 
-        let disc_progress = DiscoveryProgressAdapter {
-            progress,
-            total_work,
-        };
+        let disc_progress = DiscoveryProgressAdapter { progress };
 
         let result = discoverer::discover(
             provider,
             &config.model,
-            extracted_text,
+            &numbered_text,
             &classification.document_type,
             analysis.chunk_size_chars,
             analysis.overlap_chars,
@@ -322,19 +323,12 @@ pub async fn run_pipeline(
             })?
     };
 
-    // Recalculate total_work now that we know the actual section count.
-    // 1 (classify) + discovery_chunks_used + actual_sections + 1 (assemble)
-    let actual_discovery_chunks = stages
-        .iter()
-        .find(|s| s.name == "discover")
-        .map(|_| analysis.estimated_discovery_chunks)
-        .unwrap_or(1);
     // ── Resolve section boundaries (pure Rust) ─────────────────────
     let section_ranges =
-        boundary_finder::find_section_ranges(&discovered_sections, extracted_text);
+        boundary_finder::find_section_ranges_with_lines(&discovered_sections, extracted_text, Some(&line_offsets));
 
-    // Recalculate total_work using resolved section_ranges (may include Preamble)
-    total_work = (1 + actual_discovery_chunks + section_ranges.len() + 1) as u32;
+    // Now that discovery is done, total_work = sections to extract + 1 (assemble)
+    total_work = (section_ranges.len() + 1) as u32;
 
     if section_ranges.is_empty() {
         tracing::warn!("No section boundaries could be resolved — returning minimal result");
@@ -366,7 +360,6 @@ pub async fn run_pipeline(
         struct ExtractionProgressAdapter<'a> {
             progress: &'a dyn ProgressCallback,
             total_work: u32,
-            base_offset: u32,
         }
         impl<'a> extractor::ExtractionProgress for ExtractionProgressAdapter<'a> {
             fn on_section(
@@ -376,11 +369,11 @@ pub async fn run_pipeline(
                 section_name: &str,
             ) {
                 self.progress.update(
-                    self.base_offset + section_index as u32,
+                    section_index as u32,
                     self.total_work,
                     &format!(
                         "Extracting section {} of {}: {}...",
-                        section_index, total_sections, section_name
+                        section_index + 1, total_sections, section_name
                     ),
                 );
             }
@@ -389,7 +382,6 @@ pub async fn run_pipeline(
         let extract_progress = ExtractionProgressAdapter {
             progress,
             total_work,
-            base_offset: 1 + actual_discovery_chunks as u32,
         };
 
         // Per-section checkpoint saver — saves checkpoint after each extracted section

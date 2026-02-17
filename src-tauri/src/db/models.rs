@@ -206,6 +206,10 @@ pub struct EntrySummary {
     pub has_weblink: bool,
     #[serde(rename = "thumbnailPath")]
     pub thumbnail_path: Option<String>,
+    #[serde(rename = "hasExtractedText")]
+    pub has_extracted_text: bool,
+    #[serde(rename = "hasStructuredContent")]
+    pub has_structured_content: bool,
 }
 
 // =====================================================
@@ -248,6 +252,8 @@ pub struct Attachment {
     pub thumbnail_path: Option<String>,
     #[serde(rename = "markdownPath")]
     pub markdown_path: Option<String>,
+    #[serde(rename = "hasParsedContent")]
+    pub has_parsed_content: bool,
     #[serde(rename = "dateAdded")]
     pub date_added: String,
     #[serde(rename = "dateModified")]

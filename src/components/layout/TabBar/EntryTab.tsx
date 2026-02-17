@@ -152,6 +152,8 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
     hasEpub: entry.attachments?.some(a => a.attachmentType === "epub") || false,
     hasNote: entry.attachments?.some(a => a.attachmentType === "note") || false,
     hasWeblink: entry.attachments?.some(a => a.attachmentType === "weblink") || false,
+    hasExtractedText: entry.attachments?.some(a => !!a.markdownPath) || false,
+    hasStructuredContent: false, // not available from full entry data
   };
 
   const isStacked = libraryLayout === "stacked";

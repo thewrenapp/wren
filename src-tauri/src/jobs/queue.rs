@@ -295,6 +295,32 @@ impl JobQueue {
         .await
         .map_err(|e| e.to_string())?;
 
+        // Force-cancel a paused job: clear checkpoint so it can't be resumed
+        if force {
+            // Get the job to find its payload (need attachment_id for checkpoint cleanup)
+            if let Ok(job) = self.get_job(job_id).await {
+                if job.status == "cancelled" && job.job_type == "llm_parse" {
+                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&job.payload_json) {
+                        if let Some(att_id) = payload.get("attachment_id").and_then(|v| v.as_i64()) {
+                            let _ = sqlx::query(
+                                "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
+                            )
+                            .bind(att_id)
+                            .execute(&self.db)
+                            .await;
+                        }
+                    }
+                    // Clear the "Paused" message
+                    let _ = sqlx::query(
+                        "UPDATE jobs SET progress_message = NULL WHERE id = ?",
+                    )
+                    .bind(job_id)
+                    .execute(&self.db)
+                    .await;
+                }
+            }
+        }
+
         self.emit_job_update(job_id).await;
         Ok(())
     }
@@ -305,16 +331,12 @@ impl JobQueue {
         fids.contains(job_id)
     }
 
-    /// Retry a failed job
+    /// Retry a failed or cancelled job. Always allowed — no retry limit for user-initiated retries.
     pub async fn retry(&self, job_id: &str) -> Result<String, String> {
         let job = self.get_job(job_id).await?;
 
         if job.status != "failed" && job.status != "cancelled" {
             return Err("Job is not in a retryable state".to_string());
-        }
-
-        if job.retry_count >= job.max_retries {
-            return Err("Maximum retries exceeded".to_string());
         }
 
         sqlx::query(

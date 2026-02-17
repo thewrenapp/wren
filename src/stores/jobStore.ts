@@ -88,10 +88,21 @@ export const useJobStore = create<JobState>()((set, get) => ({
 
   cancelJob: async (jobId, force) => {
     await invoke("cancel_job", { jobId, force: force ?? false });
+    // Force-cancelling a paused job changes parsed_content status in DB;
+    // bump entryVersion so ExtractedContentViewer re-fetches and updates toolbar
+    if (force) {
+      const { useLibraryStore } = await import("@/stores/libraryStore");
+      useLibraryStore.getState().invalidateEntry();
+    }
   },
 
   retryJob: async (jobId) => {
-    await invoke("retry_job", { jobId });
+    try {
+      await invoke("retry_job", { jobId });
+    } catch (e) {
+      console.error("Failed to retry job:", e);
+      throw e;
+    }
   },
 
   clearFinished: async () => {

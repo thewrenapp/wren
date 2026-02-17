@@ -102,6 +102,8 @@ export interface EntrySummary {
   hasNote: boolean;
   hasWeblink: boolean;
   thumbnailPath?: string;
+  hasExtractedText: boolean;
+  hasStructuredContent: boolean;
 }
 
 export interface Attachment {
@@ -119,6 +121,7 @@ export interface Attachment {
   frontmatter?: string;
   thumbnailPath?: string;
   markdownPath?: string;
+  hasParsedContent: boolean;
   dateAdded: string;
   dateModified: string;
 }
@@ -581,6 +584,14 @@ export async function showEntryInFinder(entryId: number): Promise<void> {
 
 export async function showEntriesInFinder(entryIds: number[]): Promise<void> {
   return invoke('show_entries_in_finder', { entryIds });
+}
+
+export async function showAttachmentInFinder(attachmentId: number): Promise<void> {
+  return invoke('show_attachment_in_finder', { attachmentId });
+}
+
+export async function showMarkdownInFinder(attachmentId: number): Promise<void> {
+  return invoke('show_markdown_in_finder', { attachmentId });
 }
 
 export async function openFileWithDefaultApp(filePath: string): Promise<void> {
@@ -1124,6 +1135,10 @@ export async function getParsedContent(attachmentId: number): Promise<ParsedCont
 
 export async function getEntryParsedContent(entryId: number): Promise<ParsedContentSummary[]> {
   return invoke('get_entry_parsed_content', { entryId });
+}
+
+export async function updateParsedContent(attachmentId: number, structuredMarkdown: string): Promise<void> {
+  return invoke('update_parsed_content', { attachmentId, structuredMarkdown });
 }
 
 export async function deleteParsedContent(attachmentId: number): Promise<void> {

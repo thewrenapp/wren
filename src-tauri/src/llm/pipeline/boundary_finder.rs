@@ -2,6 +2,8 @@
 ///
 /// Pure Rust — no LLM calls, no regex.
 
+use super::utf8::{ceil_char_boundary, floor_char_boundary};
+
 /// A discovered section from the LLM discovery stage.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveredSection {
@@ -9,6 +11,10 @@ pub struct DiscoveredSection {
     pub level: u8,
     /// First ~50 chars of section content, used as a boundary marker.
     pub starts_with: String,
+    /// Line number where this heading appears (1-indexed). Primary boundary marker
+    /// when available; falls back to `starts_with` fuzzy matching otherwise.
+    #[serde(default)]
+    pub line: Option<u32>,
 }
 
 /// A section with resolved character offsets in the original text.
@@ -26,9 +32,24 @@ pub struct SectionRange {
 ///
 /// Sections are assumed to appear in document order. Each section's end offset
 /// is the start of the next section (or end of document for the last section).
+///
+/// When `line_offsets` is provided and a section has a `line` number, the line number
+/// is used as the primary boundary marker (exact offset lookup). Falls back to
+/// `starts_with` fuzzy matching if the line number is missing or points to
+/// content that doesn't match the section name.
 pub fn find_section_ranges(
     sections: &[DiscoveredSection],
     full_text: &str,
+) -> Vec<SectionRange> {
+    find_section_ranges_with_lines(sections, full_text, None)
+}
+
+/// Like `find_section_ranges`, but accepts an optional line-offset map for
+/// precise line-number-based boundary resolution.
+pub fn find_section_ranges_with_lines(
+    sections: &[DiscoveredSection],
+    full_text: &str,
+    line_offsets: Option<&[usize]>,
 ) -> Vec<SectionRange> {
     if sections.is_empty() {
         return vec![];
@@ -38,7 +59,8 @@ pub fn find_section_ranges(
     let mut search_from = 0;
 
     for (_i, section) in sections.iter().enumerate() {
-        let found_offset = find_boundary(full_text, &section.starts_with, search_from);
+        // Try line-number-based resolution first
+        let found_offset = resolve_section_offset(section, full_text, line_offsets, search_from);
 
         match found_offset {
             Some(offset) => {
@@ -93,44 +115,68 @@ pub fn find_section_ranges(
         last.raw_text = full_text[last.start_offset..last.end_offset].to_string();
     }
 
-    // If the first section doesn't start at the beginning of the text,
-    // check if there's meaningful content before it (preamble: title, abstract, etc.)
+    // Any text before the first discovered section (title pages, author info, etc.)
+    // is intentionally dropped — the LLM discovers meaningful sections, and pre-section
+    // content (addresses, affiliations) doesn't warrant its own section.
     if let Some(first) = ranges.first() {
         if first.start_offset > 0 {
-            let preamble_text = full_text[..first.start_offset].trim();
-            // Only create a preamble if there's substantial text (not just whitespace/short headers)
-            if preamble_text.len() > 100 {
-                tracing::info!(
-                    "Found {} chars of preamble content before first section '{}' — creating Preamble section",
-                    preamble_text.len(),
-                    first.name,
-                );
-                ranges.insert(
-                    0,
-                    SectionRange {
-                        name: "Preamble".to_string(),
-                        level: 1,
-                        start_offset: 0,
-                        end_offset: first.start_offset,
-                        raw_text: full_text[..first.start_offset].to_string(),
-                    },
-                );
-            }
+            tracing::debug!(
+                "Dropping {} chars of pre-section content before '{}'",
+                first.start_offset,
+                first.name,
+            );
         }
     }
 
     ranges
 }
 
+/// Try to resolve a section's byte offset, preferring line number, falling back to starts_with.
+fn resolve_section_offset(
+    section: &DiscoveredSection,
+    full_text: &str,
+    line_offsets: Option<&[usize]>,
+    search_from: usize,
+) -> Option<usize> {
+    // Try line number first if available
+    if let (Some(line), Some(offsets)) = (section.line, line_offsets) {
+        if let Some(&offset) = offsets.get((line.saturating_sub(1)) as usize) {
+            // Validate: the text at this offset should plausibly contain the section name.
+            // Check first 100 chars at the offset for a case-insensitive match of a significant
+            // part of the section name (first word or first 10 chars).
+            let check_len = ceil_char_boundary(full_text, full_text.len().min(offset + 100));
+            let snippet = &full_text[offset..check_len].to_lowercase();
+            let name_prefix = section
+                .name
+                .split_whitespace()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase();
+            if name_prefix.len() >= 2 && snippet.contains(&name_prefix) {
+                return Some(offset);
+            }
+            // Line number pointed to wrong content — fall through to starts_with
+            let log_end = ceil_char_boundary(full_text, full_text.len().min(offset + 40));
+            tracing::warn!(
+                "Line {} for section '{}' doesn't match content (found: '{}'), falling back to starts_with",
+                line,
+                section.name,
+                &full_text[offset..log_end],
+            );
+        }
+    }
+
+    // Fall back to starts_with fuzzy matching
+    find_boundary(full_text, &section.starts_with, search_from)
+}
+
 /// Find the position of a boundary marker in the text, starting from `search_from`.
 ///
 /// Tries exact match first, then falls back to case-insensitive + whitespace-normalized.
-fn find_boundary(text: &str, marker: &str, search_from: usize) -> Option<usize> {
-    // Ensure search_from is on a valid char boundary (safety guard for multi-byte UTF-8)
-    let mut sf = search_from.min(text.len());
-    while sf < text.len() && !text.is_char_boundary(sf) {
-        sf += 1;
-    }
+/// Also used by the noise applicator in `extractor.rs` for text-anchor matching.
+pub(crate) fn find_boundary(text: &str, marker: &str, search_from: usize) -> Option<usize> {
+    let sf = ceil_char_boundary(text, search_from);
     let search_text = &text[sf..];
     let marker_trimmed = marker.trim();
 
@@ -398,10 +444,14 @@ fn map_ascii_pos(original: &str, ascii_pos: usize) -> usize {
         }
     }
 
-    // Proportional fallback
+    // Proportional fallback — snap to valid char boundary
     if !normalized.is_empty() {
         let ratio = ascii_pos as f64 / normalized.len() as f64;
-        return (ratio * original.len() as f64).min(original.len() as f64) as usize;
+        let pos = floor_char_boundary(
+            original,
+            (ratio * original.len() as f64).min(original.len() as f64) as usize,
+        );
+        return pos;
     }
 
     original.len()
@@ -446,16 +496,19 @@ mod tests {
                 name: "Abstract".to_string(),
                 level: 1,
                 starts_with: "Abstract: This paper studies".to_string(),
+                line: None,
             },
             DiscoveredSection {
                 name: "1. Introduction".to_string(),
                 level: 1,
                 starts_with: "1. Introduction".to_string(),
+                line: None,
             },
             DiscoveredSection {
                 name: "2. Methods".to_string(),
                 level: 1,
                 starts_with: "2. Methods".to_string(),
+                line: None,
             },
         ];
 
@@ -478,6 +531,7 @@ mod tests {
             name: "Abstract".to_string(),
             level: 1,
             starts_with: "abstract".to_string(),
+            line: None,
         }];
 
         let ranges = find_section_ranges(&sections, text);
@@ -493,11 +547,13 @@ mod tests {
                 name: "Abstract".to_string(),
                 level: 1,
                 starts_with: "this marker does not exist in text".to_string(),
+                line: None,
             },
             DiscoveredSection {
                 name: "2. Methods".to_string(),
                 level: 1,
                 starts_with: "2. Methods".to_string(),
+                line: None,
             },
         ];
 
@@ -529,6 +585,7 @@ mod tests {
                 name: "1. Introduction".to_string(),
                 level: 1,
                 starts_with: "1. Introduction".to_string(),
+                line: None,
             },
         ];
 
@@ -552,6 +609,7 @@ mod tests {
                 name: "1. Introduction".to_string(),
                 level: 1,
                 starts_with: "1. Introduction".to_string(),
+                line: None,
             },
         ];
 
@@ -571,11 +629,13 @@ mod tests {
                 name: "Preamble".to_string(),
                 level: 1,
                 starts_with: "Song Jiang∗".to_string(),
+                line: None,
             },
             DiscoveredSection {
                 name: "1. Introduction".to_string(),
                 level: 1,
                 starts_with: "1. Introduction".to_string(),
+                line: None,
             },
         ];
 
@@ -596,11 +656,13 @@ mod tests {
                 name: "4.1. Amazon".to_string(),
                 level: 2,
                 starts_with: "Some content here".to_string(),
+                line: None,
             },
             DiscoveredSection {
                 name: "4.2. GEFCom".to_string(),
                 level: 2,
                 starts_with: "We also applied forecasting problems using datasets".to_string(),
+                line: None,
             },
         ];
 
@@ -622,12 +684,14 @@ mod tests {
                 name: "3.1 Periodic Prediction".to_string(),
                 level: 2,
                 starts_with: "Some content".to_string(),
+                line: None,
             },
             DiscoveredSection {
                 name: "3.2 Non-periodic Prediction".to_string(),
                 level: 2,
                 // LLM uses math italic Unicode, text has plain ASCII
                 starts_with: "The non-periodic series 𝐶 = [𝐶𝑡0+1, ...,𝐶𝑡0+𝐻] represents the overall trend".to_string(),
+                line: None,
             },
         ];
 
@@ -649,12 +713,14 @@ mod tests {
                 name: "3.1 Periodic Prediction".to_string(),
                 level: 2,
                 starts_with: "Some content".to_string(),
+                line: None,
             },
             DiscoveredSection {
                 name: "3.2 Non-periodic Series Prediction".to_string(),
                 level: 2,
                 // LLM uses math italic Unicode, PDF has completely different representation
                 starts_with: "The non-periodic series 𝐶 = [𝐶𝑡0+1, ...,𝐶𝑡0+𝐻 ] represents the overall trend".to_string(),
+                line: None,
             },
         ];
 
@@ -675,11 +741,13 @@ mod tests {
                 level: 1,
                 // LLM uses regular digits where PDF has subscripts
                 starts_with: "Content about x0 and x1 values".to_string(),
+                line: None,
             },
             DiscoveredSection {
                 name: "Section B".to_string(),
                 level: 1,
                 starts_with: "More content".to_string(),
+                line: None,
             },
         ];
 

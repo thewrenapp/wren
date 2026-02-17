@@ -1,6 +1,7 @@
 import { useJobStore, jobDisplayName, type Job } from "@/stores/jobStore";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { toast } from "@/stores/toastStore";
 import {
   X,
   RotateCcw,
@@ -94,15 +95,26 @@ function JobRow({
             </Button>
           )}
           {job.status === "cancelled" && isPaused && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => onRetry(job.id)}
-              title="Resume"
-            >
-              <Play className="h-3.5 w-3.5" />
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => onRetry(job.id)}
+                title="Resume"
+              >
+                <Play className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => onCancel(job.id, true)}
+                title="Cancel"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -155,6 +167,14 @@ function JobRow({
 export function JobListPanel() {
   const { jobs, cancelJob, retryJob, clearFinished } = useJobStore();
 
+  const handleRetry = async (jobId: string) => {
+    try {
+      await retryJob(jobId);
+    } catch (e) {
+      toast.error(`Retry failed: ${e}`);
+    }
+  };
+
   const activeJobs = jobs.filter(
     (j) => j.status === "pending" || j.status === "running"
   );
@@ -192,7 +212,7 @@ export function JobListPanel() {
               key={job.id}
               job={job}
               onCancel={cancelJob}
-              onRetry={retryJob}
+              onRetry={handleRetry}
             />
           ))}
         </div>

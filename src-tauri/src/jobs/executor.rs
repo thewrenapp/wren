@@ -596,7 +596,6 @@ async fn execute_llm_parse(
 ) -> Result<Option<String>, String> {
     use crate::commands::settings::get_setting_value;
     use crate::llm::context_windows;
-    use crate::llm::openai::OpenAiProvider;
     use crate::llm::pipeline;
     use crate::llm::pipeline::classifier::EntryMetadata;
 
@@ -621,13 +620,17 @@ async fn execute_llm_parse(
         .await
         .and_then(|v| v.parse().ok())
         .unwrap_or(3);
+    let context_window_override: usize = get_setting_value(db, "llm_context_window")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
 
-    if api_key.is_empty() {
+    if crate::llm::provider_requires_api_key(&provider_name) && api_key.is_empty() {
         return Err("LLM API key not configured. Go to Settings → AI & Search to set it up.".to_string());
     }
 
     // ── Create provider ────────────────────────────────────────────
-    let provider = OpenAiProvider::new(api_key, base_url);
+    let provider = crate::llm::create_provider(&provider_name, api_key, base_url);
 
     // ── Read extracted text from markdown file ─────────────────────
     let markdown_path: Option<String> = sqlx::query_scalar(
@@ -713,7 +716,11 @@ async fn execute_llm_parse(
     };
 
     // ── Build pipeline config ──────────────────────────────────────
-    let model_ctx = context_windows::default_context(&provider_name, &model);
+    let model_ctx = if context_window_override > 0 {
+        context_windows::from_override(context_window_override)
+    } else {
+        context_windows::default_context(&provider_name, &model)
+    };
 
     let config = pipeline::PipelineConfig {
         provider_name: provider_name.clone(),
@@ -813,7 +820,7 @@ async fn execute_llm_parse(
 
     // ── Run pipeline ───────────────────────────────────────────────
     let result = pipeline::run_pipeline(
-        &provider,
+        provider.as_ref(),
         &config,
         &extracted_text,
         &entry_metadata,

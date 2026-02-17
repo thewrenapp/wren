@@ -1,11 +1,46 @@
 import { useState, useCallback } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { useSettingsStore } from "@/stores/settingsStore";
+import { useSettingsStore, LLM_PROVIDER_DEFAULTS } from "@/stores/settingsStore";
 import { useJobStore } from "@/stores/jobStore";
 import { toast } from "@/stores/toastStore";
 import { listLlmModels, validateLlmConfig, type LlmModelInfo } from "@/services/tauri/commands";
 import { Loader2, CheckCircle2, XCircle, Eye, EyeOff } from "lucide-react";
+
+const PROVIDER_OPTIONS = [
+  { value: "openai", label: "OpenAI" },
+  { value: "anthropic", label: "Anthropic" },
+  { value: "gemini", label: "Google Gemini" },
+  { value: "ollama", label: "Ollama (local)" },
+  { value: "lmstudio", label: "LM Studio (local)" },
+] as const;
+
+const API_KEY_PLACEHOLDERS: Record<string, string> = {
+  openai: "sk-...",
+  anthropic: "sk-ant-...",
+  gemini: "AIza...",
+};
+
+const DEFAULT_MODELS: Record<string, { id: string; name: string }[]> = {
+  openai: [
+    { id: "gpt-4o-mini", name: "gpt-4o-mini" },
+    { id: "gpt-4o", name: "gpt-4o" },
+  ],
+  anthropic: [
+    { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" },
+    { id: "claude-haiku-4-20250414", name: "Claude Haiku 4" },
+    { id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet" },
+    { id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku" },
+  ],
+  gemini: [
+    { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" },
+    { id: "gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite" },
+    { id: "gemini-2.5-flash-preview-05-20", name: "Gemini 2.5 Flash" },
+    { id: "gemini-2.5-pro-preview-05-06", name: "Gemini 2.5 Pro" },
+  ],
+  ollama: [],
+  lmstudio: [],
+};
 
 export function AISearchSection() {
   const {
@@ -16,6 +51,7 @@ export function AISearchSection() {
     forceOcr,
     setForceOcr,
     llmProvider,
+    setLlmProvider,
     llmApiKey,
     setLlmApiKey,
     llmModel,
@@ -26,6 +62,8 @@ export function AISearchSection() {
     setLlmAutoParseOnImport,
     llmTokenBudget,
     setLlmTokenBudget,
+    llmContextWindow,
+    setLlmContextWindow,
   } = useSettingsStore();
 
   const hasActiveReindex = useJobStore((s) =>
@@ -42,6 +80,15 @@ export function AISearchSection() {
   const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
   const [models, setModels] = useState<LlmModelInfo[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
+
+  const providerConfig = LLM_PROVIDER_DEFAULTS[llmProvider] ?? LLM_PROVIDER_DEFAULTS.openai;
+  const requiresApiKey = providerConfig.requiresApiKey;
+  const isLocal = !requiresApiKey;
+  const hasApiKey = llmApiKey.length > 0;
+  const isConfigured = isLocal || hasApiKey;
+
+  const defaultModels = DEFAULT_MODELS[llmProvider] ?? [];
+  const defaultModelIds = defaultModels.map((m) => m.id);
 
   const handleRebuildIndex = async () => {
     try {
@@ -65,7 +112,11 @@ export function AISearchSection() {
       if (valid) {
         toast.success("Connection successful");
       } else {
-        toast.error("Connection failed — check your API key");
+        toast.error(
+          isLocal
+            ? "Connection failed — is the server running?"
+            : "Connection failed — check your API key"
+        );
       }
     } catch (err) {
       setTestResult("error");
@@ -73,10 +124,10 @@ export function AISearchSection() {
     } finally {
       setTesting(false);
     }
-  }, []);
+  }, [isLocal]);
 
   const handleLoadModels = useCallback(async () => {
-    if (!llmApiKey) return;
+    if (requiresApiKey && !llmApiKey) return;
     setLoadingModels(true);
     try {
       const result = await listLlmModels();
@@ -86,9 +137,13 @@ export function AISearchSection() {
     } finally {
       setLoadingModels(false);
     }
-  }, [llmApiKey]);
+  }, [llmApiKey, requiresApiKey]);
 
-  const hasApiKey = llmApiKey.length > 0;
+  const handleProviderChange = (newProvider: string) => {
+    setLlmProvider(newProvider);
+    setModels([]);
+    setTestResult(null);
+  };
 
   return (
     <div className="space-y-8">
@@ -98,7 +153,8 @@ export function AISearchSection() {
           LLM Document Parsing
         </h3>
         <p className="text-xs text-muted-foreground">
-          Use an LLM to parse extracted text into structured sections. Requires an API key.
+          Use an LLM to parse extracted text into structured sections.
+          {requiresApiKey ? " Requires an API key." : " Connects to a locally running server."}
         </p>
 
         <div className="space-y-4">
@@ -107,45 +163,69 @@ export function AISearchSection() {
             <label className="text-sm font-medium">Provider</label>
             <select
               value={llmProvider}
-              disabled
-              className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-60"
+              onChange={(e) => handleProviderChange(e.target.value)}
+              className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
             >
-              <option value="openai">OpenAI</option>
+              {PROVIDER_OPTIONS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
             </select>
-            <p className="text-xs text-muted-foreground">
-              More providers coming soon (Anthropic, Gemini, Ollama).
-            </p>
           </div>
 
-          {/* API Key */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">API Key</label>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <input
-                  type={showApiKey ? "text" : "password"}
-                  value={llmApiKey}
-                  onChange={(e) => {
-                    setLlmApiKey(e.target.value);
-                    setTestResult(null);
-                  }}
-                  placeholder="sk-..."
-                  className="w-full px-3 py-2 pr-9 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          {/* API Key (only for cloud providers) */}
+          {requiresApiKey && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">API Key</label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type={showApiKey ? "text" : "password"}
+                    value={llmApiKey}
+                    onChange={(e) => {
+                      setLlmApiKey(e.target.value);
+                      setTestResult(null);
+                    }}
+                    placeholder={API_KEY_PLACEHOLDERS[llmProvider] ?? "API key..."}
+                    className="w-full px-3 py-2 pr-9 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestConnection}
+                  disabled={!hasApiKey || testing}
+                  className="shrink-0"
                 >
-                  {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+                  {testing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : testResult === "success" ? (
+                    <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  ) : testResult === "error" ? (
+                    <XCircle className="h-4 w-4 text-destructive" />
+                  ) : null}
+                  <span className="ml-1.5">Test</span>
+                </Button>
               </div>
+            </div>
+          )}
+
+          {/* Test button for local providers */}
+          {isLocal && (
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleTestConnection}
-                disabled={!hasApiKey || testing}
-                className="shrink-0"
+                disabled={testing}
               >
                 {testing ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -154,10 +234,15 @@ export function AISearchSection() {
                 ) : testResult === "error" ? (
                   <XCircle className="h-4 w-4 text-destructive" />
                 ) : null}
-                <span className="ml-1.5">Test</span>
+                <span className="ml-1.5">Test Connection</span>
               </Button>
+              {testResult === "error" && (
+                <span className="text-xs text-muted-foreground">
+                  Make sure {llmProvider === "ollama" ? "Ollama" : "LM Studio"} is running
+                </span>
+              )}
             </div>
-          </div>
+          )}
 
           {/* Model */}
           <div className="space-y-2">
@@ -169,10 +254,18 @@ export function AISearchSection() {
                 onFocus={handleLoadModels}
                 className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
               >
-                <option value="gpt-4o-mini">gpt-4o-mini</option>
-                <option value="gpt-4o">gpt-4o</option>
+                {defaultModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+                {/* Always show saved model so the value is never unmatched */}
+                {llmModel && !defaultModelIds.includes(llmModel) &&
+                  !models.some((m) => m.id === llmModel) && (
+                  <option value={llmModel}>{llmModel}</option>
+                )}
                 {models
-                  .filter((m) => m.id !== "gpt-4o-mini" && m.id !== "gpt-4o")
+                  .filter((m) => !defaultModelIds.includes(m.id))
                   .map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.name}
@@ -184,22 +277,52 @@ export function AISearchSection() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              gpt-4o-mini is fast and low cost. Click the dropdown to load available models from your provider.
+              {isLocal
+                ? "Click the dropdown to load models from your local server."
+                : "Click the dropdown to load available models from your provider."}
             </p>
           </div>
 
+          {/* Context Window (shown for local providers, or when overridden) */}
+          {isLocal && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Context Window</label>
+              <select
+                value={llmContextWindow}
+                onChange={(e) => setLlmContextWindow(parseInt(e.target.value, 10))}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value={0}>Auto (provider default)</option>
+                <option value={4096}>4K tokens</option>
+                <option value={8192}>8K tokens</option>
+                <option value={16384}>16K tokens</option>
+                <option value={32768}>32K tokens</option>
+                <option value={65536}>64K tokens</option>
+                <option value={131072}>128K tokens</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Context window of your local model. Larger windows mean fewer chunks and better structure discovery.
+                Check your model's documentation for the supported context size.
+              </p>
+            </div>
+          )}
+
           {/* Base URL */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Base URL</label>
+            <label className="text-sm font-medium">
+              {isLocal ? "Server URL" : "Base URL"}
+            </label>
             <input
               type="url"
               value={llmBaseUrl}
               onChange={(e) => setLlmBaseUrl(e.target.value)}
-              placeholder="https://api.openai.com/v1"
+              placeholder={providerConfig.baseUrl}
               className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 font-mono"
             />
             <p className="text-xs text-muted-foreground">
-              Default: OpenAI API. Change for OpenAI-compatible endpoints.
+              {isLocal
+                ? `Default: ${providerConfig.baseUrl}`
+                : "Change only for custom or proxy endpoints."}
             </p>
           </div>
 
@@ -227,16 +350,17 @@ export function AISearchSection() {
           </div>
 
           {/* Auto-parse */}
-          <label className={`flex items-center gap-3 cursor-pointer ${!hasApiKey ? "opacity-50 pointer-events-none" : ""}`}>
+          <label className={`flex items-center gap-3 cursor-pointer ${!isConfigured ? "opacity-50 pointer-events-none" : ""}`}>
             <Checkbox
               checked={llmAutoParseOnImport}
-              disabled={!hasApiKey}
+              disabled={!isConfigured}
               onCheckedChange={(checked) => setLlmAutoParseOnImport(checked === true)}
             />
             <div>
-              <span className="text-sm">Auto-parse documents on import</span>
+              <span className="text-sm">Auto-parse documents with AI</span>
               <p className="text-xs text-muted-foreground">
-                Automatically structure extracted text after import. Uses API credits.
+                Automatically run AI structuring after text extraction — applies to imports and new attachments.
+                {requiresApiKey ? " Uses API credits." : ""}
               </p>
             </div>
           </label>

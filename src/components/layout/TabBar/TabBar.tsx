@@ -4,7 +4,8 @@ import { useTabStore, getTabsForPane, type Tab } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { cn } from "@/lib/utils";
 import { tabIconMap, getAttachmentIcon } from "@/lib/icons";
-import { showEntryInFinder } from "@/services/tauri/commands";
+import { showEntryInFinder, showAttachmentInFinder, showMarkdownInFinder, getEntry } from "@/services/tauri/commands";
+import { useUIStore } from "@/stores/uiStore";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -107,28 +108,56 @@ function TabContextMenu({ tab, tabIndex, totalTabs, pane = "left", children }: {
   const isNote = tab.data?.attachmentType === "note";
   const hasTabsToRight = tabIndex < totalTabs - 1;
 
-  const handleShowInLibrary = useCallback(() => {
+  const handleShowInLibrary = useCallback(async () => {
     if (!tab.entryId) return;
+    const entryId = Number(tab.entryId);
     openTab({ type: "library", title: "Library" });
-    const { selectEntry } = useLibraryStore.getState();
-    selectEntry(Number(tab.entryId));
+
+    // Check if entry is trashed (getEntry without includeDeleted throws for trashed entries)
+    let isTrashed = false;
+    try {
+      await getEntry(entryId);
+    } catch {
+      isTrashed = true;
+    }
+
+    const { selectEntry, setFilter, setSearchQuery } = useLibraryStore.getState();
+    const { setActiveFilter } = useUIStore.getState();
+
+    if (isTrashed) {
+      setActiveFilter("trash");
+    } else {
+      // Reset filters so the entry is guaranteed to be visible
+      setActiveFilter("all");
+      setFilter({ type: "all" });
+      setSearchQuery("");
+    }
+    selectEntry(entryId);
+
+    // Delay to allow library data to reload after filter change
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("wren:scroll-to-entry", {
-          detail: { entryId: Number(tab.entryId) },
+          detail: { entryId },
         })
       );
-    }, 50);
+    }, 200);
   }, [tab.entryId, openTab]);
 
   const handleFindInFinder = useCallback(async () => {
     if (!tab.entryId) return;
     try {
-      await showEntryInFinder(Number(tab.entryId));
+      if ((isMarkdown || tab.type === "parsed") && tab.attachmentId) {
+        await showMarkdownInFinder(Number(tab.attachmentId));
+      } else if (tab.attachmentId) {
+        await showAttachmentInFinder(Number(tab.attachmentId));
+      } else {
+        await showEntryInFinder(Number(tab.entryId));
+      }
     } catch (err) {
       console.error("Failed to show in Finder:", err);
     }
-  }, [tab.entryId]);
+  }, [tab.entryId, tab.attachmentId, tab.type, isMarkdown]);
 
   const handleOpenExtracted = useCallback(() => {
     if (!tab.entryId) return;

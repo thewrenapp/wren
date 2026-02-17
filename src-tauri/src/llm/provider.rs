@@ -172,6 +172,8 @@ pub async fn call_with_retry_cancellable(
 ) -> Result<CompletionResponse, LlmError> {
     let mut last_error = LlmError::ApiError("No attempts made".to_string());
     let mut delay = Duration::from_secs(1);
+    let mut timeout_retries: u32 = 0;
+    const MAX_TIMEOUT_RETRIES: u32 = 1; // allow 1 timeout retry (transient), not the full count
 
     for attempt in 0..=max_retries {
         if attempt > 0 {
@@ -206,12 +208,34 @@ pub async fn call_with_retry_cancellable(
         };
 
         match result {
-            Ok(response) => return Ok(response),
+            Ok(response) => return Ok(strip_thinking(response)),
             Err(LlmError::Cancelled) => return Err(LlmError::Cancelled),
             Err(ref e) => match e {
-                LlmError::RateLimited(_) | LlmError::NetworkError(_) => {
+                LlmError::RateLimited(_) => {
                     tracing::warn!(
-                        "LLM call attempt {}/{} failed (retryable): {}",
+                        "LLM call attempt {}/{} rate limited, retrying: {}",
+                        attempt + 1,
+                        max_retries + 1,
+                        e
+                    );
+                    last_error = e.clone();
+                }
+                LlmError::NetworkError(msg) => {
+                    // Limit timeout retries to 1 — transient cloud slowness gets
+                    // one more chance, but local models stuck on a request don't
+                    // waste 15+ minutes on repeated timeouts.
+                    if msg.contains("timed out") || msg.contains("Timed out") {
+                        timeout_retries += 1;
+                        if timeout_retries > MAX_TIMEOUT_RETRIES {
+                            tracing::warn!("LLM call timed out {} times, giving up: {}", timeout_retries, e);
+                            return Err(e.clone());
+                        }
+                        tracing::warn!("LLM call timed out (attempt {}), will retry once: {}", timeout_retries, e);
+                        last_error = e.clone();
+                        continue;
+                    }
+                    tracing::warn!(
+                        "LLM call attempt {}/{} network error, retrying: {}",
                         attempt + 1,
                         max_retries + 1,
                         e
@@ -233,6 +257,80 @@ async fn poll_cancel(flag: &AtomicBool) {
         if flag.load(Ordering::Relaxed) {
             return;
         }
+    }
+}
+
+/// Strip `<think>...</think>` blocks from LLM responses.
+///
+/// Local "thinking" models (DeepSeek, QwQ, etc.) emit chain-of-thought reasoning
+/// wrapped in `<think>` tags. This pollutes extracted content and can break JSON
+/// parsing in tool call arguments. We strip these blocks from:
+/// - The response `content` field
+/// - Any string values inside tool call arguments
+fn strip_thinking(mut response: CompletionResponse) -> CompletionResponse {
+    if let Some(ref content) = response.content {
+        let cleaned = strip_think_tags(content);
+        if cleaned.len() != content.len() {
+            tracing::debug!(
+                "Stripped {} bytes of <think> content from response",
+                content.len() - cleaned.len()
+            );
+            response.content = if cleaned.trim().is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            };
+        }
+    }
+
+    for tc in &mut response.tool_calls {
+        tc.arguments = strip_think_from_json(tc.arguments.clone());
+    }
+
+    response
+}
+
+/// Remove all `<think>...</think>` blocks (and unclosed `<think>...` at end) from text.
+fn strip_think_tags(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while let Some(start) = remaining.find("<think>") {
+        result.push_str(&remaining[..start]);
+        remaining = &remaining[start + 7..]; // skip past "<think>"
+        if let Some(end) = remaining.find("</think>") {
+            remaining = &remaining[end + 8..]; // skip past "</think>"
+        } else {
+            // Unclosed <think> — strip everything to the end
+            return result.trim().to_string();
+        }
+    }
+
+    result.push_str(remaining);
+    result.trim().to_string()
+}
+
+/// Recursively strip `<think>` tags from string values in JSON.
+fn strip_think_from_json(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.contains("<think>") {
+                serde_json::Value::String(strip_think_tags(&s))
+            } else {
+                serde_json::Value::String(s)
+            }
+        }
+        serde_json::Value::Object(map) => {
+            serde_json::Value::Object(
+                map.into_iter()
+                    .map(|(k, v)| (k, strip_think_from_json(v)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(strip_think_from_json).collect())
+        }
+        other => other,
     }
 }
 

@@ -1,3 +1,4 @@
+use super::utf8::floor_char_boundary;
 use crate::llm::context_windows::ModelContext;
 
 /// Pre-analysis result — purely computational stats.
@@ -63,7 +64,8 @@ pub fn analyze(text: &str, model_ctx: &ModelContext) -> PreAnalysisResult {
     let estimated_total_calls = 1 + estimated_discovery_chunks + estimated_sections;
 
     let first_n_chars = if char_count > FIRST_N_CHARS {
-        text[..FIRST_N_CHARS].to_string()
+        let end = floor_char_boundary(text, FIRST_N_CHARS);
+        text[..end].to_string()
     } else {
         text.to_string()
     };
@@ -80,6 +82,42 @@ pub fn analyze(text: &str, model_ctx: &ModelContext) -> PreAnalysisResult {
         estimated_total_calls,
         first_n_chars,
     }
+}
+
+/// Add line numbers to text for LLM processing.
+///
+/// Returns `(numbered_text, line_offsets)` where:
+/// - `numbered_text` has `[N] ` prefixed to each line (1-indexed)
+/// - `line_offsets[i]` is the byte offset where line `i+1` starts in the **original** text
+///
+/// Both discovery and extraction stages use this so the LLM can reference
+/// positions precisely via line numbers.
+pub fn add_line_numbers(text: &str) -> (String, Vec<usize>) {
+    let mut numbered = String::with_capacity(text.len() + text.lines().count() * 6);
+    let mut offsets: Vec<usize> = Vec::new();
+    let mut byte_offset: usize = 0;
+
+    for (i, line) in text.split('\n').enumerate() {
+        offsets.push(byte_offset);
+        use std::fmt::Write;
+        let _ = write!(numbered, "[{}] {}", i + 1, line);
+        if byte_offset + line.len() < text.len() {
+            numbered.push('\n');
+        }
+        // +1 for the '\n' separator (except possibly the last line)
+        byte_offset += line.len() + 1;
+    }
+
+    (numbered, offsets)
+}
+
+/// Resolve a 1-indexed line number to a byte offset in the original text.
+/// Returns `None` if the line number is out of range.
+pub fn line_to_offset(line_offsets: &[usize], line_number: u32) -> Option<usize> {
+    if line_number == 0 {
+        return None;
+    }
+    line_offsets.get((line_number - 1) as usize).copied()
 }
 
 #[cfg(test)]
@@ -125,5 +163,46 @@ mod tests {
         let result = analyze(&text, &ctx);
 
         assert_eq!(result.first_n_chars.len(), 2000);
+    }
+
+    #[test]
+    fn test_add_line_numbers_basic() {
+        let text = "Abstract\nWe propose a framework.\n\n1. Introduction\nContent here.";
+        let (numbered, offsets) = super::add_line_numbers(text);
+
+        assert!(numbered.starts_with("[1] Abstract\n"));
+        assert!(numbered.contains("[4] 1. Introduction\n"));
+        assert_eq!(offsets.len(), 5);
+        assert_eq!(offsets[0], 0); // line 1 starts at offset 0
+        assert_eq!(&text[offsets[3]..offsets[3] + 17], "1. Introduction\nC");
+    }
+
+    #[test]
+    fn test_add_line_numbers_single_line() {
+        let text = "Hello world";
+        let (numbered, offsets) = super::add_line_numbers(text);
+
+        assert_eq!(numbered, "[1] Hello world");
+        assert_eq!(offsets.len(), 1);
+        assert_eq!(offsets[0], 0);
+    }
+
+    #[test]
+    fn test_add_line_numbers_empty() {
+        let (numbered, offsets) = super::add_line_numbers("");
+        assert_eq!(numbered, "[1] ");
+        assert_eq!(offsets.len(), 1);
+    }
+
+    #[test]
+    fn test_line_to_offset() {
+        let text = "Line one\nLine two\nLine three";
+        let (_, offsets) = super::add_line_numbers(text);
+
+        assert_eq!(super::line_to_offset(&offsets, 1), Some(0));
+        assert_eq!(super::line_to_offset(&offsets, 2), Some(9));
+        assert_eq!(super::line_to_offset(&offsets, 3), Some(18));
+        assert_eq!(super::line_to_offset(&offsets, 0), None);
+        assert_eq!(super::line_to_offset(&offsets, 4), None);
     }
 }

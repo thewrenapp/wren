@@ -1,3 +1,5 @@
+use super::utf8::{ceil_char_boundary, floor_char_boundary};
+
 /// A chunk of text with metadata about its position in the original document.
 #[derive(Debug, Clone)]
 pub struct TextChunk {
@@ -14,6 +16,8 @@ pub struct TextChunk {
 ///
 /// Split preferences: `\n\n` (paragraph) > `\n` (line) > word boundary.
 /// Never splits inside fenced code blocks or markdown tables.
+/// All byte positions are snapped to valid UTF-8 char boundaries, so multi-byte
+/// characters (●, ×, 中, emoji, etc.) never cause panics.
 pub fn chunk_text(
     text: &str,
     chunk_size_chars: usize,
@@ -38,7 +42,7 @@ pub fn chunk_text(
     let mut chunk_index = 0;
 
     while start < text.len() {
-        let mut end = (start + chunk_size_chars).min(text.len());
+        let mut end = floor_char_boundary(text, (start + chunk_size_chars).min(text.len()));
 
         // If this isn't the last chunk, find a good split point
         if end < text.len() {
@@ -61,7 +65,14 @@ pub fn chunk_text(
             // Safety: always advance by at least 1 char to avoid infinite loops
             start = end;
         } else {
-            start += step;
+            start = ceil_char_boundary(text, start + step);
+            // Don't start a new chunk inside a code block (overlap may push
+            // into a code block that the previous chunk extended past)
+            if start < text.len() && is_inside_code_block(text, start) {
+                if let Some(fence_end) = find_code_block_end(text, start) {
+                    start = fence_end;
+                }
+            }
         }
     }
 
@@ -70,15 +81,16 @@ pub fn chunk_text(
 
 /// Find the best split point near `target_end`, preferring paragraph > line > word boundaries.
 fn find_split_point(text: &str, _start: usize, target_end: usize, chunk_size: usize) -> usize {
-    // Search window: look backwards up to 20% of chunk size for a good boundary
-    let search_start = target_end.saturating_sub(chunk_size / 5);
-    let search_range = &text[search_start..target_end];
+    // Search window: look backwards up to 50% of chunk size for a good boundary
+    let search_start = floor_char_boundary(text, target_end.saturating_sub(chunk_size / 2));
+    let search_end = floor_char_boundary(text, target_end);
+    let search_range = &text[search_start..search_end];
 
     // Check if we're inside a fenced code block — if so, extend past it
-    if is_inside_code_block(text, target_end) {
-        if let Some(fence_end) = find_code_block_end(text, target_end) {
-            // Extend to the end of the code block (but cap at 50% extra)
-            let max_extend = target_end + chunk_size / 2;
+    if is_inside_code_block(text, search_end) {
+        if let Some(fence_end) = find_code_block_end(text, search_end) {
+            // Extend to the end of the code block (but cap at 100% extra)
+            let max_extend = search_end + chunk_size;
             return fence_end.min(max_extend).min(text.len());
         }
     }
@@ -98,13 +110,14 @@ fn find_split_point(text: &str, _start: usize, target_end: usize, chunk_size: us
         return search_start + pos + 1; // after the space
     }
 
-    // Fallback: split at target_end
-    target_end
+    // Fallback: split at target_end (already snapped to char boundary)
+    search_end
 }
 
 /// Check if a position is inside a fenced code block (``` ... ```).
 fn is_inside_code_block(text: &str, pos: usize) -> bool {
-    let before = &text[..pos];
+    let safe_pos = floor_char_boundary(text, pos);
+    let before = &text[..safe_pos];
     let fence_opens = before.matches("```").count();
     // If odd number of fences before this point, we're inside a code block
     fence_opens % 2 == 1
@@ -112,14 +125,19 @@ fn is_inside_code_block(text: &str, pos: usize) -> bool {
 
 /// Find the end of the current code block (position after the closing ```).
 fn find_code_block_end(text: &str, from: usize) -> Option<usize> {
-    let remaining = &text[from..];
+    let safe_from = ceil_char_boundary(text, from);
+    let remaining = &text[safe_from..];
     remaining.find("```").map(|pos| {
-        let fence_end = from + pos + 3;
+        let fence_end = safe_from + pos + 3;
         // Skip past the closing fence line
-        if let Some(nl) = text[fence_end..].find('\n') {
-            fence_end + nl + 1
+        if fence_end < text.len() {
+            if let Some(nl) = text[fence_end..].find('\n') {
+                fence_end + nl + 1
+            } else {
+                fence_end
+            }
         } else {
-            fence_end
+            text.len()
         }
     })
 }
@@ -193,6 +211,32 @@ mod tests {
         let chunks = chunk_text(&text, 100, 20);
         for (i, chunk) in chunks.iter().enumerate() {
             assert_eq!(chunk.chunk_index, i);
+        }
+    }
+
+    #[test]
+    fn test_multibyte_utf8_no_panic() {
+        // Text with multi-byte characters: ● (3 bytes), × (2 bytes), 中 (3 bytes)
+        // Chunk sizes chosen to force splits near these characters.
+        let text = "Hello ● world × test 中 end. ".repeat(200);
+        let chunks = chunk_text(&text, 100, 20);
+        assert!(chunks.len() > 1);
+        // Verify all chunks are valid UTF-8 (would panic if we sliced mid-character)
+        for chunk in &chunks {
+            assert!(chunk.text.len() > 0);
+            // .to_string() would panic on invalid UTF-8
+            let _ = chunk.text.as_str();
+        }
+    }
+
+    #[test]
+    fn test_emoji_no_panic() {
+        // Emoji are 4 bytes each
+        let text = "Text 🎉 more text 🚀 even more 🔥 ".repeat(100);
+        let chunks = chunk_text(&text, 80, 15);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            let _ = chunk.text.as_str();
         }
     }
 }

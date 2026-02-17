@@ -66,7 +66,7 @@ pub async fn discover(
     }
 
     // Chunked discovery
-    discover_chunked(
+    let result = discover_chunked(
         provider,
         model,
         full_text,
@@ -79,7 +79,19 @@ pub async fn discover(
         progress,
         cancel,
     )
-    .await
+    .await?;
+
+    // If chunked tool-based discovery found nothing, the model likely can't do
+    // tool calling. Fall back to single-call JSON mode over the full text.
+    if result.sections.is_empty() {
+        tracing::warn!(
+            "Chunked discovery returned 0 sections across {} chunks, falling back to JSON mode",
+            result.chunks_processed
+        );
+        return discover_single_json(provider, model, full_text, doc_type_hint, retry_max, usage, cancel).await;
+    }
+
+    Ok(result)
 }
 
 /// Discover structure in a single LLM call (document fits in one chunk).
@@ -109,10 +121,20 @@ async fn discover_single(
         Ok(resp) => {
             usage.add(&resp);
             let sections = parse_discovery_response(&resp)?;
-            Ok(DiscoveryResult {
-                sections,
-                chunks_processed: 1,
-            })
+            if sections.is_empty() {
+                // Tool calling returned nothing useful — model may not support tools
+                // properly (e.g., GLM emitting raw special tokens instead of tool_calls).
+                // Fall back to JSON mode which any instruction-tuned model can handle.
+                tracing::warn!(
+                    "Tool-based discovery returned 0 sections, falling back to JSON mode"
+                );
+                discover_single_json(provider, model, full_text, doc_type_hint, retry_max, usage, cancel).await
+            } else {
+                Ok(DiscoveryResult {
+                    sections,
+                    chunks_processed: 1,
+                })
+            }
         }
         Err(LlmError::ToolsNotSupported) => {
             tracing::info!(
@@ -288,20 +310,25 @@ fn parse_discovery_response(
 
     for tc in &response.tool_calls {
         if tc.name == "report_section" {
-            let section: DiscoveredSection = serde_json::from_value(tc.arguments.clone())
-                .map_err(|e| {
-                    LlmError::ParseError(format!(
-                        "Failed to parse report_section args: {e}\nArgs: {}",
+            match serde_json::from_value::<DiscoveredSection>(tc.arguments.clone()) {
+                Ok(section) => sections.push(section),
+                Err(e) => {
+                    // Skip malformed tool calls (common with local models that have
+                    // weak function calling support) instead of failing the pipeline.
+                    tracing::warn!(
+                        "Skipping malformed report_section tool call: {e}\nArgs: {}",
                         tc.arguments
-                    ))
-                })?;
-            sections.push(section);
+                    );
+                }
+            }
         }
         // report_partial_section is informational only — we don't store it as a section,
         // it's reflected in the carry-forward summary for the next chunk.
     }
 
-    // If no tool calls, try parsing content as JSON fallback
+    // If tool calls produced no valid sections, try parsing content as JSON fallback.
+    // This covers: (1) no tool calls at all, (2) all tool calls were malformed,
+    // (3) model returned sections in text content instead of tool calls.
     if sections.is_empty() {
         if let Some(ref content) = response.content {
             if let Ok(result) = parse_discovery_json(content) {
@@ -315,22 +342,108 @@ fn parse_discovery_response(
 }
 
 /// Parse JSON-mode discovery response.
+///
+/// Tries strict parsing first, then falls back to extracting embedded JSON
+/// from mixed text/JSON responses (common with local models that output
+/// reasoning text before/after the JSON).
 fn parse_discovery_json(content: &str) -> Result<DiscoveryResult, LlmError> {
     #[derive(Deserialize)]
     struct JsonDiscoveryResponse {
         sections: Vec<DiscoveredSection>,
     }
 
-    let parsed: JsonDiscoveryResponse = serde_json::from_str(content).map_err(|e| {
-        LlmError::ParseError(format!(
-            "Failed to parse discovery JSON: {e}\nContent: {content}"
-        ))
-    })?;
+    // Try strict parse first
+    if let Ok(parsed) = serde_json::from_str::<JsonDiscoveryResponse>(content) {
+        return Ok(DiscoveryResult {
+            sections: parsed.sections,
+            chunks_processed: 1,
+        });
+    }
 
-    Ok(DiscoveryResult {
-        sections: parsed.sections,
-        chunks_processed: 1,
-    })
+    // Fallback: find embedded JSON object in the text (model may have output
+    // reasoning text before/after the JSON)
+    if let Some(json_str) = extract_json_object(content) {
+        if let Ok(parsed) = serde_json::from_str::<JsonDiscoveryResponse>(json_str) {
+            tracing::debug!("Extracted discovery JSON from mixed text/JSON response");
+            return Ok(DiscoveryResult {
+                sections: parsed.sections,
+                chunks_processed: 1,
+            });
+        }
+    }
+
+    // Last resort: try to find a JSON array of sections directly
+    if let Some(arr_str) = extract_json_array(content) {
+        if let Ok(sections) = serde_json::from_str::<Vec<DiscoveredSection>>(arr_str) {
+            tracing::debug!("Extracted discovery sections array from mixed response");
+            return Ok(DiscoveryResult {
+                sections,
+                chunks_processed: 1,
+            });
+        }
+    }
+
+    Err(LlmError::ParseError(format!(
+        "Failed to parse discovery JSON (tried strict, embedded object, embedded array)\nContent: {}",
+        &content[..content.len().min(500)]
+    )))
+}
+
+/// Extract the outermost `{...}` JSON object from text that may contain
+/// surrounding natural language.
+fn extract_json_object(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, ch) in text[start..].char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[start..start + i + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extract the outermost `[...]` JSON array from text.
+fn extract_json_array(text: &str) -> Option<&str> {
+    let start = text.find('[')?;
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, ch) in text[start..].char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '[' if !in_string => depth += 1,
+            ']' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[start..start + i + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Build a compact carry-forward summary for the next chunk (~200-400 tokens).

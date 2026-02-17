@@ -4,6 +4,7 @@ import {
   getParsedContent,
   parseDocument,
   deleteParsedContent,
+  updateParsedContent,
   type ParsedContentFull,
 } from "@/services/tauri/commands";
 import { useJobStore } from "@/stores/jobStore";
@@ -97,6 +98,20 @@ export function ExtractedContentViewer({
 
   // Which view is active
   const [viewMode, setViewMode] = useState<ViewMode>("raw"); // will switch to structured once loaded
+  // Track whether user has manually toggled the view mode
+  const userToggledRef = useRef(false);
+  const setViewModeByUser = useCallback((mode: ViewMode) => {
+    userToggledRef.current = true;
+    setViewMode(mode);
+  }, []);
+
+  // Save handler for structured content (saves to parsed_content DB table)
+  const handleSaveStructured = useCallback(
+    async (attachmentId: number, content: string) => {
+      await updateParsedContent(attachmentId, content);
+    },
+    [],
+  );
 
   const llmApiKey = useSettingsStore((s) => s.llmApiKey);
   const hasApiKey = llmApiKey.length > 0;
@@ -125,21 +140,22 @@ export function ExtractedContentViewer({
           : "parsed";
 
   // Load raw content
-  useEffect(() => {
-    async function loadRaw() {
-      setRawLoading(true);
-      setRawError(null);
-      try {
-        const md = await getMarkdownContent(attachmentId);
-        setRawContent(md);
-      } catch (err) {
-        setRawError(err instanceof Error ? err.message : "Failed to load content");
-      } finally {
-        setRawLoading(false);
-      }
+  const loadRaw = useCallback(async () => {
+    setRawLoading(true);
+    setRawError(null);
+    try {
+      const md = await getMarkdownContent(attachmentId);
+      setRawContent(md);
+    } catch (err) {
+      setRawError(err instanceof Error ? err.message : "Failed to load content");
+    } finally {
+      setRawLoading(false);
     }
-    loadRaw();
   }, [attachmentId]);
+
+  useEffect(() => {
+    loadRaw();
+  }, [loadRaw]);
 
   // Load parsed content
   const loadParsedContent = useCallback(async () => {
@@ -156,6 +172,7 @@ export function ExtractedContentViewer({
   // Initial load of parsed content + decide default view
   useEffect(() => {
     setParsedLoading(true);
+    userToggledRef.current = false; // reset on attachment change
     loadParsedContent().then((result) => {
       setParsedLoading(false);
       // Default to structured view if parsed content is available
@@ -169,11 +186,7 @@ export function ExtractedContentViewer({
   const { entryVersion } = useLibraryStore();
   useEffect(() => {
     if (!parsedLoading) {
-      loadParsedContent().then((result) => {
-        if (result?.structuredMarkdown && (result.status === "success" || result.status === "partial")) {
-          setViewMode("structured");
-        }
-      });
+      loadParsedContent();
     }
   }, [entryVersion, loadParsedContent]);
 
@@ -194,7 +207,8 @@ export function ExtractedContentViewer({
     if (jobJustFinished || (!hasActiveParseJob && parseStatus === "in_progress")) {
       const timer = setTimeout(() => {
         loadParsedContent().then((result) => {
-          if (result?.structuredMarkdown && (result.status === "success" || result.status === "partial")) {
+          // Auto-switch to structured only if user hasn't manually toggled
+          if (!userToggledRef.current && result?.structuredMarkdown && (result.status === "success" || result.status === "partial")) {
             setViewMode("structured");
           }
         });
@@ -299,7 +313,7 @@ export function ExtractedContentViewer({
               variant="ghost"
               size="sm"
               className="h-7 text-xs gap-1.5"
-              onClick={() => setViewMode("raw")}
+              onClick={() => setViewModeByUser("raw")}
               title="Switch to raw extracted text"
             >
               <ScrollText className="h-3 w-3" />
@@ -397,12 +411,14 @@ export function ExtractedContentViewer({
         {/* Content */}
         <div className="flex-1 overflow-hidden">
           <RichMarkdownEditor
+            key={`structured-${attachmentId}`}
             ref={editorRef}
             content={parsed!.structuredMarkdown!}
             attachmentId={attachmentId}
             showToolbar={false}
             showReindex={false}
             reindexOnUnmount={false}
+            onSave={handleSaveStructured}
             onSearchStateChange={handleSearchStateChange}
           />
         </div>
@@ -423,7 +439,7 @@ export function ExtractedContentViewer({
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs gap-1.5"
-                onClick={() => setViewMode("structured")}
+                onClick={() => setViewModeByUser("structured")}
                 title="Switch to AI-structured view"
               >
                 <Sparkles className="h-3 w-3" />
@@ -497,6 +513,7 @@ export function ExtractedContentViewer({
       <div className="flex-1 overflow-hidden">
         {rawContent ? (
           <RichMarkdownEditor
+            key={`raw-${attachmentId}`}
             ref={editorRef}
             content={rawContent}
             attachmentId={attachmentId}

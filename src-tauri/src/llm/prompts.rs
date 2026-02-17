@@ -119,6 +119,7 @@ pub fn discovery_prompt_single(
             role: MessageRole::System,
             content: "You are a document structure analyst. Read the document text and identify \
                       ALL sections and subsections, from the very beginning to the very end. \
+                      Each line in the text is prefixed with a line number like [N].\
                       \n\nIMPORTANT:\n\
                       - Include preliminary sections like Abstract, Preface, Foreword, Summary, \
                         Executive Summary, etc. that appear before numbered sections.\n\
@@ -127,6 +128,7 @@ pub fn discovery_prompt_single(
                       - Do NOT skip any section, even if it is short.\n\n\
                       For each section you find, call report_section \
                       with the section name exactly as it appears in the text, its heading level, \
+                      the line number where the heading appears (from the [N] prefix), \
                       and the first ~50 characters of that section's content (for boundary matching). \
                       Do NOT extract the full content — only identify the sections."
                 .to_string(),
@@ -169,12 +171,13 @@ pub fn discovery_prompt_chunk(
             role: MessageRole::System,
             content: "You are a document structure analyst. Read a chunk of document text and \
                       identify any section/subsection headings that START in this chunk. \
+                      Each line in the text is prefixed with a line number like [N].\
                       \n\nIMPORTANT:\n\
                       - Include preliminary sections like Abstract, Preface, Foreword, etc.\n\
                       - Include ALL numbered subsections (e.g. if you see 4.1, also look for 4.2, 4.3, etc.).\n\
                       - Include back matter like Conclusion, Acknowledgment, References, Appendix.\n\
                       - Do NOT skip any section, even if it is short.\n\n\
-                      For each new section, call report_section. \
+                      For each new section, call report_section with the line number from the [N] prefix. \
                       If the chunk ends mid-section, call report_partial_section for the last \
                       incomplete section. \
                       Do NOT extract full content — only identify section boundaries."
@@ -219,6 +222,7 @@ pub fn discovery_prompt_json(
                     "properties": {
                         "name": {"type": "string"},
                         "level": {"type": "integer"},
+                        "line": {"type": "integer"},
                         "starts_with": {"type": "string"}
                     }
                 }
@@ -259,6 +263,10 @@ fn discovery_tools() -> Vec<ToolDefinition> {
                     "level": {
                         "type": "integer",
                         "description": "Heading level: 1=top-level section, 2=subsection, 3=sub-subsection"
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Line number where this section heading appears (the [N] prefix)"
                     },
                     "starts_with": {
                         "type": "string",
@@ -303,7 +311,7 @@ pub fn extraction_prompt(
                 "You are a document text cleaner. You are given raw extracted text from a {doc_type_hint}. \
                  The text starts at the section '{section_name}'. \
                  Clean the text: remove repeated running headers, page numbers, \
-                 figure/table captions that are mixed into the body text, and other extraction noise. \
+                 and other extraction noise. \
                  \n\nIMPORTANT:\n\
                  - Preserve ALL actual document content verbatim — do not summarize, paraphrase, or omit content.\n\
                  - The text may contain content from subsequent sections or subsections. \
@@ -341,7 +349,7 @@ pub fn extraction_prompt(
     (messages, vec![tool])
 }
 
-/// Build JSON-mode fallback for extraction.
+/// Build JSON-mode fallback for extraction (legacy).
 pub fn extraction_prompt_json(
     section_raw_text: &str,
     section_name: &str,
@@ -358,4 +366,135 @@ pub fn extraction_prompt_json(
     }
 
     messages
+}
+
+// ── Stage 3 (noise-detector): Extraction via noise detection ───────
+
+/// Build messages + tool for noise-detector extraction of a single section.
+///
+/// Instead of asking the LLM to reproduce cleaned text, we ask it to identify
+/// noise regions using text anchors. The noise is then removed locally in Rust,
+/// preserving the original text exactly (including math, LaTeX, Unicode).
+pub fn extraction_noise_prompt(
+    section_text: &str,
+    section_name: &str,
+    doc_type_hint: &str,
+) -> (Vec<ChatMessage>, Vec<ToolDefinition>) {
+    let messages = vec![
+        ChatMessage {
+            role: MessageRole::System,
+            content: format!(
+                "You are a document noise detector. You are given raw extracted text from a {doc_type_hint}. \
+                 The text starts at the section '{section_name}'. \
+                 Identify extraction artifacts that are NOT real document content.\
+                 \n\nArtifacts to look for (ONLY these):\n\
+                 - Running headers/footers: a SHORT line (typically under 80 chars) that exactly repeats \
+                   the document title, author names, or journal/conference name, appearing by itself between \
+                   two paragraphs where a page break occurred.\n\
+                 - Standalone page numbers: a line containing ONLY a number (like \"42\") between paragraphs.\n\
+                 - ArXiv identifiers or DOI numbers injected on their own line by PDF extraction.\
+                 \n\nExamples of NOISE (flag these):\n\
+                 - A short line that exactly matches the document title, appearing alone between two paragraphs (running header)\n\
+                 - A short line with author names or journal name, appearing alone between paragraphs (running footer)\n\
+                 - A line containing only a number like \"42\" between paragraphs (page number)\n\
+                 - A line like \"arXiv:XXXX.XXXXX\" or \"DOI: 10.XXXX/...\" alone on a line (identifier)\
+                 \n\nExamples of REAL CONTENT (do NOT flag):\n\
+                 - Figure/table captions: \"Figure 3. Experiment results. Left: Quantile Loss...\" — these are real content.\n\
+                 - Paragraphs with citations: \"...competition 2014 (GEFCom2014, Hong et al, 2016) to demonstrate...\" — real text.\n\
+                 - Section/subsection headings.\n\
+                 - Equations, bibliography entries, acknowledgments.\n\
+                 - Any multi-sentence paragraph — real paragraphs are NEVER noise.\
+                 \n\nFor each noise region, report text anchors that mark its boundaries.\n\
+                 - `start`: A distinctive text snippet (10-50 chars) at the START of the noise. \
+                   Must be at least 10 characters.\n\
+                 - `end`: A distinctive text snippet (10-50 chars) at the END of the noise (inclusive — this text is also removed). \
+                   Must be at least 10 characters. \
+                   For single-line noise (like a running header), `start` and `end` can be the same text.\n\
+                 - `replace`: Text to insert where the noise was. Use empty string for simple deletion. \
+                   Only needed when removing noise would break a word or sentence \
+                   (e.g., footnote splitting \"re[1...footnote...]cently\" → replace with \"recently\").\n\
+                 - `reason`: Brief explanation.\
+                 \n\nIMPORTANT — be CONSERVATIVE:\n\
+                 - When in doubt, do NOT flag something as noise. It is far better to keep a running header \
+                   than to accidentally remove a real paragraph.\n\
+                 - Only flag short (1-2 line) artifacts. Never flag multi-sentence paragraphs.\n\
+                 - Do NOT flag figure/table captions, cross-references, or citations — these are real content.\n\
+                 - Report at most 20 noise regions. If a pattern repeats (e.g., page numbers on every page), \
+                   report it ONCE — do not repeat the same entry.\n\
+                 - If no noise is found, call report_noise with an empty list.\n\n\
+                 Call report_noise with your findings."
+            ),
+            tool_call_id: None,
+        },
+        ChatMessage {
+            role: MessageRole::User,
+            content: format!(
+                "Identify extraction noise in the following text from section '{section_name}':\n\n\
+                 ---\n{section_text}\n---"
+            ),
+            tool_call_id: None,
+        },
+    ];
+
+    (messages, extraction_noise_tools())
+}
+
+/// Build JSON-mode fallback for noise-detector extraction.
+pub fn extraction_noise_prompt_json(
+    section_text: &str,
+    section_name: &str,
+    doc_type_hint: &str,
+) -> Vec<ChatMessage> {
+    let (mut messages, tools) =
+        extraction_noise_prompt(section_text, section_name, doc_type_hint);
+
+    let schema = &tools[0].parameters;
+    if let Some(user_msg) = messages.last_mut() {
+        user_msg.content.push_str(&format!(
+            "\n\nRespond with a JSON object matching this schema:\n{}",
+            serde_json::to_string_pretty(schema).unwrap_or_default()
+        ));
+    }
+
+    messages
+}
+
+fn extraction_noise_tools() -> Vec<ToolDefinition> {
+    vec![ToolDefinition {
+        name: "report_noise".to_string(),
+        description: "Report noise regions found in the text. Pass an empty list if no noise is found."
+            .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "required": ["noise_regions"],
+            "properties": {
+                "noise_regions": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                        "type": "object",
+                        "required": ["start", "end", "replace", "reason"],
+                        "properties": {
+                            "start": {
+                                "type": "string",
+                                "description": "Distinctive text at the beginning of the noise region (5-50 chars)"
+                            },
+                            "end": {
+                                "type": "string",
+                                "description": "Distinctive text at the end of the noise region (inclusive, 5-50 chars)"
+                            },
+                            "replace": {
+                                "type": "string",
+                                "description": "Text to insert at removal point. Empty string for simple deletion."
+                            },
+                            "reason": {
+                                "type": "string",
+                                "description": "Brief explanation of why this is noise"
+                            }
+                        }
+                    }
+                }
+            }
+        }),
+    }]
 }

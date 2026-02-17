@@ -64,6 +64,10 @@ interface RichMarkdownEditorProps {
   showReindex?: boolean;
   /** Whether to auto-reindex the attachment when the editor unmounts. Defaults to true. */
   reindexOnUnmount?: boolean;
+  /** When true, the editor is non-editable and auto-save is disabled. */
+  readOnly?: boolean;
+  /** Custom save function. When provided, called instead of the default saveMarkdownContent. */
+  onSave?: (attachmentId: number, content: string) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
   className?: string;
   infoPaneOpen?: boolean;
@@ -84,6 +88,8 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
       showToolbar = true,
       showReindex = false,
       reindexOnUnmount = true,
+      readOnly = false,
+      onSave,
       onDirtyChange,
       className,
       infoPaneOpen,
@@ -101,6 +107,8 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
     const savedFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const onDirtyChangeRef = useRef(onDirtyChange);
     onDirtyChangeRef.current = onDirtyChange;
+    const onSaveRef = useRef(onSave);
+    onSaveRef.current = onSave;
     const loadedCommentIdsRef = useRef<Set<number>>(new Set());
 
     // Search hook
@@ -127,9 +135,14 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
     const saveFn = useRef(async (aid: number, text: string) => {
       try {
         setSaveStatus("saving");
-        await saveMarkdownContent(aid, text);
-        // Sync backlinks (fire-and-forget, don't block save indicator)
-        syncNoteEntryLinks(aid, text).catch(() => {});
+        const customSave = onSaveRef.current;
+        if (customSave) {
+          await customSave(aid, text);
+        } else {
+          await saveMarkdownContent(aid, text);
+          // Sync backlinks (fire-and-forget, don't block save indicator)
+          syncNoteEntryLinks(aid, text).catch(() => {});
+        }
         needsReindexRef.current = true;
         setSaveStatus("saved");
         onDirtyChangeRef.current?.(false);
@@ -361,13 +374,17 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         formattingKeymap,
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            onDirtyChange?.(true);
-            const text = update.state.doc.toString();
-            debouncedSave(attachmentIdRef.current, text);
-          }
-        }),
+        ...(readOnly
+          ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
+          : [
+              EditorView.updateListener.of((update) => {
+                if (update.docChanged) {
+                  onDirtyChange?.(true);
+                  const text = update.state.doc.toString();
+                  debouncedSave(attachmentIdRef.current, text);
+                }
+              }),
+            ]),
       ];
 
       const state = EditorState.create({
@@ -554,6 +571,10 @@ export const RichMarkdownEditor = forwardRef<RichMarkdownEditorRef, RichMarkdown
             insert: content,
           },
         });
+        // Cancel the save that the updateListener just queued — programmatic
+        // content changes (e.g., switching between raw/structured views) should
+        // NOT be persisted to the markdown file.
+        debouncedSave.cancel();
       }
     }, [content]);
 

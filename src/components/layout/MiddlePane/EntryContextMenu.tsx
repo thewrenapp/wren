@@ -19,6 +19,7 @@ import {
   RefreshCw,
   StickyNote,
   Sparkles,
+  CircleCheck,
 } from 'lucide-react';
 import { IconTagOff } from '@tabler/icons-react';
 import {
@@ -620,12 +621,18 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
       <DropdownMenuItem onClick={handleParseWithAI}>
         <Sparkles className='h-4 w-4 mr-2' />
         {isMultiSelect ? `Parse Attachments (${targetIds.length} Entries)` : 'Parse Attachments with AI'}
+        {!isMultiSelect && entry.hasStructuredContent && (
+          <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
+        )}
       </DropdownMenuItem>
 
       <DropdownMenuSub>
         <DropdownMenuSubTrigger>
           <RefreshCw className='h-4 w-4 mr-2' />
           {isMultiSelect ? `Re-extract ${targetIds.length} Entries` : 'Re-extract Attachments'}
+          {!isMultiSelect && entry.hasExtractedText && (
+            <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
+          )}
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent className='w-56'>
           <DropdownMenuItem onClick={() => handleReextractAttachments(false)}>
@@ -1200,12 +1207,18 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
         <ContextMenuItem onClick={handleParseWithAI}>
           <Sparkles className='h-4 w-4 mr-2' />
           {isMultiSelect ? `Parse Attachments (${targetIds.length} Entries)` : 'Parse Attachments with AI'}
+          {!isMultiSelect && entry.hasStructuredContent && (
+            <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
+          )}
         </ContextMenuItem>
 
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <RefreshCw className='h-4 w-4 mr-2' />
             {isMultiSelect ? `Re-extract ${targetIds.length} Entries` : 'Re-extract Attachments'}
+            {!isMultiSelect && entry.hasExtractedText && (
+              <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
+            )}
           </ContextMenuSubTrigger>
           <ContextMenuSubContent className='w-56'>
             <ContextMenuItem onClick={() => handleReextractAttachments(false)}>

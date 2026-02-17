@@ -61,6 +61,28 @@ struct ParsedContentRow {
     date_completed: Option<String>,
 }
 
+// ── Helpers ───────────────────────────────────────────────────────
+
+/// Derive the structured markdown file path for an attachment.
+/// Returns the absolute path to the `.structured.md` file (sibling of the `.pdf.md` file).
+async fn structured_md_path(
+    db: &sqlx::SqlitePool,
+    library_path: &std::path::Path,
+    attachment_id: i64,
+) -> Option<std::path::PathBuf> {
+    let md_path: Option<String> = sqlx::query_scalar(
+        "SELECT markdown_path FROM attachments WHERE id = ?",
+    )
+    .bind(attachment_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    md_path.map(|p| library_path.join(p).with_extension("structured.md"))
+}
+
 // ── Commands ───────────────────────────────────────────────────────
 
 /// Enqueue an LLM parse job for a single attachment.
@@ -90,7 +112,19 @@ pub async fn parse_document(
         entry_id,
     };
 
-    let title = format!("Parse Document #{}", attachment_id);
+    let entry_title: Option<String> = sqlx::query_scalar(
+        "SELECT title FROM entries WHERE id = ?",
+    )
+    .bind(entry_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .flatten();
+
+    let title = match entry_title {
+        Some(t) if !t.is_empty() => format!("Parse: {}", t),
+        _ => format!("Parse Document #{}", attachment_id),
+    };
 
     state
         .job_queue
@@ -118,6 +152,15 @@ pub async fn parse_entries(
     let mut job_ids = Vec::new();
 
     for entry_id in &entry_ids {
+        let entry_title: Option<String> = sqlx::query_scalar(
+            "SELECT title FROM entries WHERE id = ?",
+        )
+        .bind(entry_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .flatten();
+
         let attachments: Vec<AttInfo> = sqlx::query_as(
             r#"
             SELECT a.id, a.entry_id
@@ -136,7 +179,10 @@ pub async fn parse_entries(
                 entry_id: att.entry_id,
             };
 
-            let title = format!("Parse Document #{}", att.id);
+            let title = match &entry_title {
+                Some(t) if !t.is_empty() => format!("Parse: {}", t),
+                _ => format!("Parse Document #{}", att.id),
+            };
 
             let job_id = state
                 .job_queue
@@ -156,6 +202,8 @@ pub async fn parse_entries(
 }
 
 /// Get full parsed content for an attachment.
+/// Structured markdown is read from the `.structured.md` file on disk (source of truth).
+/// If the disk version differs from the DB, the DB is updated silently.
 #[tauri::command]
 pub async fn get_parsed_content(
     state: State<'_, AppState>,
@@ -176,13 +224,40 @@ pub async fn get_parsed_content(
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(row.map(|r| ParsedContentFull {
+    let Some(r) = row else {
+        return Ok(None);
+    };
+
+    // Try to read structured markdown from disk (source of truth)
+    let library_path = state.library_path.read().await;
+    let disk_content = structured_md_path(&state.db, &library_path, attachment_id)
+        .await
+        .and_then(|path| std::fs::read_to_string(&path).ok());
+
+    let structured_markdown = if let Some(ref disk_md) = disk_content {
+        // Disk is source of truth — sync to DB if different
+        if r.structured_markdown.as_deref() != Some(disk_md.as_str()) {
+            let _ = sqlx::query(
+                "UPDATE parsed_content SET structured_markdown = ? WHERE attachment_id = ?",
+            )
+            .bind(disk_md)
+            .bind(attachment_id)
+            .execute(&state.db)
+            .await;
+        }
+        Some(disk_md.clone())
+    } else {
+        // No file on disk — fall back to DB value
+        r.structured_markdown
+    };
+
+    Ok(Some(ParsedContentFull {
         attachment_id: r.attachment_id,
         entry_id: r.entry_id,
         document_type: r.document_type,
         language: r.language,
         sections_json: r.sections_json,
-        structured_markdown: r.structured_markdown,
+        structured_markdown,
         model_used: r.model_used,
         provider: r.provider,
         total_tokens_used: r.total_tokens_used,
@@ -246,6 +321,32 @@ pub async fn get_entry_parsed_content(
         .collect())
 }
 
+/// Update structured markdown for an attachment's parsed content (user edits).
+/// Writes to disk first (source of truth), then updates the DB backup.
+#[tauri::command]
+pub async fn update_parsed_content(
+    state: State<'_, AppState>,
+    attachment_id: i64,
+    structured_markdown: String,
+) -> Result<(), String> {
+    // Write to disk (source of truth)
+    let library_path = state.library_path.read().await;
+    if let Some(path) = structured_md_path(&state.db, &library_path, attachment_id).await {
+        std::fs::write(&path, &structured_markdown).map_err(|e| e.to_string())?;
+    }
+
+    // Update DB backup
+    sqlx::query(
+        "UPDATE parsed_content SET structured_markdown = ?, date_completed = datetime('now') WHERE attachment_id = ?",
+    )
+    .bind(&structured_markdown)
+    .bind(attachment_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Delete parsed content for an attachment (to allow re-parsing).
 #[tauri::command]
 pub async fn delete_parsed_content(
@@ -266,21 +367,22 @@ pub async fn list_llm_models(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::llm::provider::ModelInfo>, String> {
     use crate::commands::settings::get_setting_value;
-    use crate::llm::openai::OpenAiProvider;
-    use crate::llm::provider::LlmProvider;
 
+    let provider_name = get_setting_value(&state.db, "llm_provider")
+        .await
+        .unwrap_or_else(|| "openai".to_string());
     let api_key = get_setting_value(&state.db, "llm_api_key")
         .await
         .unwrap_or_default();
     let base_url = get_setting_value(&state.db, "llm_base_url")
         .await
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .unwrap_or_default();
 
-    if api_key.is_empty() {
+    if crate::llm::provider_requires_api_key(&provider_name) && api_key.is_empty() {
         return Err("API key not configured".to_string());
     }
 
-    let provider = OpenAiProvider::new(api_key, base_url);
+    let provider = crate::llm::create_provider(&provider_name, api_key, base_url);
     provider
         .list_models()
         .await
@@ -293,21 +395,22 @@ pub async fn validate_llm_config(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     use crate::commands::settings::get_setting_value;
-    use crate::llm::openai::OpenAiProvider;
-    use crate::llm::provider::LlmProvider;
 
+    let provider_name = get_setting_value(&state.db, "llm_provider")
+        .await
+        .unwrap_or_else(|| "openai".to_string());
     let api_key = get_setting_value(&state.db, "llm_api_key")
         .await
         .unwrap_or_default();
     let base_url = get_setting_value(&state.db, "llm_base_url")
         .await
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .unwrap_or_default();
 
-    if api_key.is_empty() {
+    if crate::llm::provider_requires_api_key(&provider_name) && api_key.is_empty() {
         return Ok(false);
     }
 
-    let provider = OpenAiProvider::new(api_key, base_url);
+    let provider = crate::llm::create_provider(&provider_name, api_key, base_url);
     match provider.list_models().await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),

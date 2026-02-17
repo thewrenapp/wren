@@ -92,20 +92,47 @@ impl LlmProvider for OpenAiProvider {
     }
 }
 
+// ── Model capability helpers ────────────────────────────────────────
+
+/// Reasoning models (o-series, gpt-5) only accept the default temperature (1).
+fn supports_temperature(model: &str) -> bool {
+    let m = model.to_lowercase();
+    !(m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
+        || m.starts_with("gpt-5"))
+}
+
+/// Legacy models (gpt-3.5, gpt-4 non-o) use `max_tokens`.
+/// Newer models (gpt-4o, gpt-5, o-series) use `max_completion_tokens`.
+fn uses_legacy_max_tokens(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.starts_with("gpt-3.5") || m.starts_with("gpt-4-") || m == "gpt-4"
+}
+
+/// Reasoning models use "developer" role instead of "system".
+fn uses_developer_role(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
+        || m.starts_with("gpt-5")
+}
+
 // ── Request building ────────────────────────────────────────────────
 
 fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde_json::Value {
+    let model = &request.model;
+    let dev_role = uses_developer_role(model);
+
     let messages: Vec<serde_json::Value> = request
         .messages
         .iter()
         .map(|m| {
+            let role = match m.role {
+                MessageRole::System => if dev_role { "developer" } else { "system" },
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            };
             let mut msg = serde_json::json!({
-                "role": match m.role {
-                    MessageRole::System => "system",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "tool",
-                },
+                "role": role,
                 "content": m.content,
             });
             if let Some(ref id) = m.tool_call_id {
@@ -116,13 +143,21 @@ fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde
         .collect();
 
     let mut body = serde_json::json!({
-        "model": request.model,
+        "model": model,
         "messages": messages,
-        "temperature": request.temperature,
     });
 
+    // Only include temperature for models that support it
+    if supports_temperature(model) {
+        body["temperature"] = serde_json::json!(request.temperature);
+    }
+
     if let Some(max_tokens) = request.max_tokens {
-        body["max_tokens"] = serde_json::json!(max_tokens);
+        if uses_legacy_max_tokens(model) {
+            body["max_tokens"] = serde_json::json!(max_tokens);
+        } else {
+            body["max_completion_tokens"] = serde_json::json!(max_tokens);
+        }
     }
 
     if request.json_mode && !include_tools {
@@ -231,7 +266,7 @@ async fn send_request(
 fn is_chat_model(id: &str) -> bool {
     let id_lower = id.to_lowercase();
     // Include GPT models, o-series, and chatgpt
-    (id_lower.contains("gpt") || id_lower.starts_with("o1") || id_lower.starts_with("o3") || id_lower.starts_with("o4") || id_lower.starts_with("chatgpt"))
+    (id_lower.contains("gpt") || id_lower.starts_with("o1") || id_lower.starts_with("o3") || id_lower.starts_with("o4") || id_lower.starts_with("chatgpt") || id_lower.starts_with("gpt-5"))
         // Exclude embedding, moderation, whisper, tts, dall-e, etc.
         && !id_lower.contains("embedding")
         && !id_lower.contains("moderation")

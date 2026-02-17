@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from 'react';
-import { Trash2, ExternalLink, ScrollText, RefreshCw, Sparkles } from 'lucide-react';
+import { Trash2, ExternalLink, ScrollText, RefreshCw, Sparkles, CircleCheck, FolderOpen } from 'lucide-react';
 import { type EntrySummary, type Attachment, useLibraryStore } from '@/stores/libraryStore';
 import { AttachmentIcon, getAttachmentIcon, getEntryTypeIcon } from '@/lib/icons';
 import { useUIStore, type SortField, type SortDirection } from '@/stores/uiStore';
@@ -8,7 +8,7 @@ import { EntryContextMenuContent } from './EntryContextMenu';
 import { TrashContextMenuContent } from './TrashContextMenu';
 import { DataTable, type Column } from './DataTable';
 import { deleteAttachment, reindexAttachment, exportToBiblatexWithFiles, type ExportOptions } from '@/services/tauri';
-import { parseDocument } from '@/services/tauri/commands';
+import { parseDocument, showAttachmentInFinder } from '@/services/tauri/commands';
 import { useTabStore } from '@/stores/tabStore';
 import { toast } from '@/stores/toastStore';
 import type { EntryDragData } from '@/components/dnd/DragDropProvider';
@@ -371,6 +371,12 @@ export function EntryTable({
             <td className='px-2 py-1 text-sm text-muted-foreground'>
               <div className='flex items-center gap-2'>
                 <AttachmentIcon type={attachment.attachmentType} />
+                {attachment.attachmentType !== 'note' && attachment.hasParsedContent && (
+                  <span title='AI structured'><Sparkles className='h-3 w-3 text-muted-foreground/50 flex-shrink-0' /></span>
+                )}
+                {attachment.attachmentType !== 'note' && !attachment.hasParsedContent && attachment.markdownPath && (
+                  <span title='Text extracted'><ScrollText className='h-3 w-3 text-muted-foreground/50 flex-shrink-0' /></span>
+                )}
                 <span className='truncate'>
                   {attachment.title || getAttachmentDefaultTitle(attachment)}
                 </span>
@@ -520,7 +526,7 @@ export function EntryTable({
             Open
           </DropdownMenuItem>
 
-          {contextMenuAttachment?.attachment.markdownPath && (
+          {contextMenuAttachment?.attachment.markdownPath && contextMenuAttachment.attachment.attachmentType !== 'note' && (
             <>
               <DropdownMenuItem onClick={handleViewExtractedText}>
                 <ScrollText className='h-4 w-4 mr-2' />
@@ -529,20 +535,50 @@ export function EntryTable({
               <DropdownMenuItem onClick={handleParseAttachment}>
                 <Sparkles className='h-4 w-4 mr-2' />
                 Parse with AI
+                {contextMenuAttachment?.attachment.hasParsedContent && (
+                  <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
+                )}
               </DropdownMenuItem>
             </>
           )}
 
-          <DropdownMenuSeparator />
+          {contextMenuAttachment?.attachment.attachmentType !== 'note' && (
+            <>
+              <DropdownMenuSeparator />
 
-          <DropdownMenuItem onClick={() => handleReindexAttachment(false)}>
-            <RefreshCw className='h-4 w-4 mr-2' />
-            Re-extract Text
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => handleReindexAttachment(true)}>
-            <RefreshCw className='h-4 w-4 mr-2' />
-            Re-extract with OCR
-          </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleReindexAttachment(false)}>
+                <RefreshCw className='h-4 w-4 mr-2' />
+                Re-extract Text
+                {contextMenuAttachment?.attachment.markdownPath && (
+                  <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleReindexAttachment(true)}>
+                <RefreshCw className='h-4 w-4 mr-2' />
+                Re-extract with OCR
+                {contextMenuAttachment?.attachment.markdownPath && (
+                  <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
+                )}
+              </DropdownMenuItem>
+            </>
+          )}
+
+          {(contextMenuAttachment?.attachment.filePath || contextMenuAttachment?.attachment.markdownPath) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => {
+                  if (contextMenuAttachment) {
+                    showAttachmentInFinder(contextMenuAttachment.attachment.id);
+                  }
+                  closeContextMenu();
+                }}
+              >
+                <FolderOpen className='h-4 w-4 mr-2' />
+                Show in Finder
+              </DropdownMenuItem>
+            </>
+          )}
 
           <DropdownMenuSeparator />
 
@@ -551,7 +587,7 @@ export function EntryTable({
             className='text-destructive focus:text-destructive'
           >
             <Trash2 className='h-4 w-4 mr-2' />
-            Delete Attachment
+            Delete
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

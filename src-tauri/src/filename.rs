@@ -119,21 +119,17 @@ pub fn sanitize_filename(name: &str) -> String {
         }
     }
 
-    // Collapse multiple dashes/spaces
-    let mut prev_dash_or_space = false;
+    // Collapse consecutive identical dashes or spaces (but don't merge dash+space)
     let mut collapsed = String::with_capacity(result.len());
 
     for c in result.chars() {
-        let is_dash_or_space = c == '-' || c == ' ';
-        if is_dash_or_space {
-            if !prev_dash_or_space {
-                collapsed.push(c);
-            }
-            prev_dash_or_space = true;
-        } else {
-            collapsed.push(c);
-            prev_dash_or_space = false;
+        if c == '-' && collapsed.ends_with('-') {
+            continue;
         }
+        if c == ' ' && collapsed.ends_with(' ') {
+            continue;
+        }
+        collapsed.push(c);
     }
 
     // Trim leading/trailing whitespace and dashes/dots

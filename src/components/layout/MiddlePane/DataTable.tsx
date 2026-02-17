@@ -96,11 +96,13 @@ export function DataTable<TData>({
     return data.findIndex((row) => getRowId(row) === lastSelectedId);
   }, [selectedIds, data, getRowId]);
 
-  // Scroll row into view
-  const scrollRowIntoView = useCallback((rowId: number) => {
+  // Scroll row into view (with retry for async data loads)
+  const scrollRowIntoView = useCallback((rowId: number, retries = 5) => {
     const rowElement = rowRefs.current.get(rowId);
     if (rowElement) {
       rowElement.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    } else if (retries > 0) {
+      setTimeout(() => scrollRowIntoView(rowId, retries - 1), 100);
     }
   }, []);
 

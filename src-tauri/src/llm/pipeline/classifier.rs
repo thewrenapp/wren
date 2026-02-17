@@ -58,10 +58,19 @@ pub async fn classify(
     match response {
         Ok(resp) => {
             usage.add(&resp);
-            parse_classification_response(&resp)
+            match parse_classification_response(&resp) {
+                Ok(result) => Ok(result),
+                Err(_) => {
+                    // Tool calling returned garbage — model can't do tools properly.
+                    // Retry with JSON mode.
+                    tracing::warn!(
+                        "Tool-based classification failed to parse, falling back to JSON mode"
+                    );
+                    classify_json_fallback(provider, model, text_sample, metadata, retry_max, usage, cancel).await
+                }
+            }
         }
         Err(LlmError::ToolsNotSupported) => {
-            // Fallback to JSON mode
             tracing::info!("Tool calling not supported, falling back to JSON mode for classification");
             classify_json_fallback(provider, model, text_sample, metadata, retry_max, usage, cancel).await
         }
@@ -116,16 +125,21 @@ fn parse_classification_response(
     // Check tool calls first
     for tc in &response.tool_calls {
         if tc.name == "classify_document" {
-            return serde_json::from_value(tc.arguments.clone()).map_err(|e| {
-                LlmError::ParseError(format!(
-                    "Failed to parse classify_document args: {e}\nArgs: {}",
-                    tc.arguments
-                ))
-            });
+            match serde_json::from_value::<ClassificationResult>(tc.arguments.clone()) {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    // Skip malformed tool calls (common with local models that have
+                    // weak function calling support) instead of failing the pipeline.
+                    tracing::warn!(
+                        "Skipping malformed classify_document tool call: {e}\nArgs: {}",
+                        tc.arguments
+                    );
+                }
+            }
         }
     }
 
-    // Fallback: try parsing content as JSON
+    // Fallback: try parsing content as JSON (also covers malformed tool calls)
     if let Some(ref content) = response.content {
         if let Ok(result) = serde_json::from_str::<ClassificationResult>(content) {
             return Ok(result);
