@@ -114,7 +114,9 @@ export function ExtractedContentViewer({
   );
 
   const llmApiKey = useSettingsStore((s) => s.llmApiKey);
-  const hasApiKey = llmApiKey.length > 0;
+  const llmProvider = useSettingsStore((s) => s.llmProvider);
+  const isLocalProvider = llmProvider === "ollama" || llmProvider === "lmstudio";
+  const hasApiKey = isLocalProvider || llmApiKey.length > 0;
 
   // Watch for job completion to auto-refresh
   const jobs = useJobStore((s) => s.jobs);
@@ -203,17 +205,19 @@ export function ExtractedContentViewer({
       return () => clearInterval(interval);
     }
 
-    // Job just completed OR stale in_progress status — do a final refresh
+    // Job just completed OR stale in_progress status — do a final refresh.
+    // Refresh immediately (no delay) so the UI doesn't briefly show stale
+    // "Resume Parsing" after a force-cancel before the updated status is fetched.
     if (jobJustFinished || (!hasActiveParseJob && parseStatus === "in_progress")) {
-      const timer = setTimeout(() => {
-        loadParsedContent().then((result) => {
-          // Auto-switch to structured only if user hasn't manually toggled
-          if (!userToggledRef.current && result?.structuredMarkdown && (result.status === "success" || result.status === "partial")) {
-            setViewMode("structured");
-          }
-        });
-      }, 1000);
-      return () => clearTimeout(timer);
+      let cancelled = false;
+      loadParsedContent().then((result) => {
+        if (cancelled) return;
+        // Auto-switch to structured only if user hasn't manually toggled
+        if (!userToggledRef.current && result?.structuredMarkdown && (result.status === "success" || result.status === "partial")) {
+          setViewMode("structured");
+        }
+      });
+      return () => { cancelled = true; };
     }
   }, [hasActiveParseJob, parseStatus, loadParsedContent]);
 

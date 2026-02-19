@@ -361,6 +361,15 @@ pub async fn delete_parsed_content(
     Ok(())
 }
 
+/// Read the API key for a given provider (e.g. llm_api_key_openai).
+async fn get_api_key(pool: &sqlx::SqlitePool, provider: &str) -> String {
+    use crate::commands::settings::get_setting_value;
+
+    get_setting_value(pool, &format!("llm_api_key_{provider}"))
+        .await
+        .unwrap_or_default()
+}
+
 /// List available models from the configured LLM provider.
 #[tauri::command]
 pub async fn list_llm_models(
@@ -371,9 +380,7 @@ pub async fn list_llm_models(
     let provider_name = get_setting_value(&state.db, "llm_provider")
         .await
         .unwrap_or_else(|| "openai".to_string());
-    let api_key = get_setting_value(&state.db, "llm_api_key")
-        .await
-        .unwrap_or_default();
+    let api_key = get_api_key(&state.db, &provider_name).await;
     let base_url = get_setting_value(&state.db, "llm_base_url")
         .await
         .unwrap_or_default();
@@ -399,9 +406,7 @@ pub async fn validate_llm_config(
     let provider_name = get_setting_value(&state.db, "llm_provider")
         .await
         .unwrap_or_else(|| "openai".to_string());
-    let api_key = get_setting_value(&state.db, "llm_api_key")
-        .await
-        .unwrap_or_default();
+    let api_key = get_api_key(&state.db, &provider_name).await;
     let base_url = get_setting_value(&state.db, "llm_base_url")
         .await
         .unwrap_or_default();

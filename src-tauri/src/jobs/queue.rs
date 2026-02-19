@@ -210,15 +210,14 @@ impl JobQueue {
                                     if was_force {
                                         // Hard cancel: clear checkpoint so job can't be resumed
                                         if job_type_str == "llm_parse" {
-                                            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&payload_json) {
-                                                if let Some(att_id) = payload.get("attachment_id").and_then(|v| v.as_i64()) {
-                                                    let _ = sqlx::query(
-                                                        "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
-                                                    )
-                                                    .bind(att_id)
-                                                    .execute(&q.db)
-                                                    .await;
-                                                }
+                                            if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&payload_json) {
+                                                let att_id = payload.attachment_id;
+                                                let _ = sqlx::query(
+                                                    "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
+                                                )
+                                                .bind(att_id)
+                                                .execute(&q.db)
+                                                .await;
                                             }
                                         }
                                     }
@@ -260,8 +259,10 @@ impl JobQueue {
 
     /// Cancel a job (running or pending).
     ///
-    /// When `force` is true, this is a hard cancel — any checkpoint/resume data
-    /// will be cleared after the job stops. When false (pause), checkpoints are preserved.
+    /// When `force` is true, this is a hard cancel — checkpoint/resume data is
+    /// cleared immediately (not deferred) to prevent a new job on another
+    /// concurrency slot from reading stale checkpoint data.
+    /// When false (pause), checkpoints are preserved for resume.
     pub async fn cancel(&self, job_id: &str, force: bool) -> Result<(), String> {
         // Track force cancellations so the scheduler can clean up checkpoints
         if force {
@@ -281,6 +282,26 @@ impl JobQueue {
             .bind(job_id)
             .execute(&self.db)
             .await;
+
+            // Force cancel on a running job: clear checkpoint immediately so a new
+            // job on a different concurrency slot can't read stale resume data.
+            if force {
+                if let Ok(job) = self.get_job(job_id).await {
+                    if job.job_type == "llm_parse" {
+                        if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&job.payload_json) {
+                            let att_id = payload.attachment_id; {
+                                let _ = sqlx::query(
+                                    "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
+                                )
+                                .bind(att_id)
+                                .execute(&self.db)
+                                .await;
+                            }
+                        }
+                    }
+                }
+            }
+
             self.emit_job_update(job_id).await;
             return Ok(());
         }
@@ -300,8 +321,8 @@ impl JobQueue {
             // Get the job to find its payload (need attachment_id for checkpoint cleanup)
             if let Ok(job) = self.get_job(job_id).await {
                 if job.status == "cancelled" && job.job_type == "llm_parse" {
-                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&job.payload_json) {
-                        if let Some(att_id) = payload.get("attachment_id").and_then(|v| v.as_i64()) {
+                    if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&job.payload_json) {
+                        let att_id = payload.attachment_id; {
                             let _ = sqlx::query(
                                 "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
                             )

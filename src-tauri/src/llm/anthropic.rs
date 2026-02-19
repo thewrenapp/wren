@@ -54,25 +54,42 @@ impl LlmProvider for AnthropicProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, LlmError> {
-        // Anthropic doesn't have a public model listing API, so return known models.
-        Ok(vec![
-            ModelInfo {
-                id: "claude-sonnet-4-20250514".to_string(),
-                name: "Claude Sonnet 4".to_string(),
-            },
-            ModelInfo {
-                id: "claude-haiku-4-20250414".to_string(),
-                name: "Claude Haiku 4".to_string(),
-            },
-            ModelInfo {
-                id: "claude-3-5-sonnet-20241022".to_string(),
-                name: "Claude 3.5 Sonnet".to_string(),
-            },
-            ModelInfo {
-                id: "claude-3-5-haiku-20241022".to_string(),
-                name: "Claude 3.5 Haiku".to_string(),
-            },
-        ])
+        let url = format!("{}/models?limit=100", self.base_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(LlmError::AuthError("Invalid API key".to_string()));
+        }
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!("HTTP {status}: {text}")));
+        }
+
+        let data: AnthropicModelsResponse = resp
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(e.to_string()))?;
+
+        let models: Vec<ModelInfo> = data
+            .data
+            .into_iter()
+            .map(|m| ModelInfo {
+                name: m.display_name,
+                id: m.id,
+            })
+            .collect();
+
+        // API returns most recent first, keep that order
+        Ok(models)
     }
 
     fn name(&self) -> &str {
@@ -160,6 +177,14 @@ async fn send_request(
 ) -> Result<CompletionResponse, LlmError> {
     let url = format!("{base_url}/messages");
 
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+    tracing::debug!(
+        "[anthropic] POST {} | model={} | body_keys={:?}",
+        url,
+        model,
+        body.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+    );
+
     let resp = client
         .post(&url)
         .header("x-api-key", api_key)
@@ -169,6 +194,7 @@ async fn send_request(
         .send()
         .await
         .map_err(|e| {
+            tracing::error!("[anthropic] Request failed: {e}");
             if e.is_timeout() {
                 LlmError::NetworkError(format!("Request timed out: {e}"))
             } else if e.is_connect() {
@@ -179,6 +205,7 @@ async fn send_request(
         })?;
 
     let status = resp.status();
+    tracing::debug!("[anthropic] Response status: {status}");
 
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(LlmError::AuthError("Invalid API key".to_string()));
@@ -189,13 +216,26 @@ async fn send_request(
     }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
+        tracing::error!("[anthropic] Error response: {text}");
         return Err(LlmError::ApiError(format!("HTTP {status}: {text}")));
     }
 
-    let data: AnthropicResponse = resp
-        .json()
+    let raw_text = resp
+        .text()
         .await
-        .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {e}")))?;
+        .map_err(|e| LlmError::ParseError(format!("Failed to read response body: {e}")))?;
+
+    tracing::debug!(
+        "[anthropic] Raw response ({}ch): {}",
+        raw_text.len(),
+        &raw_text[..raw_text.len().min(1000)],
+    );
+
+    let data: AnthropicResponse = serde_json::from_str(&raw_text)
+        .map_err(|e| {
+            tracing::error!("[anthropic] Parse error: {e}\nBody: {}", &raw_text[..raw_text.len().min(2000)]);
+            LlmError::ParseError(format!("Failed to parse response: {e}\nBody: {}", &raw_text[..raw_text.len().min(500)]))
+        })?;
 
     // Extract text content and tool calls from content blocks.
     let mut text_parts: Vec<String> = Vec::new();
@@ -227,6 +267,14 @@ async fn send_request(
 
     let prompt_tokens = data.usage.input_tokens;
     let completion_tokens = data.usage.output_tokens;
+
+    tracing::debug!(
+        "[anthropic] Response: content={}ch, tool_calls={}, tokens={}/{}",
+        content.as_ref().map(|c| c.len()).unwrap_or(0),
+        tool_calls.len(),
+        prompt_tokens,
+        completion_tokens,
+    );
 
     Ok(CompletionResponse {
         content,
@@ -261,4 +309,17 @@ struct ContentBlock {
 struct AnthropicUsage {
     input_tokens: u32,
     output_tokens: u32,
+}
+
+// ── Models list response types ─────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AnthropicModelsResponse {
+    data: Vec<AnthropicModelInfo>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicModelInfo {
+    id: String,
+    display_name: String,
 }

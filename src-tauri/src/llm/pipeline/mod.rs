@@ -19,6 +19,7 @@ use crate::llm::pipeline::classifier::{ClassificationResult, EntryMetadata};
 use crate::llm::pipeline::discoverer::DiscoveryCheckpoint;
 use crate::llm::pipeline::extractor::ExtractedSectionContent;
 use crate::llm::provider::{LlmError, LlmProvider, TokenUsageSummary};
+use crate::search::extractor::sanitize_extracted_text;
 
 // ── Configuration ──────────────────────────────────────────────────
 
@@ -146,6 +147,10 @@ pub async fn run_pipeline(
 ) -> Result<ParsedDocument, PipelineError> {
     let mut stages: Vec<StageInfo> = Vec::new();
     let mut total_usage = TokenUsageSummary::default();
+
+    // Sanitize extracted text: strip control characters left by PDF/OCR extraction
+    let sanitized_text = sanitize_extracted_text(extracted_text);
+    let extracted_text = sanitized_text.as_str();
 
     // ── Pre-analysis (pure Rust, no LLM calls) ────────────────────
     let model_ctx = context_windows::from_override(config.context_window);

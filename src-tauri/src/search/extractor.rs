@@ -86,7 +86,7 @@ pub async fn extract_text(path: &Path, config: &ExtractionConfig) -> Result<Extr
 
     match result {
         Ok(extraction) => Ok(ExtractionResult {
-            text: truncate_text(extraction.text),
+            text: truncate_text(sanitize_extracted_text(&extraction.text)),
             ..extraction
         }),
         Err(e) => {
@@ -167,6 +167,40 @@ pub fn markdown_path_for(attachment_path: &Path) -> PathBuf {
     attachment_path.with_file_name(md_name)
 }
 
+/// Strip control characters that PDF/OCR extraction leaves behind.
+///
+/// PDF extractors (pdfium, tesseract, etc.) often produce garbage control
+/// characters like U+0002 (STX) at positions where page/column breaks
+/// occurred mid-word. These render as box/replacement glyphs and waste
+/// LLM tokens. This function removes all ASCII control characters except
+/// tab (U+0009), newline (U+000A), and carriage return (U+000D).
+///
+/// Also strips:
+/// - U+FEFF (BOM / zero-width no-break space)
+/// - U+FFFD (Unicode replacement character)
+/// - U+00AD (soft hyphen — invisible, breaks JSON, useless in plain text)
+pub fn sanitize_extracted_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        let cp = ch as u32;
+        match cp {
+            // Keep tab, newline, carriage return
+            0x09 | 0x0A | 0x0D => out.push(ch),
+            // Strip all other ASCII control chars (U+0000–U+001F)
+            0x00..=0x1F => {}
+            // Strip BOM / zero-width no-break space
+            0xFEFF => {}
+            // Strip replacement character
+            0xFFFD => {}
+            // Strip soft hyphen (invisible, breaks word display)
+            0x00AD => {}
+            // Keep everything else
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// Truncate text to MAX_TEXT_BYTES if needed
 fn truncate_text(text: String) -> String {
     if text.len() > MAX_TEXT_BYTES {
@@ -195,5 +229,36 @@ mod tests {
 
         let long = "a".repeat(MAX_TEXT_BYTES + 100);
         assert_eq!(truncate_text(long).len(), MAX_TEXT_BYTES);
+    }
+
+    #[test]
+    fn test_sanitize_extracted_text_stx_midword() {
+        // U+0002 (STX) commonly appears mid-word from PDF extraction
+        let text = "probabilistic multi\x02horizon forecasting";
+        assert_eq!(sanitize_extracted_text(text), "probabilistic multihorizon forecasting");
+    }
+
+    #[test]
+    fn test_sanitize_extracted_text_mixed_control_chars() {
+        let text = "tree\x02based\x01 model\x03 and attention\x02based";
+        assert_eq!(sanitize_extracted_text(text), "treebased model and attentionbased");
+    }
+
+    #[test]
+    fn test_sanitize_extracted_text_preserves_whitespace() {
+        let text = "Line one\nLine two\r\nLine three\tTabbed";
+        assert_eq!(sanitize_extracted_text(text), text);
+    }
+
+    #[test]
+    fn test_sanitize_extracted_text_strips_bom_and_replacement() {
+        let text = "\u{FEFF}Hello \u{FFFD}world\u{00AD}test";
+        assert_eq!(sanitize_extracted_text(text), "Hello worldtest");
+    }
+
+    #[test]
+    fn test_sanitize_extracted_text_preserves_valid_unicode() {
+        let text = "α + β = γ, résumé, 日本語";
+        assert_eq!(sanitize_extracted_text(text), text);
     }
 }

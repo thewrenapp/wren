@@ -121,6 +121,20 @@ impl LlmProvider for GeminiProvider {
     }
 }
 
+// ── Model helpers ──────────────────────────────────────────────────
+
+/// Gemini 2.5 models support `thinkingBudget: 0` to fully disable thinking.
+fn is_gemini_2_5(model: &str) -> bool {
+    model.to_lowercase().contains("gemini-2.5")
+}
+
+/// Gemini 3 Flash supports `thinkingLevel: "minimal"` (mostly suppresses thinking).
+/// Gemini 3 Pro CANNOT disable thinking at all — it's reasoning-only.
+fn is_gemini_3_flash(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("gemini-3") && m.contains("flash")
+}
+
 // ── Request building ────────────────────────────────────────────────
 
 fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde_json::Value {
@@ -182,6 +196,20 @@ fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde
         body["generationConfig"]["maxOutputTokens"] = serde_json::json!(max_tokens);
     }
 
+    // Suppress thinking where possible to avoid burning tokens on chain-of-thought.
+    if is_gemini_2_5(&request.model) {
+        // Gemini 2.5: thinkingBudget=0 fully disables thinking.
+        body["generationConfig"]["thinkingConfig"] = serde_json::json!({
+            "thinkingBudget": 0
+        });
+    } else if is_gemini_3_flash(&request.model) {
+        // Gemini 3 Flash: can't fully disable, but "minimal" mostly suppresses it.
+        body["generationConfig"]["thinkingConfig"] = serde_json::json!({
+            "thinkingLevel": "minimal"
+        });
+    }
+    // Gemini 3 Pro: cannot disable thinking at all — no config added.
+
     if !system_text.is_empty() {
         body["systemInstruction"] = serde_json::json!({
             "parts": [{ "text": system_text }],
@@ -223,6 +251,11 @@ async fn send_request(
         "{base_url}/models/{model}:generateContent?key={api_key}"
     );
 
+    tracing::debug!(
+        "[gemini] POST models/{model}:generateContent | body_keys={:?}",
+        body.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+    );
+
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -230,6 +263,7 @@ async fn send_request(
         .send()
         .await
         .map_err(|e| {
+            tracing::error!("[gemini] Request failed: {e}");
             if e.is_timeout() {
                 LlmError::NetworkError(format!("Request timed out: {e}"))
             } else if e.is_connect() {
@@ -240,6 +274,7 @@ async fn send_request(
         })?;
 
     let status = resp.status();
+    tracing::debug!("[gemini] Response status: {status}");
 
     if status == reqwest::StatusCode::UNAUTHORIZED
         || status == reqwest::StatusCode::FORBIDDEN
@@ -252,13 +287,26 @@ async fn send_request(
     }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
+        tracing::error!("[gemini] Error response: {text}");
         return Err(LlmError::ApiError(format!("HTTP {status}: {text}")));
     }
 
-    let data: GeminiResponse = resp
-        .json()
+    let raw_text = resp
+        .text()
         .await
-        .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {e}")))?;
+        .map_err(|e| LlmError::ParseError(format!("Failed to read response body: {e}")))?;
+
+    tracing::debug!(
+        "[gemini] Raw response ({}ch): {}",
+        raw_text.len(),
+        &raw_text[..raw_text.len().min(1000)],
+    );
+
+    let data: GeminiResponse = serde_json::from_str(&raw_text)
+        .map_err(|e| {
+            tracing::error!("[gemini] Parse error: {e}\nBody: {}", &raw_text[..raw_text.len().min(2000)]);
+            LlmError::ParseError(format!("Failed to parse response: {e}\nBody: {}", &raw_text[..raw_text.len().min(500)]))
+        })?;
 
     let candidate = data
         .candidates
@@ -298,6 +346,14 @@ async fn send_request(
         } else {
             (0, 0, 0)
         };
+
+    tracing::debug!(
+        "[gemini] Response: content={}ch, tool_calls={}, tokens={}/{}",
+        content.as_ref().map(|c| c.len()).unwrap_or(0),
+        tool_calls.len(),
+        prompt_tokens,
+        completion_tokens,
+    );
 
     Ok(CompletionResponse {
         content,

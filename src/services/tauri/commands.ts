@@ -590,8 +590,8 @@ export async function showAttachmentInFinder(attachmentId: number): Promise<void
   return invoke('show_attachment_in_finder', { attachmentId });
 }
 
-export async function showMarkdownInFinder(attachmentId: number): Promise<void> {
-  return invoke('show_markdown_in_finder', { attachmentId });
+export async function showMarkdownInFinder(attachmentId: number, structured?: boolean): Promise<void> {
+  return invoke('show_markdown_in_finder', { attachmentId, structured: structured ?? false });
 }
 
 export async function openFileWithDefaultApp(filePath: string): Promise<void> {

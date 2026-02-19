@@ -6,8 +6,8 @@ use crate::llm::pipeline::boundary_finder::SectionRange;
 use crate::llm::pipeline::chunker;
 use crate::llm::prompts;
 use crate::llm::provider::{
-    call_with_retry_cancellable, CompletionRequest, CompletionResponse, LlmError, LlmProvider,
-    TokenUsageSummary,
+    call_with_retry_cancellable, parse_llm_json, CompletionRequest, CompletionResponse, LlmError,
+    LlmProvider, TokenUsageSummary,
 };
 
 /// Result of extracting a single section.
@@ -361,6 +361,7 @@ async fn extract_section_single(
     .await
     {
         Ok(cleaned) => return Ok(cleaned),
+        Err(LlmError::Cancelled) => return Err(LlmError::Cancelled),
         Err(e) => {
             tracing::info!(
                 "Noise detection failed for '{}' ({}), falling back to legacy extraction",
@@ -474,6 +475,12 @@ async fn extract_section_noise_json(
     usage.add(&resp);
 
     let content = resp.content.as_deref().ok_or_else(|| {
+        tracing::error!(
+            "[extractor] No content in JSON noise detection response! tool_calls={}, tokens={}/{}",
+            resp.tool_calls.len(),
+            resp.prompt_tokens,
+            resp.completion_tokens,
+        );
         LlmError::ParseError("No content in JSON noise detection response".to_string())
     })?;
 
@@ -482,7 +489,7 @@ async fn extract_section_noise_json(
         noise_regions: Vec<NoiseRegion>,
     }
 
-    let parsed: JsonNoiseResponse = serde_json::from_str(content).map_err(|e| {
+    let parsed: JsonNoiseResponse = parse_llm_json(content).map_err(|e| {
         LlmError::ParseError(format!(
             "Failed to parse noise detection JSON for '{}': {e}\nContent: {content}",
             section_name
@@ -584,14 +591,22 @@ async fn extract_section_json(
     let content = resp
         .content
         .as_deref()
-        .ok_or_else(|| LlmError::ParseError("No content in JSON extraction response".to_string()))?;
+        .ok_or_else(|| {
+            tracing::error!(
+                "[extractor] No content in JSON extraction response! tool_calls={}, tokens={}/{}",
+                resp.tool_calls.len(),
+                resp.prompt_tokens,
+                resp.completion_tokens,
+            );
+            LlmError::ParseError("No content in JSON extraction response".to_string())
+        })?;
 
     #[derive(Deserialize)]
     struct JsonExtractionResponse {
         content: String,
     }
 
-    let parsed: JsonExtractionResponse = serde_json::from_str(content).map_err(|e| {
+    let parsed: JsonExtractionResponse = parse_llm_json(content).map_err(|e| {
         LlmError::ParseError(format!(
             "Failed to parse extraction JSON for '{}': {e}\nContent: {content}",
             section_name
@@ -635,18 +650,30 @@ fn parse_extraction_response(
             content: String,
         }
 
-        if let Ok(parsed) = serde_json::from_str::<JsonContent>(content) {
+        if let Ok(parsed) = parse_llm_json::<JsonContent>(content) {
             return Ok(parsed.content);
         }
 
-        // Last resort: use the raw text content as cleaned output
-        // (some models might just return the cleaned text directly)
-        if !content.trim().is_empty() {
-            tracing::warn!(
-                "No emit_clean_content tool call for '{}', using raw content as fallback",
+        // Try extracting from fake XML tool calls (models like DeepSeek output these as text)
+        if let Some(extracted) = extract_fake_xml_param(content, "emit_clean_content", "content") {
+            tracing::info!(
+                "Extracted content from fake XML tool call for '{}'",
                 section_name
             );
-            return Ok(content.clone());
+            return Ok(extracted);
+        }
+
+        // Last resort: strip fake XML blocks and meta-commentary, use remaining content
+        if !content.trim().is_empty() {
+            let cleaned = strip_model_commentary(content);
+            if !cleaned.trim().is_empty() {
+                tracing::warn!(
+                    "No emit_clean_content tool call for '{}', using cleaned raw content as fallback (stripped {} bytes of commentary)",
+                    section_name,
+                    content.len() - cleaned.len()
+                );
+                return Ok(cleaned);
+            }
         }
     }
 
@@ -682,6 +709,120 @@ fn strip_line_prefix(s: &str) -> String {
         }
     }
     s.to_string()
+}
+
+/// Try to extract a parameter value from fake XML tool calls that some models produce.
+///
+/// Models like DeepSeek sometimes output `<function_calls><invoke name="tool_name">
+/// <parameter name="param_name">value</parameter></invoke></function_calls>`
+/// as text content instead of using proper tool calling.
+fn extract_fake_xml_param(text: &str, tool_name: &str, param_name: &str) -> Option<String> {
+    // Look for <invoke name="tool_name"> ... <parameter name="param_name">...</parameter>
+    let invoke_marker = format!("name=\"{}\"", tool_name);
+    let invoke_pos = text.find(&invoke_marker)?;
+    let after_invoke = &text[invoke_pos..];
+
+    // Find the parameter
+    let param_marker = format!("name=\"{}\"", param_name);
+    let param_pos = after_invoke.find(&param_marker)?;
+    let after_param_name = &after_invoke[param_pos + param_marker.len()..];
+
+    // Skip past the closing >
+    let gt_pos = after_param_name.find('>')?;
+    let content_start = &after_param_name[gt_pos + 1..];
+
+    // Find closing </parameter>
+    let close_pos = content_start.find("</parameter>")?;
+    let value = &content_start[..close_pos];
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Strip fake XML tool call blocks and meta-commentary from LLM output.
+///
+/// Some models (especially local ones) output their response as narrative text
+/// with embedded fake XML instead of using proper tool calling.
+fn strip_model_commentary(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Strip <function_calls>...</function_calls> blocks
+    loop {
+        if let Some(start) = result.find("<function_calls>") {
+            if let Some(end_rel) = result[start..].find("</function_calls>") {
+                let end = start + end_rel + "</function_calls>".len();
+                result.replace_range(start..end, "");
+            } else {
+                // Unclosed — strip from <function_calls> to end
+                result.truncate(start);
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Strip leading meta-commentary lines
+    let trimmed = result.trim();
+    let lines: Vec<&str> = trimmed.lines().collect();
+    let mut start_idx = 0;
+    for (i, line) in lines.iter().enumerate() {
+        let lower = line.trim().to_lowercase();
+        if lower.is_empty() || is_meta_commentary_line(&lower) {
+            start_idx = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    if start_idx >= lines.len() {
+        return trimmed.to_string(); // all lines are commentary — return original as-is
+    }
+
+    lines[start_idx..].join("\n").trim().to_string()
+}
+
+/// Check if a lowercased line is LLM meta-commentary (not real document content).
+fn is_meta_commentary_line(line_lower: &str) -> bool {
+    let prefixes = [
+        "i'll clean",
+        "i will clean",
+        "i'll remove",
+        "i will remove",
+        "i'll preserve",
+        "i will preserve",
+        "i'll identify",
+        "i will identify",
+        "i'll fix",
+        "i will fix",
+        "i'll process",
+        "i will process",
+        "here is the cleaned",
+        "here's the cleaned",
+        "here is the text",
+        "here's the text",
+        "here is the result",
+        "here's the result",
+        "let me clean",
+        "let me remove",
+        "let me process",
+        "the cleaned text is",
+        "the cleaned text:",
+        "the cleaned content",
+        "below is the cleaned",
+    ];
+
+    for prefix in &prefixes {
+        if line_lower.starts_with(prefix) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Max noise regions we'll accept — anything beyond this is LLM runaway.
@@ -727,8 +868,16 @@ fn parse_noise_response(response: &CompletionResponse) -> Result<Vec<NoiseRegion
             noise_regions: Vec<NoiseRegion>,
         }
 
-        if let Ok(parsed) = serde_json::from_str::<JsonNoiseResponse>(content) {
+        if let Ok(parsed) = parse_llm_json::<JsonNoiseResponse>(content) {
             return Ok(sanitize_noise_regions(parsed.noise_regions));
+        }
+
+        // Try extracting from fake XML tool calls (models like DeepSeek output these as text)
+        if let Some(json_str) = extract_fake_xml_param(content, "report_noise", "noise_regions") {
+            if let Ok(regions) = parse_llm_json::<Vec<NoiseRegion>>(&json_str) {
+                tracing::info!("Extracted noise regions from fake XML tool call");
+                return Ok(sanitize_noise_regions(regions));
+            }
         }
     }
 
@@ -866,5 +1015,90 @@ mod tests {
         }];
         let result = apply_noise_removals(text, &noise);
         assert!(result.is_err(), "Should reject excessive deletion");
+    }
+
+    #[test]
+    fn test_extract_fake_xml_param_emit_content() {
+        let text = r#"I'll clean this text by removing extraction artifacts.
+
+<function_calls>
+<invoke name="emit_clean_content">
+<parameter name="content">This is the actual cleaned document content that should be extracted.</parameter>
+</invoke>
+</function_calls>"#;
+
+        let result = extract_fake_xml_param(text, "emit_clean_content", "content");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            "This is the actual cleaned document content that should be extracted."
+        );
+    }
+
+    #[test]
+    fn test_extract_fake_xml_param_report_noise() {
+        let text = r#"I'll identify the noise regions.
+
+<function_calls>
+<invoke name="report_noise">
+<parameter name="noise_regions">[{"start":"Page 42","end":"Page 42","replace":"","reason":"page number"}]</parameter>
+</invoke>
+</function_calls>"#;
+
+        let result = extract_fake_xml_param(text, "report_noise", "noise_regions");
+        assert!(result.is_some());
+        let json_str = result.unwrap();
+        let regions: Vec<NoiseRegion> = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].start, "Page 42");
+    }
+
+    #[test]
+    fn test_extract_fake_xml_param_not_found() {
+        let text = "Just regular text with no XML.";
+        assert!(extract_fake_xml_param(text, "emit_clean_content", "content").is_none());
+    }
+
+    #[test]
+    fn test_strip_model_commentary_with_fake_xml() {
+        let text = r#"I'll clean this text by removing artifacts.
+
+Some real document content here.
+
+<function_calls>
+<invoke name="emit_clean_content">
+<parameter name="content">duplicate content</parameter>
+</invoke>
+</function_calls>"#;
+
+        let result = strip_model_commentary(text);
+        assert_eq!(result, "Some real document content here.");
+    }
+
+    #[test]
+    fn test_strip_model_commentary_preamble_only() {
+        let text = "I'll clean this text by removing extraction artifacts while preserving all actual content.\n\nThe actual document content starts here.\nAnd continues with more text.";
+        let result = strip_model_commentary(text);
+        assert_eq!(
+            result,
+            "The actual document content starts here.\nAnd continues with more text."
+        );
+    }
+
+    #[test]
+    fn test_strip_model_commentary_no_commentary() {
+        let text = "This is just normal document text.\nWith multiple lines.\nNo commentary here.";
+        let result = strip_model_commentary(text);
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn test_is_meta_commentary_line() {
+        assert!(is_meta_commentary_line("i'll clean this text by removing artifacts"));
+        assert!(is_meta_commentary_line("here is the cleaned text:"));
+        assert!(is_meta_commentary_line("let me clean the text for you"));
+        assert!(!is_meta_commentary_line("the experiment was conducted in 2024"));
+        assert!(!is_meta_commentary_line("i'll discuss the results in section 4"));
+        assert!(!is_meta_commentary_line(""));
     }
 }

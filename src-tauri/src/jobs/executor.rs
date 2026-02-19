@@ -542,10 +542,17 @@ async fn execute_ocr_extract(
             // enqueue an LlmParse job
             if worth_saving {
                 let auto_parse = crate::commands::settings::is_setting_enabled(db, "llm_auto_parse").await;
-                let has_api_key = crate::commands::settings::get_setting_value(db, "llm_api_key")
+                let llm_provider = crate::commands::settings::get_setting_value(db, "llm_provider")
                     .await
-                    .map(|k| !k.is_empty())
-                    .unwrap_or(false);
+                    .unwrap_or_else(|| "openai".to_string());
+                let has_api_key = if crate::llm::provider_requires_api_key(&llm_provider) {
+                    crate::commands::settings::get_setting_value(db, &format!("llm_api_key_{llm_provider}"))
+                        .await
+                        .map(|k| !k.is_empty())
+                        .unwrap_or(false)
+                } else {
+                    true // local providers don't need API keys
+                };
 
                 if auto_parse && has_api_key {
                     let parse_payload = serde_json::json!({
@@ -603,7 +610,7 @@ async fn execute_llm_parse(
     let provider_name = get_setting_value(db, "llm_provider")
         .await
         .unwrap_or_else(|| "openai".to_string());
-    let api_key = get_setting_value(db, "llm_api_key")
+    let api_key = get_setting_value(db, &format!("llm_api_key_{provider_name}"))
         .await
         .unwrap_or_default();
     let model = get_setting_value(db, "llm_model")

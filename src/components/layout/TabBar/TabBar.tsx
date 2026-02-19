@@ -148,7 +148,7 @@ function TabContextMenu({ tab, tabIndex, totalTabs, pane = "left", children }: {
     if (!tab.entryId) return;
     try {
       if ((isMarkdown || tab.type === "parsed") && tab.attachmentId) {
-        await showMarkdownInFinder(Number(tab.attachmentId));
+        await showMarkdownInFinder(Number(tab.attachmentId), tab.type === "parsed");
       } else if (tab.attachmentId) {
         await showAttachmentInFinder(Number(tab.attachmentId));
       } else {

@@ -11,6 +11,7 @@ const PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI" },
   { value: "anthropic", label: "Anthropic" },
   { value: "gemini", label: "Google Gemini" },
+  { value: "ollama_cloud", label: "Ollama Cloud" },
   { value: "ollama", label: "Ollama (local)" },
   { value: "lmstudio", label: "LM Studio (local)" },
 ] as const;
@@ -19,26 +20,53 @@ const API_KEY_PLACEHOLDERS: Record<string, string> = {
   openai: "sk-...",
   anthropic: "sk-ant-...",
   gemini: "AIza...",
+  ollama_cloud: "Bearer token...",
 };
 
+/** Reasoning-only models where we cannot disable chain-of-thought.
+ *  These will work but are slower, more expensive, and may hit token limits. */
+function isReasoningOnlyModel(provider: string, modelId: string): boolean {
+  const m = modelId.toLowerCase();
+  if (provider === "openai") {
+    if (m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4")) return true;
+    if (m.startsWith("gpt-5") && !m.startsWith("gpt-5.1")) return true;
+  }
+  if (provider === "gemini") {
+    // Gemini 3 Pro cannot disable thinking at all
+    if (m.includes("gemini-3") && !m.includes("flash")) return true;
+  }
+  return false;
+}
+
+/** Models where reasoning is on by default but we auto-disable/minimize it. */
+function isAutoDisabledReasoning(provider: string, modelId: string): boolean {
+  const m = modelId.toLowerCase();
+  if (provider === "openai" && m.startsWith("gpt-5.1")) return true;
+  if (provider === "gemini" && m.includes("gemini-2.5")) return true;
+  // Gemini 3 Flash: thinking set to "minimal" (mostly suppressed)
+  if (provider === "gemini" && m.includes("gemini-3") && m.includes("flash")) return true;
+  if ((provider === "ollama" || provider === "ollama_cloud" || provider === "lmstudio") && (m.includes("qwen3") || m.includes("qwen-3") || m.includes("deepseek-r1") || m.includes("deepseek-v3.1") || m.includes("qwq") || m.includes("glm-4") || m.includes("gpt-oss") || m.includes("magistral") || m.includes("nemotron"))) return true;
+  return false;
+}
+
+/** Fallback defaults shown before the API model list loads. */
 const DEFAULT_MODELS: Record<string, { id: string; name: string }[]> = {
   openai: [
-    { id: "gpt-4o-mini", name: "gpt-4o-mini" },
-    { id: "gpt-4o", name: "gpt-4o" },
+    { id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    { id: "gpt-4.1", name: "GPT-4.1" },
+    { id: "gpt-4.1-nano", name: "GPT-4.1 Nano" },
   ],
   anthropic: [
-    { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" },
-    { id: "claude-haiku-4-20250414", name: "Claude Haiku 4" },
-    { id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet" },
-    { id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku" },
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+    { id: "claude-opus-4-6", name: "Claude Opus 4.6" },
   ],
   gemini: [
-    { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" },
-    { id: "gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite" },
-    { id: "gemini-2.5-flash-preview-05-20", name: "Gemini 2.5 Flash" },
-    { id: "gemini-2.5-pro-preview-05-06", name: "Gemini 2.5 Pro" },
+    { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   ],
   ollama: [],
+  ollama_cloud: [],
   lmstudio: [],
 };
 
@@ -238,7 +266,7 @@ export function AISearchSection() {
               </Button>
               {testResult === "error" && (
                 <span className="text-xs text-muted-foreground">
-                  Make sure {llmProvider === "ollama" ? "Ollama" : "LM Studio"} is running
+                  Make sure {llmProvider === "lmstudio" ? "LM Studio" : "Ollama"} is running
                 </span>
               )}
             </div>
@@ -276,11 +304,26 @@ export function AISearchSection() {
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground self-center" />
               )}
             </div>
-            <p className="text-xs text-muted-foreground">
-              {isLocal
-                ? "Click the dropdown to load models from your local server."
-                : "Click the dropdown to load available models from your provider."}
-            </p>
+            {isReasoningOnlyModel(llmProvider, llmModel) && (
+              <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                This is a reasoning model — it spends tokens on internal chain-of-thought
+                which makes it slower and more expensive for document parsing. Reasoning
+                cannot be disabled for this model. Consider using a non-reasoning variant
+                (e.g. gpt-5.1, gpt-4o).
+              </p>
+            )}
+            {isAutoDisabledReasoning(llmProvider, llmModel) && (
+              <p className="text-xs text-muted-foreground">
+                Reasoning is automatically disabled for this model to optimize for document parsing.
+              </p>
+            )}
+            {!isReasoningOnlyModel(llmProvider, llmModel) && !isAutoDisabledReasoning(llmProvider, llmModel) && (
+              <p className="text-xs text-muted-foreground">
+                {isLocal
+                  ? "Click the dropdown to load models from your local server."
+                  : "Click the dropdown to load available models from your provider."}
+              </p>
+            )}
           </div>
 
           {/* Context Window (shown for local providers, or when overridden) */}

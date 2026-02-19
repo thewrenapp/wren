@@ -4,8 +4,8 @@ use crate::llm::pipeline::boundary_finder::DiscoveredSection;
 use crate::llm::pipeline::chunker;
 use crate::llm::prompts;
 use crate::llm::provider::{
-    call_with_retry_cancellable, CompletionRequest, CompletionResponse, LlmError, LlmProvider,
-    TokenUsageSummary,
+    call_with_retry_cancellable, parse_llm_json, strip_markdown_fences, CompletionRequest,
+    CompletionResponse, LlmError, LlmProvider, TokenUsageSummary,
 };
 
 /// Result of Stage 2: discovered document structure.
@@ -120,16 +120,25 @@ async fn discover_single(
     match response {
         Ok(resp) => {
             usage.add(&resp);
+            tracing::debug!(
+                "Discovery response: {} tool call(s), content length = {}",
+                resp.tool_calls.len(),
+                resp.content.as_deref().map_or(0, |c| c.len()),
+            );
             let sections = parse_discovery_response(&resp)?;
             if sections.is_empty() {
                 // Tool calling returned nothing useful — model may not support tools
                 // properly (e.g., GLM emitting raw special tokens instead of tool_calls).
                 // Fall back to JSON mode which any instruction-tuned model can handle.
                 tracing::warn!(
-                    "Tool-based discovery returned 0 sections, falling back to JSON mode"
+                    "Tool-based discovery returned 0 sections, falling back to JSON mode. \
+                     Tool calls: {:?}, content preview: {:?}",
+                    resp.tool_calls.iter().map(|tc| &tc.name).collect::<Vec<_>>(),
+                    resp.content.as_deref().map(|c| &c[..c.len().min(300)]),
                 );
                 discover_single_json(provider, model, full_text, doc_type_hint, retry_max, usage, cancel).await
             } else {
+                tracing::info!("Discovery found {} section(s) via tool calls", sections.len());
                 Ok(DiscoveryResult {
                     sections,
                     chunks_processed: 1,
@@ -173,9 +182,27 @@ async fn discover_single_json(
     let content = resp
         .content
         .as_deref()
-        .ok_or_else(|| LlmError::ParseError("No content in JSON discovery response".to_string()))?;
+        .ok_or_else(|| {
+            tracing::error!(
+                "[discoverer] No content in JSON discovery response! tool_calls={}, tokens={}/{}",
+                resp.tool_calls.len(),
+                resp.prompt_tokens,
+                resp.completion_tokens,
+            );
+            LlmError::ParseError("No content in JSON discovery response".to_string())
+        })?;
 
-    parse_discovery_json(content)
+    let result = parse_discovery_json(content);
+    match &result {
+        Ok(r) => tracing::info!(
+            "JSON discovery found {} section(s)",
+            r.sections.len()
+        ),
+        Err(e) => tracing::warn!(
+            "JSON discovery parse failed: {e}"
+        ),
+    }
+    result
 }
 
 /// Chunked discovery: process text in N sequential chunks with carry-forward.
@@ -292,6 +319,12 @@ async fn discover_chunk(
             usage.add(&resp);
 
             let content = resp.content.as_deref().ok_or_else(|| {
+                tracing::error!(
+                    "[discoverer] No content in JSON chunk discovery response! tool_calls={}, tokens={}/{}",
+                    resp.tool_calls.len(),
+                    resp.prompt_tokens,
+                    resp.completion_tokens,
+                );
                 LlmError::ParseError("No content in JSON chunk discovery response".to_string())
             })?;
 
@@ -352,18 +385,21 @@ fn parse_discovery_json(content: &str) -> Result<DiscoveryResult, LlmError> {
         sections: Vec<DiscoveredSection>,
     }
 
-    // Try strict parse first
-    if let Ok(parsed) = serde_json::from_str::<JsonDiscoveryResponse>(content) {
+    // Try parse with fence-stripping + control-char sanitization
+    if let Ok(parsed) = parse_llm_json::<JsonDiscoveryResponse>(content) {
         return Ok(DiscoveryResult {
             sections: parsed.sections,
             chunks_processed: 1,
         });
     }
 
+    // Strip fences for the embedded-JSON fallbacks
+    let content = strip_markdown_fences(content);
+
     // Fallback: find embedded JSON object in the text (model may have output
     // reasoning text before/after the JSON)
     if let Some(json_str) = extract_json_object(content) {
-        if let Ok(parsed) = serde_json::from_str::<JsonDiscoveryResponse>(json_str) {
+        if let Ok(parsed) = parse_llm_json::<JsonDiscoveryResponse>(json_str) {
             tracing::debug!("Extracted discovery JSON from mixed text/JSON response");
             return Ok(DiscoveryResult {
                 sections: parsed.sections,
@@ -374,7 +410,7 @@ fn parse_discovery_json(content: &str) -> Result<DiscoveryResult, LlmError> {
 
     // Last resort: try to find a JSON array of sections directly
     if let Some(arr_str) = extract_json_array(content) {
-        if let Ok(sections) = serde_json::from_str::<Vec<DiscoveredSection>>(arr_str) {
+        if let Ok(sections) = parse_llm_json::<Vec<DiscoveredSection>>(arr_str) {
             tracing::debug!("Extracted discovery sections array from mixed response");
             return Ok(DiscoveryResult {
                 sections,

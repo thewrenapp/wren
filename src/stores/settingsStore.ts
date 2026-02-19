@@ -30,7 +30,8 @@ interface SettingsState {
 
   // LLM Settings
   llmProvider: string;
-  llmApiKey: string;
+  llmApiKey: string; // active key for current provider (derived from llmApiKeys)
+  llmApiKeys: Record<string, string>; // per-provider API keys
   llmModel: string;
   llmBaseUrl: string;
   llmAutoParseOnImport: boolean;
@@ -68,6 +69,7 @@ export const LLM_PROVIDER_DEFAULTS: Record<string, { baseUrl: string; defaultMod
   anthropic: { baseUrl: "https://api.anthropic.com/v1", defaultModel: "claude-sonnet-4-20250514", requiresApiKey: true },
   gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta", defaultModel: "gemini-2.0-flash", requiresApiKey: true },
   ollama: { baseUrl: "http://localhost:11434", defaultModel: "llama3.2", requiresApiKey: false },
+  ollama_cloud: { baseUrl: "https://ollama.com", defaultModel: "", requiresApiKey: true },
   lmstudio: { baseUrl: "http://localhost:1234/v1", defaultModel: "", requiresApiKey: false },
 };
 
@@ -83,6 +85,7 @@ export const useSettingsStore = create<SettingsState>()(
       forceOcr: false,
       llmProvider: "openai",
       llmApiKey: "",
+      llmApiKeys: {},
       llmModel: "gpt-4o-mini",
       llmBaseUrl: "https://api.openai.com/v1",
       llmAutoParseOnImport: false,
@@ -132,8 +135,10 @@ export const useSettingsStore = create<SettingsState>()(
       setLlmProvider: async (provider) => {
         const prev = get().llmProvider;
         const defaults = LLM_PROVIDER_DEFAULTS[provider] ?? LLM_PROVIDER_DEFAULTS.openai;
+        const keys = get().llmApiKeys;
         set({
           llmProvider: provider,
+          llmApiKey: keys[provider] || "",
           llmBaseUrl: defaults.baseUrl,
           llmModel: defaults.defaultModel,
         });
@@ -151,9 +156,14 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setLlmApiKey: async (key) => {
         const prev = get().llmApiKey;
-        set({ llmApiKey: key });
+        const provider = get().llmProvider;
+        set({
+          llmApiKey: key,
+          llmApiKeys: { ...get().llmApiKeys, [provider]: key },
+        });
         try {
-          await updateSetting("llm_api_key", key);
+          // Save as per-provider key in backend
+          await updateSetting(`llm_api_key_${provider}`, key);
         } catch (err) {
           console.error("Failed to update llm_api_key setting:", err);
           set({ llmApiKey: prev });
@@ -234,8 +244,17 @@ export const useSettingsStore = create<SettingsState>()(
           // LLM settings
           const llmProvider = settings.find(s => s.key === "llm_provider");
           if (llmProvider) set({ llmProvider: llmProvider.value });
-          const llmApiKey = settings.find(s => s.key === "llm_api_key");
-          if (llmApiKey) set({ llmApiKey: llmApiKey.value });
+
+          // Load per-provider API keys
+          const providerNames = ["openai", "anthropic", "gemini", "ollama", "ollama_cloud"];
+          const keys: Record<string, string> = { ...get().llmApiKeys };
+          for (const p of providerNames) {
+            const k = settings.find(s => s.key === `llm_api_key_${p}`);
+            if (k) keys[p] = k.value;
+          }
+          const activeProvider = llmProvider?.value || get().llmProvider;
+          set({ llmApiKeys: keys, llmApiKey: keys[activeProvider] || "" });
+
           const llmModel = settings.find(s => s.key === "llm_model");
           if (llmModel) set({ llmModel: llmModel.value });
           const llmBaseUrl = settings.find(s => s.key === "llm_base_url");

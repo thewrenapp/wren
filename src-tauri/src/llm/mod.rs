@@ -22,7 +22,7 @@ pub fn create_provider(
     match provider_name {
         "anthropic" => Box::new(anthropic::AnthropicProvider::new(api_key, base_url)),
         "gemini" => Box::new(gemini::GeminiProvider::new(api_key, base_url)),
-        "ollama" => Box::new(ollama::OllamaProvider::new(base_url)),
+        "ollama" | "ollama_cloud" => Box::new(ollama::OllamaProvider::new(api_key, base_url)),
         "lmstudio" => Box::new(lmstudio::LmStudioProvider::new(base_url)),
         _ => Box::new(openai::OpenAiProvider::new(api_key, base_url)),
     }
@@ -30,5 +30,5 @@ pub fn create_provider(
 
 /// Returns true if the provider requires an API key.
 pub fn provider_requires_api_key(provider_name: &str) -> bool {
-    matches!(provider_name, "openai" | "anthropic" | "gemini")
+    matches!(provider_name, "openai" | "anthropic" | "gemini" | "ollama_cloud")
 }

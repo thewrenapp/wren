@@ -96,9 +96,23 @@ impl LlmProvider for OpenAiProvider {
 
 /// Reasoning models (o-series, gpt-5) only accept the default temperature (1).
 fn supports_temperature(model: &str) -> bool {
+    !is_reasoning_model(model)
+}
+
+/// Check if this is a reasoning model (o-series, gpt-5).
+/// These models spend completion tokens on internal chain-of-thought,
+/// so low max_completion_tokens can result in empty output.
+fn is_reasoning_model(model: &str) -> bool {
     let m = model.to_lowercase();
-    !(m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
-        || m.starts_with("gpt-5"))
+    if m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") {
+        return true;
+    }
+    // gpt-5, gpt-5-mini, gpt-5-nano are reasoning models.
+    // gpt-5.1, gpt-5.1-mini, gpt-5.1-nano are NOT reasoning.
+    if m.starts_with("gpt-5") && !m.starts_with("gpt-5.1") {
+        return true;
+    }
+    false
 }
 
 /// Legacy models (gpt-3.5, gpt-4 non-o) use `max_tokens`.
@@ -108,11 +122,16 @@ fn uses_legacy_max_tokens(model: &str) -> bool {
     m.starts_with("gpt-3.5") || m.starts_with("gpt-4-") || m == "gpt-4"
 }
 
+/// Models that support reasoning but we want to use in non-reasoning mode.
+/// These get `reasoning.effort = "none"` to disable chain-of-thought.
+fn has_optional_reasoning(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.starts_with("gpt-5.1")
+}
+
 /// Reasoning models use "developer" role instead of "system".
 fn uses_developer_role(model: &str) -> bool {
-    let m = model.to_lowercase();
-    m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
-        || m.starts_with("gpt-5")
+    is_reasoning_model(model)
 }
 
 // ── Request building ────────────────────────────────────────────────
@@ -155,9 +174,19 @@ fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde
     if let Some(max_tokens) = request.max_tokens {
         if uses_legacy_max_tokens(model) {
             body["max_tokens"] = serde_json::json!(max_tokens);
+        } else if is_reasoning_model(model) {
+            // Reasoning models spend completion tokens on chain-of-thought.
+            // A low cap causes empty output (finish_reason: "length").
+            // Omit the limit entirely so the model can think + respond.
         } else {
             body["max_completion_tokens"] = serde_json::json!(max_tokens);
         }
+    }
+
+    // Disable reasoning for models that have it on by default (e.g. gpt-5.1)
+    // so they behave as plain chat models and don't burn tokens on thinking.
+    if has_optional_reasoning(model) {
+        body["reasoning"] = serde_json::json!({"effort": "none"});
     }
 
     if request.json_mode && !include_tools {
@@ -193,6 +222,14 @@ async fn send_request(
 ) -> Result<CompletionResponse, LlmError> {
     let url = format!("{base_url}/chat/completions");
 
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+    tracing::debug!(
+        "[openai] POST {} | model={} | body_keys={:?}",
+        url,
+        model,
+        body.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+    );
+
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
@@ -201,6 +238,7 @@ async fn send_request(
         .send()
         .await
         .map_err(|e| {
+            tracing::error!("[openai] Request failed: {e}");
             if e.is_timeout() {
                 LlmError::NetworkError(format!("Request timed out: {e}"))
             } else if e.is_connect() {
@@ -211,6 +249,7 @@ async fn send_request(
         })?;
 
     let status = resp.status();
+    tracing::debug!("[openai] Response status: {status}");
 
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(LlmError::AuthError("Invalid API key".to_string()));
@@ -221,13 +260,26 @@ async fn send_request(
     }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
+        tracing::error!("[openai] Error response: {text}");
         return Err(LlmError::ApiError(format!("HTTP {status}: {text}")));
     }
 
-    let data: ChatCompletionResponse = resp
-        .json()
+    let raw_text = resp
+        .text()
         .await
-        .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {e}")))?;
+        .map_err(|e| LlmError::ParseError(format!("Failed to read response body: {e}")))?;
+
+    tracing::debug!(
+        "[openai] Raw response ({}ch): {}",
+        raw_text.len(),
+        &raw_text[..raw_text.len().min(1000)],
+    );
+
+    let data: ChatCompletionResponse = serde_json::from_str(&raw_text)
+        .map_err(|e| {
+            tracing::error!("[openai] Parse error: {e}\nBody: {}", &raw_text[..raw_text.len().min(2000)]);
+            LlmError::ParseError(format!("Failed to parse response: {e}\nBody: {}", &raw_text[..raw_text.len().min(500)]))
+        })?;
 
     let choice = data
         .choices
@@ -237,7 +289,7 @@ async fn send_request(
 
     let content = choice.message.content;
 
-    let tool_calls = choice
+    let tool_calls: Vec<ToolCall> = choice
         .message
         .tool_calls
         .unwrap_or_default()
@@ -253,6 +305,14 @@ async fn send_request(
         })
         .collect();
 
+    tracing::debug!(
+        "[openai] Response: content={}ch, tool_calls={}, tokens={}/{}",
+        content.as_ref().map(|c| c.len()).unwrap_or(0),
+        tool_calls.len(),
+        data.usage.prompt_tokens,
+        data.usage.completion_tokens,
+    );
+
     Ok(CompletionResponse {
         content,
         tool_calls,
@@ -262,20 +322,42 @@ async fn send_request(
     })
 }
 
-/// Filter to only include chat-capable models.
+/// Filter to only include text chat/reasoning models.
+/// Excludes: audio, realtime, transcribe, search, image,
+/// preview/dated snapshots, and legacy models.
 fn is_chat_model(id: &str) -> bool {
-    let id_lower = id.to_lowercase();
-    // Include GPT models, o-series, and chatgpt
-    (id_lower.contains("gpt") || id_lower.starts_with("o1") || id_lower.starts_with("o3") || id_lower.starts_with("o4") || id_lower.starts_with("chatgpt") || id_lower.starts_with("gpt-5"))
-        // Exclude embedding, moderation, whisper, tts, dall-e, etc.
-        && !id_lower.contains("embedding")
-        && !id_lower.contains("moderation")
-        && !id_lower.contains("whisper")
-        && !id_lower.contains("tts")
-        && !id_lower.contains("dall-e")
-        && !id_lower.contains("davinci")
-        && !id_lower.contains("babbage")
-        && !id_lower.contains("instruct")
+    let m = id.to_lowercase();
+
+    // Allow GPT models and o-series reasoning models
+    if !m.contains("gpt") && !m.starts_with("o1") && !m.starts_with("o3") && !m.starts_with("o4") {
+        return false;
+    }
+
+    // Exclude non-chat capabilities
+    if m.contains("audio")
+        || m.contains("realtime")
+        || m.contains("transcribe")
+        || m.contains("search")
+        || m.contains("image")
+        || m.contains("embedding")
+        || m.contains("moderation")
+        || m.contains("whisper")
+        || m.contains("tts")
+        || m.contains("dall-e")
+        || m.contains("davinci")
+        || m.contains("babbage")
+        || m.contains("instruct")
+    {
+        return false;
+    }
+
+    // Exclude dated snapshots and previews — keep only clean base names
+    // (e.g. "gpt-4o-mini" yes, "gpt-4o-mini-2024-07-18" no)
+    if m.contains("preview") || m.contains("-202") {
+        return false;
+    }
+
+    true
 }
 
 // ── API response types ──────────────────────────────────────────────

@@ -52,7 +52,9 @@ export function ParsedContentPanel({
   const libraryLayout = useUIStore((s) => s.libraryLayout);
 
   const llmApiKey = useSettingsStore((s) => s.llmApiKey);
-  const hasApiKey = llmApiKey.length > 0;
+  const llmProvider = useSettingsStore((s) => s.llmProvider);
+  const isLocalProvider = llmProvider === "ollama" || llmProvider === "lmstudio";
+  const hasApiKey = isLocalProvider || llmApiKey.length > 0;
 
   // Watch for job completion to auto-refresh
   const jobs = useJobStore((s) => s.jobs);
@@ -243,7 +245,7 @@ export function ParsedContentPanel({
               )}
               {status === "failed" ? "Retry Parse" : "Parse with AI"}
             </Button>
-            {!hasApiKey && (
+            {!hasApiKey && !isLocalProvider && (
               <p className="text-xs text-muted-foreground">
                 Configure an LLM API key in Settings to enable parsing.
               </p>

@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::llm::prompts;
 use crate::llm::provider::{
-    call_with_retry_cancellable, CompletionRequest, CompletionResponse, LlmError, LlmProvider, TokenUsageSummary,
+    call_with_retry_cancellable, parse_llm_json, CompletionRequest, CompletionResponse, LlmError,
+    LlmProvider, TokenUsageSummary,
 };
 use std::sync::atomic::AtomicBool;
 
@@ -108,12 +109,29 @@ async fn classify_json_fallback(
     let resp = call_with_retry_cancellable(provider, request, retry_max, false, Some(cancel)).await?;
     usage.add(&resp);
 
+    tracing::debug!(
+        "[classifier] JSON fallback response: content={:?}, tool_calls={}, tokens={}/{}",
+        resp.content.as_ref().map(|c| format!("{}ch: {}", c.len(), &c[..c.len().min(200)])),
+        resp.tool_calls.len(),
+        resp.prompt_tokens,
+        resp.completion_tokens,
+    );
+
     let content = resp
         .content
         .as_deref()
-        .ok_or_else(|| LlmError::ParseError("No content in JSON response".to_string()))?;
+        .ok_or_else(|| {
+            tracing::error!(
+                "[classifier] No content in JSON response! tool_calls={:?}, tokens={}/{}",
+                resp.tool_calls,
+                resp.prompt_tokens,
+                resp.completion_tokens,
+            );
+            LlmError::ParseError("No content in JSON response".to_string())
+        })?;
 
-    serde_json::from_str(content).map_err(|e| {
+    parse_llm_json(content).map_err(|e| {
+        tracing::error!("[classifier] Failed to parse classification JSON: {e}\nContent: {content}");
         LlmError::ParseError(format!("Failed to parse classification JSON: {e}\nContent: {content}"))
     })
 }
@@ -141,7 +159,7 @@ fn parse_classification_response(
 
     // Fallback: try parsing content as JSON (also covers malformed tool calls)
     if let Some(ref content) = response.content {
-        if let Ok(result) = serde_json::from_str::<ClassificationResult>(content) {
+        if let Ok(result) = parse_llm_json::<ClassificationResult>(content) {
             return Ok(result);
         }
     }

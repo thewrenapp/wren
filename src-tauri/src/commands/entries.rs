@@ -3468,9 +3468,10 @@ pub async fn show_attachment_in_finder(state: State<'_, AppState>, attachment_id
     Ok(())
 }
 
-/// Show an attachment's markdown file in Finder (for extracted/structured content tabs)
+/// Show an attachment's markdown file in Finder (for extracted/structured content tabs).
+/// When `structured` is true, opens the `.structured.md` file instead of the raw `.pdf.md`.
 #[tauri::command]
-pub async fn show_markdown_in_finder(state: State<'_, AppState>, attachment_id: i64) -> Result<(), String> {
+pub async fn show_markdown_in_finder(state: State<'_, AppState>, attachment_id: i64, structured: Option<bool>) -> Result<(), String> {
     let markdown_path: Option<String> = sqlx::query_scalar(
         "SELECT markdown_path FROM attachments WHERE id = ?",
     )
@@ -3482,7 +3483,18 @@ pub async fn show_markdown_in_finder(state: State<'_, AppState>, attachment_id: 
 
     let mp = markdown_path.ok_or_else(|| "No markdown file for this attachment".to_string())?;
     let library_path = state.library_path.read().await;
-    let path = library_path.join(&mp).to_string_lossy().to_string();
+    let mut full_path = library_path.join(&mp);
+
+    // For structured (AI-parsed) view, open the .structured.md file
+    if structured.unwrap_or(false) {
+        let structured_path = full_path.with_extension("structured.md");
+        if structured_path.exists() {
+            full_path = structured_path;
+        }
+        // If structured file doesn't exist, fall back to raw
+    }
+
+    let path = full_path.to_string_lossy().to_string();
 
     #[cfg(target_os = "macos")]
     {

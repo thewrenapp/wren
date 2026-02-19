@@ -16,7 +16,7 @@ pub struct LmStudioProvider {
 impl LmStudioProvider {
     pub fn new(base_url: String) -> Self {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(300)) // longer timeout for local models
+            .timeout(std::time::Duration::from_secs(1800)) // 30 min — local models can be very slow
             .build()
             .expect("Failed to build HTTP client");
 
@@ -94,6 +94,23 @@ impl LlmProvider for LmStudioProvider {
     }
 }
 
+// ── Model helpers ──────────────────────────────────────────────────
+
+/// Models with built-in thinking that is enabled by default.
+/// LM Studio supports `enable_thinking: false` to disable it.
+fn has_thinking(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("qwen3")
+        || m.contains("qwen-3")
+        || m.contains("deepseek-r1")
+        || m.contains("deepseek-v3")
+        || m.contains("qwq")
+        || m.contains("glm-4")
+        || m.contains("gpt-oss")
+        || m.contains("magistral")
+        || m.contains("nemotron")
+}
+
 // ── OpenAI-compatible request building ──────────────────────────────
 
 fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde_json::Value {
@@ -121,7 +138,13 @@ fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde
         "model": request.model,
         "messages": messages,
         "temperature": request.temperature,
+        "stream": false,
     });
+
+    // Disable thinking for models that have it enabled by default.
+    if has_thinking(&request.model) {
+        body["enable_thinking"] = serde_json::json!(false);
+    }
 
     if let Some(max_tokens) = request.max_tokens {
         body["max_tokens"] = serde_json::json!(max_tokens);
@@ -159,6 +182,14 @@ async fn send_request(
 ) -> Result<CompletionResponse, LlmError> {
     let url = format!("{base_url}/chat/completions");
 
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+    tracing::debug!(
+        "[lmstudio] POST {} | model={} | body_keys={:?}",
+        url,
+        model,
+        body.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+    );
+
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -166,6 +197,7 @@ async fn send_request(
         .send()
         .await
         .map_err(|e| {
+            tracing::error!("[lmstudio] Request failed: {e}");
             if e.is_timeout() {
                 LlmError::NetworkError(format!("Request timed out: {e}"))
             } else if e.is_connect() {
@@ -178,16 +210,30 @@ async fn send_request(
         })?;
 
     let status = resp.status();
+    tracing::debug!("[lmstudio] Response status: {status}");
 
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
+        tracing::error!("[lmstudio] Error response: {text}");
         return Err(LlmError::ApiError(format!("HTTP {status}: {text}")));
     }
 
-    let data: OpenAiResponse = resp
-        .json()
+    let raw_text = resp
+        .text()
         .await
-        .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {e}")))?;
+        .map_err(|e| LlmError::ParseError(format!("Failed to read response body: {e}")))?;
+
+    tracing::debug!(
+        "[lmstudio] Raw response ({}ch): {}",
+        raw_text.len(),
+        &raw_text[..raw_text.len().min(1000)],
+    );
+
+    let data: OpenAiResponse = serde_json::from_str(&raw_text)
+        .map_err(|e| {
+            tracing::error!("[lmstudio] Parse error: {e}\nBody: {}", &raw_text[..raw_text.len().min(2000)]);
+            LlmError::ParseError(format!("Failed to parse response: {e}\nBody: {}", &raw_text[..raw_text.len().min(500)]))
+        })?;
 
     let choice = data
         .choices
@@ -197,7 +243,7 @@ async fn send_request(
 
     let content = choice.message.content;
 
-    let tool_calls = choice
+    let tool_calls: Vec<ToolCall> = choice
         .message
         .tool_calls
         .unwrap_or_default()
@@ -222,6 +268,14 @@ async fn send_request(
     } else {
         (0, 0, 0)
     };
+
+    tracing::debug!(
+        "[lmstudio] Response: content={}ch, tool_calls={}, tokens={}/{}",
+        content.as_ref().map(|c| c.len()).unwrap_or(0),
+        tool_calls.len(),
+        prompt_tokens,
+        completion_tokens,
+    );
 
     Ok(CompletionResponse {
         content,

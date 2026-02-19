@@ -191,6 +191,16 @@ pub async fn call_with_retry_cancellable(
             }
         }
 
+        tracing::debug!(
+            "[llm] Call attempt {}/{} | provider={} | model={} | tools={} | json_mode={}",
+            attempt + 1,
+            max_retries + 1,
+            provider.name(),
+            request.model,
+            if use_tools && !request.tools.is_empty() { request.tools.len().to_string() } else { "no".to_string() },
+            request.json_mode,
+        );
+
         let api_future = if use_tools && !request.tools.is_empty() {
             provider.complete_with_tools(request.clone())
         } else {
@@ -332,6 +342,93 @@ fn strip_think_from_json(value: serde_json::Value) -> serde_json::Value {
         }
         other => other,
     }
+}
+
+/// Strip markdown code fences from LLM JSON responses.
+///
+/// Many models wrap JSON in ` ```json ... ``` ` even when asked for raw JSON.
+/// This strips the fences so `serde_json::from_str` can parse the content.
+pub fn strip_markdown_fences(text: &str) -> &str {
+    let trimmed = text.trim();
+    if let Some(after_backticks) = trimmed.strip_prefix("```") {
+        // Remove opening fence line (```json, ```JSON, ```, etc.)
+        let body = if let Some(newline_pos) = after_backticks.find('\n') {
+            &after_backticks[newline_pos + 1..]
+        } else {
+            after_backticks
+        };
+        // Remove closing fence
+        body.trim_end().trim_end_matches("```").trim()
+    } else {
+        trimmed
+    }
+}
+
+/// Parse JSON from LLM output, handling common quirks:
+/// 1. Markdown code fences (```json ... ```)
+/// 2. Unescaped control characters inside JSON strings (\r, \n, \t)
+///
+/// Tries strict parsing first, then falls back to sanitized parsing.
+pub fn parse_llm_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, serde_json::Error> {
+    let clean = strip_markdown_fences(raw);
+    // Fast path: try strict parse
+    match serde_json::from_str::<T>(clean) {
+        Ok(val) => Ok(val),
+        Err(first_err) => {
+            // Slow path: sanitize control characters inside JSON strings
+            let sanitized = sanitize_json_strings(clean);
+            serde_json::from_str::<T>(&sanitized).map_err(|_| first_err)
+        }
+    }
+}
+
+/// Escape unescaped control characters inside JSON string values.
+///
+/// LLMs often output raw `\r\n`, `\n`, `\t` inside JSON strings, which violates
+/// the JSON spec (control chars U+0000–U+001F must be escaped). This walks the
+/// JSON text, tracks whether we're inside a quoted string, and escapes any bare
+/// control characters it finds.
+fn sanitize_json_strings(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 64);
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for ch in input.chars() {
+        if escape_next {
+            out.push(ch);
+            escape_next = false;
+            continue;
+        }
+
+        if in_string {
+            if ch == '\\' {
+                escape_next = true;
+                out.push(ch);
+            } else if ch == '"' {
+                in_string = false;
+                out.push(ch);
+            } else if ch.is_control() {
+                // Escape control characters
+                match ch {
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    c => {
+                        out.push_str(&format!("\\u{:04x}", c as u32));
+                    }
+                }
+            } else {
+                out.push(ch);
+            }
+        } else {
+            if ch == '"' {
+                in_string = true;
+            }
+            out.push(ch);
+        }
+    }
+
+    out
 }
 
 /// Simple deterministic jitter (not cryptographic, just for backoff).
