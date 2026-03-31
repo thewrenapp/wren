@@ -322,6 +322,184 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await;
 
+    // ─── Knowledge Graph Tables ──────────────────────────────────────
+
+    // Entities — shared knowledge atoms (concepts, methods, etc.)
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS entities (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            name_normalized TEXT NOT NULL,
+            description TEXT,
+            category TEXT NOT NULL,
+            parent_entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL,
+            date_added TEXT DEFAULT (datetime('now')),
+            UNIQUE(name_normalized, category)
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_entities_normalized ON entities(name_normalized)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_entities_category ON entities(category)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_entities_parent ON entities(parent_entity_id)")
+        .execute(pool)
+        .await;
+
+    // Claims — per-attachment assertions with provenance
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS claims (
+            id INTEGER PRIMARY KEY,
+            entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+            attachment_id INTEGER NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+            statement TEXT NOT NULL,
+            evidence_text TEXT,
+            section_name TEXT,
+            claim_type TEXT NOT NULL,
+            confidence REAL DEFAULT 0.8,
+            date_added TEXT DEFAULT (datetime('now'))
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_claims_entry ON claims(entry_id)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_claims_attachment ON claims(attachment_id)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_claims_type ON claims(claim_type)")
+        .execute(pool)
+        .await;
+
+    // Entry-Entity edges — typed relationships with per-attachment provenance
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS entry_entities (
+            id INTEGER PRIMARY KEY,
+            entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+            attachment_id INTEGER NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+            entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            relation_type TEXT NOT NULL DEFAULT 'discusses',
+            weight REAL DEFAULT 0.5,
+            evidence_text TEXT,
+            section_name TEXT,
+            confidence REAL DEFAULT 0.8,
+            UNIQUE(entry_id, attachment_id, entity_id, relation_type)
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_ee_entry ON entry_entities(entry_id)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_ee_attachment ON entry_entities(attachment_id)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_ee_entity ON entry_entities(entity_id)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_ee_relation ON entry_entities(relation_type)")
+        .execute(pool)
+        .await;
+
+    // Entity-Entity edges — structural relationships
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS entity_relations (
+            id INTEGER PRIMARY KEY,
+            source_entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            target_entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            relation_type TEXT NOT NULL,
+            confidence REAL DEFAULT 0.8,
+            source_entry_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+            evidence_text TEXT,
+            UNIQUE(source_entity_id, target_entity_id, relation_type),
+            CHECK(source_entity_id != target_entity_id)
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_er_source ON entity_relations(source_entity_id)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_er_target ON entity_relations(target_entity_id)")
+        .execute(pool)
+        .await;
+
+    // Claim-Claim edges — cross-paper reasoning
+    let _ = sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS claim_relations (
+            id INTEGER PRIMARY KEY,
+            source_claim_id INTEGER NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            target_claim_id INTEGER NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            relation_type TEXT NOT NULL,
+            confidence REAL DEFAULT 0.8,
+            reasoning TEXT,
+            UNIQUE(source_claim_id, target_claim_id, relation_type),
+            CHECK(source_claim_id != target_claim_id)
+        )
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_cr_source ON claim_relations(source_claim_id)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_cr_target ON claim_relations(target_claim_id)")
+        .execute(pool)
+        .await;
+
+    // Graph indexing tracking on parsed_content
+    let _ = sqlx::query("ALTER TABLE parsed_content ADD COLUMN graph_indexed INTEGER DEFAULT 0")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE parsed_content ADD COLUMN graph_indexed_at TEXT")
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_parsed_content_graph ON parsed_content(graph_indexed, status)")
+        .execute(pool)
+        .await;
+
+    // Track when each entry was last processed by the relate job (for incremental runs)
+    let _ = sqlx::query("ALTER TABLE parsed_content ADD COLUMN graph_related_at TEXT")
+        .execute(pool)
+        .await;
+
+    // Seed default graph settings
+    let _ = sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO settings (key, value, value_type) VALUES
+            ('graph_auto_index', 'true', 'boolean'),
+            ('graph_embedding_provider', 'local', 'string')
+        "#
+    )
+    .execute(pool)
+    .await;
+
+    // Seed "related" link type if not already present (used by auto-relate)
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO link_types (id, name, display_name, inverse_name) VALUES (7, 'related', 'Related to', 'Related to')"
+    )
+    .execute(pool)
+    .await;
+
     Ok(())
 }
 

@@ -88,6 +88,13 @@ interface UIState {
   // Advanced Search dialog
   advancedSearchOpen: boolean;
 
+  // Claim Relations dialog
+  claimRelationsDialog: {
+    open: boolean;
+    entryId: number | null;
+    entryTitle: string;
+  };
+
   // Active filters
   activeFilter: 'all' | 'pdfs' | 'notes' | 'recent' | 'untagged' | 'duplicates' | 'trash';
 
@@ -146,6 +153,10 @@ interface UIState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
 
+  // Claim Relations dialog actions
+  showClaimRelations: (entryId: number, entryTitle: string) => void;
+  hideClaimRelations: () => void;
+
   // Delete confirmation actions
   showDeleteConfirmation: (entryIds: number[], onConfirm: () => void) => void;
   hideDeleteConfirmation: () => void;
@@ -186,6 +197,11 @@ export const useUIStore = create<UIState>()(
       tagManagementDialogOpen: false,
       collectionManagementDialogOpen: false,
       advancedSearchOpen: false,
+      claimRelationsDialog: {
+        open: false,
+        entryId: null,
+        entryTitle: '',
+      },
       activeFilter: 'all',
       hideImportedTags: true,
       sidebarCollapsed: false,
@@ -317,6 +333,24 @@ export const useUIStore = create<UIState>()(
       // Sidebar
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
+      showClaimRelations: (entryId, entryTitle) =>
+        set({
+          claimRelationsDialog: {
+            open: true,
+            entryId,
+            entryTitle,
+          },
+        }),
+
+      hideClaimRelations: () =>
+        set({
+          claimRelationsDialog: {
+            open: false,
+            entryId: null,
+            entryTitle: '',
+          },
+        }),
 
       showDeleteConfirmation: (entryIds, onConfirm) =>
         set({

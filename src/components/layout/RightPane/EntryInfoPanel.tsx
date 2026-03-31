@@ -16,6 +16,9 @@ import {
   Save,
   Trash2,
   Sparkles,
+  Network,
+  Loader2,
+  Scale,
 } from "lucide-react";
 import { AttachmentIcon } from "@/lib/icons";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -37,9 +40,12 @@ import {
   getTags,
   getCollections,
   getEntryBacklinks,
+  graphGetPaperKnowledge,
+  graphIndexEntry,
   type Entry as TauriEntry,
   type Creator,
   type BacklinkInfo,
+  type PaperKnowledgeGraph,
 } from "@/services/tauri";
 import { openFileWithDefaultApp, getLibraryPath, parseDocument } from "@/services/tauri/commands";
 import type { ItemTypeInfo } from "@/types/schema";
@@ -76,6 +82,11 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Backlinks state
   const [backlinks, setBacklinks] = useState<BacklinkInfo[]>([]);
 
+  // Knowledge graph state
+  const [knowledge, setKnowledge] = useState<PaperKnowledgeGraph | null>(null);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [indexingGraph, setIndexingGraph] = useState(false);
+
   // Load schema on mount
   useEffect(() => {
     if (!isLoaded) {
@@ -99,6 +110,35 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
       .then(setBacklinks)
       .catch(() => setBacklinks([]));
   }, [entry.id, entryVersion]);
+
+  // Fetch knowledge graph data
+  const loadKnowledge = useCallback(async () => {
+    setKnowledgeLoading(true);
+    try {
+      const data = await graphGetPaperKnowledge(entry.id);
+      setKnowledge(data);
+    } catch {
+      setKnowledge(null);
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }, [entry.id]);
+
+  useEffect(() => {
+    loadKnowledge();
+  }, [loadKnowledge]);
+
+  const handleIndexGraph = async () => {
+    setIndexingGraph(true);
+    try {
+      await graphIndexEntry(entry.id);
+      toast.info("Knowledge graph indexing started");
+    } catch (err) {
+      toast.error(`Failed to start graph indexing: ${err}`);
+    } finally {
+      setIndexingGraph(false);
+    }
+  };
 
   // Fetch item type info when entry changes or edited item type changes
   useEffect(() => {
@@ -714,13 +754,125 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
           )}
         </InfoSection>
 
-        {/* Related Section */}
+        {/* Knowledge Graph Section */}
         <InfoSection
-          title="Related"
-          icon={<Link2 className="h-4 w-4" />}
-          count={0}
+          title="Knowledge"
+          icon={<Network className="h-4 w-4" />}
+          count={knowledge ? (knowledge.entities.length + knowledge.claims.length) : undefined}
         >
-          <p className="text-sm text-muted-foreground">No related items</p>
+          {knowledgeLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Loading...
+            </div>
+          ) : knowledge?.graphIndexed ? (
+            <div className="space-y-3">
+              {/* Entities */}
+              {knowledge.entities.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Entities</p>
+                  <div className="flex flex-wrap gap-1">
+                    {knowledge.entities.map((entity) => (
+                      <span
+                        key={entity.id}
+                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary"
+                        title={entity.description || entity.category}
+                      >
+                        {entity.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Claims */}
+              {knowledge.claims.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Claims</p>
+                  <div className="space-y-1.5">
+                    {knowledge.claims.slice(0, 8).map((claim) => (
+                      <div key={claim.id} className="text-xs text-muted-foreground leading-relaxed">
+                        <span className="inline-block px-1 py-0.5 rounded bg-muted text-[10px] font-medium mr-1">
+                          {claim.claimType}
+                        </span>
+                        {claim.statement}
+                      </div>
+                    ))}
+                    {knowledge.claims.length > 8 && (
+                      <p className="text-xs text-muted-foreground/60">
+                        +{knowledge.claims.length - 8} more claims
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {/* Related Papers */}
+              {knowledge.relatedPapers.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Related Papers</p>
+                  <div className="space-y-1">
+                    {knowledge.relatedPapers.map((paper, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer"
+                        onClick={() => {
+                          const { openTab } = useTabStore.getState();
+                          openTab({
+                            type: "entry",
+                            title: paper.title,
+                            entryId: String(paper.entryId),
+                          });
+                        }}
+                      >
+                        <Link2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm truncate block">{paper.title}</span>
+                          {paper.context && (
+                            <span className="text-xs text-muted-foreground/60 truncate block">{paper.context}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {knowledge.entities.length === 0 && knowledge.claims.length === 0 && (
+                <p className="text-sm text-muted-foreground">No knowledge extracted yet</p>
+              )}
+              {/* Claim Relations button */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full gap-2"
+                onClick={() => useUIStore.getState().showClaimRelations(entry.id, entry.title)}
+              >
+                <Scale className="h-3.5 w-3.5" />
+                View Claim Relations
+              </Button>
+              {knowledge.indexedAt && (
+                <p className="text-[10px] text-muted-foreground/50">
+                  Indexed {formatRelativeDate(knowledge.indexedAt)}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">Not indexed in knowledge graph</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full gap-2"
+                onClick={handleIndexGraph}
+                disabled={indexingGraph}
+              >
+                {indexingGraph ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Network className="h-3.5 w-3.5" />
+                )}
+                Index this entry
+              </Button>
+            </div>
+          )}
         </InfoSection>
 
         {/* Backlinks Section */}
@@ -870,6 +1022,25 @@ function MetadataField({
   );
 }
 
+
+function formatRelativeDate(dateStr: string): string {
+  try {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  } catch {
+    return dateStr;
+  }
+}
 
 function getAttachmentTitle(attachment: {
   filePath?: string;

@@ -1152,3 +1152,126 @@ export async function listLlmModels(): Promise<LlmModelInfo[]> {
 export async function validateLlmConfig(): Promise<boolean> {
   return invoke('validate_llm_config');
 }
+
+// =====================================================
+// Knowledge Graph Commands
+// =====================================================
+
+export interface MatchedConcept {
+  name: string;
+  category: string;
+  description: string;
+  weight: number;
+}
+
+export interface EvidenceSnippet {
+  text: string;
+  sectionName: string;
+  source: string;
+  attachmentTitle: string;
+}
+
+export interface ConceptSearchResult {
+  entryId: number;
+  title: string;
+  creators: string;
+  relevanceScore: number;
+  matchedConcepts: MatchedConcept[];
+  evidenceSnippets: EvidenceSnippet[];
+}
+
+export interface EntityInfo {
+  id: number;
+  name: string;
+  description: string | null;
+  category: string;
+  relationType: string;
+  weight: number;
+}
+
+export interface ClaimInfo {
+  id: number;
+  statement: string;
+  evidenceText: string | null;
+  sectionName: string | null;
+  claimType: string;
+  confidence: number;
+}
+
+export interface RelatedPaperInfo {
+  entryId: number;
+  title: string;
+  creators: string;
+  linkType: string;
+  context: string | null;
+}
+
+export interface PaperKnowledgeGraph {
+  entities: EntityInfo[];
+  claims: ClaimInfo[];
+  relatedPapers: RelatedPaperInfo[];
+  graphIndexed: boolean;
+  indexedAt: string | null;
+}
+
+export interface GraphStatus {
+  papersIndexed: number;
+  totalParseable: number;
+  entityCount: number;
+  claimCount: number;
+  chunkCount: number;
+}
+
+export async function graphConceptSearch(
+  query: string,
+  limit?: number,
+): Promise<ConceptSearchResult[]> {
+  return invoke('graph_concept_search', { query, limit: limit ?? null });
+}
+
+export async function graphGetPaperKnowledge(entryId: number): Promise<PaperKnowledgeGraph> {
+  return invoke('graph_get_paper_knowledge', { entryId });
+}
+
+export async function graphStatus(): Promise<GraphStatus> {
+  return invoke('graph_status');
+}
+
+export async function graphIndexEntry(entryId: number): Promise<string> {
+  return invoke('graph_index_entry', { entryId });
+}
+
+export async function graphIndexAll(): Promise<string> {
+  return invoke('graph_index_all');
+}
+
+export async function graphAutoRelate(entryIds?: number[]): Promise<string> {
+  return invoke('graph_auto_relate', { entryIds: entryIds ?? null });
+}
+
+export async function graphRebuild(): Promise<string> {
+  return invoke('graph_rebuild');
+}
+
+export async function graphReembed(): Promise<string> {
+  return invoke('graph_reembed');
+}
+
+export interface ClaimRelationInfo {
+  relationId: number;
+  sourceClaimId: number;
+  sourceStatement: string;
+  sourceEntryId: number;
+  sourceEntryTitle: string;
+  targetClaimId: number;
+  targetStatement: string;
+  targetEntryId: number;
+  targetEntryTitle: string;
+  relationType: string; // "supports" | "contradicts" | "refines"
+  confidence: number;
+  reasoning: string | null;
+}
+
+export async function graphGetClaimRelations(entryId: number): Promise<ClaimRelationInfo[]> {
+  return invoke('graph_get_claim_relations', { entryId });
+}

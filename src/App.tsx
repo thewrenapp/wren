@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { PDFPrintView } from "@/components/pdf/PDFPrintView";
 import { Toaster } from "@/components/ui/Toaster";
 import { DeleteConfirmationDialog } from "@/components/dialogs/DeleteConfirmationDialog";
+import { ClaimRelationsDialog } from "@/components/dialogs/ClaimRelationsDialog";
 import { AdvancedSearchDialog } from "@/components/search/AdvancedSearchDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -129,6 +130,7 @@ function AppShell() {
       <AppLayout />
       <Toaster />
       <DeleteConfirmationDialog />
+      <ClaimRelationsDialog />
       <AdvancedSearchDialog />
     </>
   );

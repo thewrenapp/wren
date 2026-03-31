@@ -44,10 +44,13 @@ comrak = { version = "0.28", features = ["syntect"] }
 # Full-text search
 tantivy = "0.22"
 
-# Embeddings (for later phases)
-# fastembed = "4"
-# lancedb = "0.15"
-# arrow = "53"
+# Embeddings & vector store
+fastembed = "5"
+lancedb = "0.26"
+arrow = "57"
+
+# Async stream utilities
+futures = "0.3"
 
 # File watching (for later phases)
 # notify = "7"

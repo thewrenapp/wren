@@ -31,3 +31,4 @@ src-tauri/target/
 # Cache
 .cache/
 *.tsbuildinfo
+**/*cache

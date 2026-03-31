@@ -52,6 +52,22 @@ pub async fn run_job(
             execute_llm_parse(db, app_handle, library_path, job_id, &payload, cancel_flag)
                 .await
         }
+        "graph_index" => {
+            let payload: GraphIndexPayload =
+                serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
+            execute_graph_index(db, app_handle, job_id, &payload, cancel_flag).await
+        }
+        "graph_index_all" => {
+            execute_graph_index_all(db, app_handle, job_id, cancel_flag).await
+        }
+        "graph_relate" => {
+            let payload: GraphRelatePayload =
+                serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
+            execute_graph_relate(db, app_handle, job_id, &payload, cancel_flag).await
+        }
+        "graph_reembed" => {
+            execute_graph_reembed(db, app_handle, job_id, cancel_flag).await
+        }
         _ => Err(format!("Unknown job type: {}", job_type_str)),
     }
 }
@@ -880,6 +896,30 @@ async fn execute_llm_parse(
             let structured_md_path = full_md_path.with_extension("structured.md");
             let _ = tokio::fs::write(&structured_md_path, &parsed.structured_markdown).await;
 
+            // Auto-trigger graph indexing if enabled
+            let graph_auto_index = crate::commands::settings::is_setting_enabled(db, "graph_auto_index").await;
+            if graph_auto_index {
+                let graph_payload = serde_json::json!({
+                    "entryId": payload.entry_id,
+                });
+                let graph_job_id = uuid::Uuid::new_v4().to_string();
+                let _ = sqlx::query(
+                    r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
+                       VALUES (?, 'graph_index', 'pending', ?, ?, 0)"#,
+                )
+                .bind(&graph_job_id)
+                .bind(format!("Index Knowledge Graph #{}", payload.entry_id))
+                .bind(graph_payload.to_string())
+                .execute(db)
+                .await;
+
+                tracing::info!(
+                    "Auto-enqueued graph_index job {} for entry {}",
+                    graph_job_id,
+                    payload.entry_id
+                );
+            }
+
             update_progress(app_handle, db, job_id, 1, 1, Some("Done".to_string())).await;
 
             Ok(Some(
@@ -931,4 +971,400 @@ async fn execute_llm_parse(
             Err(format!("LLM parsing failed: {e}"))
         }
     }
+}
+
+// ── Graph executor functions ─────────────────────────────────────────
+
+/// Helper to get graph service + LLM provider from AppHandle.
+async fn get_graph_deps(
+    app_handle: &AppHandle,
+    db: &SqlitePool,
+) -> Result<
+    (
+        Arc<crate::graph::GraphService>,
+        Box<dyn crate::llm::provider::LlmProvider>,
+        String,
+    ),
+    String,
+> {
+    use tauri::Manager;
+    let state = app_handle.state::<crate::state::AppState>();
+    let graph_service = state.graph_service.clone();
+
+    let provider_name = crate::commands::settings::get_setting_value(db, "llm_provider")
+        .await
+        .unwrap_or_else(|| "openai".to_string());
+    let api_key = crate::commands::settings::get_setting_value(
+        db,
+        &format!("llm_api_key_{provider_name}"),
+    )
+    .await
+    .unwrap_or_default();
+    let base_url = crate::commands::settings::get_setting_value(db, "llm_base_url")
+        .await
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    let model = crate::commands::settings::get_setting_value(db, "llm_model")
+        .await
+        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+
+    let provider = crate::llm::create_provider(&provider_name, api_key, base_url);
+
+    Ok((graph_service, provider, model))
+}
+
+/// Index a single entry into the knowledge graph.
+async fn execute_graph_index(
+    db: &SqlitePool,
+    app_handle: &AppHandle,
+    job_id: &str,
+    payload: &GraphIndexPayload,
+    cancel_flag: CancelFlag,
+) -> Result<Option<String>, String> {
+    let (graph_service, provider, model) =
+        get_graph_deps(app_handle, db).await?;
+
+    struct JobProgress<'a> {
+        app_handle: &'a AppHandle,
+        db: &'a SqlitePool,
+        job_id: &'a str,
+    }
+
+    impl crate::graph::sync::GraphProgressCallback for JobProgress<'_> {
+        fn update(&self, message: &str) {
+            let app = self.app_handle.clone();
+            let db = self.db.clone();
+            let jid = self.job_id.to_string();
+            let msg = message.to_string();
+            tokio::spawn(async move {
+                update_progress(&app, &db, &jid, 0, 1, Some(msg)).await;
+            });
+        }
+    }
+
+    let progress = JobProgress {
+        app_handle,
+        db,
+        job_id,
+    };
+
+    let count = crate::graph::sync::index_entry_to_graph(
+        db,
+        &graph_service.vector_store,
+        &graph_service.embedding_service,
+        provider.as_ref(),
+        &model,
+        payload.entry_id,
+        &cancel_flag,
+        &progress,
+    )
+    .await
+    .map_err(|e| format!("Graph indexing failed: {e}"))?;
+
+    update_progress(app_handle, db, job_id, 1, 1, Some("Done".to_string())).await;
+
+    Ok(Some(
+        serde_json::json!({ "attachmentsIndexed": count }).to_string(),
+    ))
+}
+
+/// Index all unindexed papers into the knowledge graph.
+async fn execute_graph_index_all(
+    db: &SqlitePool,
+    app_handle: &AppHandle,
+    job_id: &str,
+    cancel_flag: CancelFlag,
+) -> Result<Option<String>, String> {
+    let (graph_service, provider, model) =
+        get_graph_deps(app_handle, db).await?;
+
+    // Find all entries with unindexed parsed_content, including titles
+    #[derive(Debug, FromRow)]
+    struct EntryToIndex {
+        entry_id: i64,
+        title: String,
+    }
+
+    let entries: Vec<EntryToIndex> = sqlx::query_as(
+        r#"SELECT DISTINCT pc.entry_id, COALESCE(e.title, 'Untitled') as title
+           FROM parsed_content pc
+           JOIN entries e ON e.id = pc.entry_id
+           WHERE pc.graph_indexed = 0 AND pc.status = 'success'"#,
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let total = entries.len() as i64;
+    update_progress(
+        app_handle,
+        db,
+        job_id,
+        0,
+        total,
+        Some(format!("Found {total} entries to index")),
+    )
+    .await;
+
+    struct JobProgress<'a> {
+        app_handle: &'a AppHandle,
+        db: &'a SqlitePool,
+        job_id: &'a str,
+        current: std::sync::atomic::AtomicI64,
+        total: i64,
+    }
+
+    impl crate::graph::sync::GraphProgressCallback for JobProgress<'_> {
+        fn update(&self, message: &str) {
+            let app = self.app_handle.clone();
+            let db = self.db.clone();
+            let jid = self.job_id.to_string();
+            let current = self.current.load(Ordering::Relaxed);
+            let total = self.total;
+            let msg = format!("({}/{}) {}", current + 1, total, message);
+            tokio::spawn(async move {
+                update_progress(&app, &db, &jid, current, total, Some(msg)).await;
+            });
+        }
+    }
+
+    let progress = JobProgress {
+        app_handle,
+        db,
+        job_id,
+        current: std::sync::atomic::AtomicI64::new(0),
+        total,
+    };
+
+    let mut total_indexed = 0;
+    for (i, entry) in entries.iter().enumerate() {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err("Job cancelled".to_string());
+        }
+
+        progress.current.store(i as i64, Ordering::Relaxed);
+
+        update_progress(
+            app_handle,
+            db,
+            job_id,
+            i as i64,
+            total,
+            Some(format!("({}/{}) {} — Starting...", i + 1, total, entry.title)),
+        )
+        .await;
+
+        match crate::graph::sync::index_entry_to_graph(
+            db,
+            &graph_service.vector_store,
+            &graph_service.embedding_service,
+            provider.as_ref(),
+            &model,
+            entry.entry_id,
+            &cancel_flag,
+            &progress,
+        )
+        .await
+        {
+            Ok(count) => total_indexed += count,
+            Err(e) => {
+                tracing::error!("Failed to graph-index entry {} ({}): {}", entry.entry_id, entry.title, e);
+            }
+        }
+    }
+
+    update_progress(app_handle, db, job_id, total, total, Some(format!("Done — indexed {total_indexed} attachments from {total} entries"))).await;
+
+    Ok(Some(
+        serde_json::json!({
+            "entriesProcessed": entries.len(),
+            "attachmentsIndexed": total_indexed,
+        })
+        .to_string(),
+    ))
+}
+
+/// Find and create links between related papers.
+async fn execute_graph_relate(
+    db: &SqlitePool,
+    app_handle: &AppHandle,
+    job_id: &str,
+    payload: &GraphRelatePayload,
+    cancel_flag: CancelFlag,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    let state = app_handle.state::<crate::state::AppState>();
+    let graph_service = state.graph_service.clone();
+
+    let entry_ids = if let Some(ref ids) = payload.entry_ids {
+        ids.clone()
+    } else {
+        // Incremental: only entries that were indexed/re-indexed since their last relate run
+        // This covers new papers AND papers that were re-indexed (graph_indexed_at > graph_related_at)
+        sqlx::query_scalar(
+            r#"SELECT DISTINCT entry_id FROM parsed_content
+               WHERE graph_indexed = 1
+                 AND (graph_related_at IS NULL OR graph_indexed_at > graph_related_at)"#,
+        )
+        .fetch_all(db)
+        .await
+        .map_err(|e| e.to_string())?
+    };
+
+    let total = entry_ids.len() as i64;
+    update_progress(
+        app_handle,
+        db,
+        job_id,
+        0,
+        total,
+        Some(format!("Finding related papers (0/{total})...")),
+    )
+    .await;
+
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err("Job cancelled".to_string());
+    }
+
+    let created = crate::graph::relate::auto_relate_papers(
+        db,
+        &graph_service.vector_store,
+        &graph_service.embedding_service,
+        &entry_ids,
+        0.3, // threshold
+        &cancel_flag,
+    )
+    .await
+    .map_err(|e| format!("Auto-relate failed: {e}"))?;
+
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err("Job cancelled".to_string());
+    }
+
+    // ── Phase 2: Classify claim relations ────────────────────────
+    update_progress(
+        app_handle, db, job_id, total, total + 1,
+        Some("Classifying claim relations...".to_string()),
+    ).await;
+
+    let (_, provider, model) = get_graph_deps(app_handle, db).await?;
+    let mut usage = crate::llm::provider::TokenUsageSummary::default();
+
+    struct RelateProgress {
+        app_handle: AppHandle,
+        db: SqlitePool,
+        job_id: String,
+    }
+    impl crate::graph::sync::GraphProgressCallback for RelateProgress {
+        fn update(&self, message: &str) {
+            let app = self.app_handle.clone();
+            let db = self.db.clone();
+            let jid = self.job_id.clone();
+            let msg = message.to_string();
+            tokio::spawn(async move {
+                update_progress(&app, &db, &jid, 0, 1, Some(msg)).await;
+            });
+        }
+    }
+
+    let relate_progress = RelateProgress {
+        app_handle: app_handle.clone(),
+        db: db.clone(),
+        job_id: job_id.to_string(),
+    };
+
+    let relations_created = crate::graph::relate::classify_claim_relations(
+        db,
+        &graph_service.vector_store,
+        &graph_service.embedding_service,
+        provider.as_ref(),
+        &model,
+        &entry_ids,
+        0.6, // min_similarity for claim pairs
+        &cancel_flag,
+        &relate_progress,
+        &mut usage,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!("Claim relation classification failed: {e}");
+        0
+    });
+
+    // Stamp graph_related_at on all processed entries so incremental runs skip them next time
+    for &eid in &entry_ids {
+        let _ = sqlx::query(
+            "UPDATE parsed_content SET graph_related_at = datetime('now') WHERE entry_id = ? AND graph_indexed = 1",
+        )
+        .bind(eid)
+        .execute(db)
+        .await;
+    }
+
+    update_progress(app_handle, db, job_id, total + 1, total + 1, Some("Done".to_string())).await;
+
+    Ok(Some(
+        serde_json::json!({
+            "entriesProcessed": entry_ids.len(),
+            "linksCreated": created.len(),
+            "claimRelationsCreated": relations_created,
+            "tokensUsed": usage.total_tokens,
+        })
+        .to_string(),
+    ))
+}
+
+/// Re-embed all graph data with the current embedding model.
+/// No LLM calls — just re-chunks + re-embeds existing SQLite data.
+async fn execute_graph_reembed(
+    db: &SqlitePool,
+    app_handle: &AppHandle,
+    job_id: &str,
+    cancel_flag: CancelFlag,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    let state = app_handle.state::<crate::state::AppState>();
+    let graph_service = state.graph_service.clone();
+
+    struct ReembedProgress {
+        app_handle: AppHandle,
+        db: SqlitePool,
+        job_id: String,
+    }
+
+    impl crate::graph::sync::GraphProgressCallback for ReembedProgress {
+        fn update(&self, message: &str) {
+            let app = self.app_handle.clone();
+            let db = self.db.clone();
+            let jid = self.job_id.clone();
+            let msg = message.to_string();
+            tokio::spawn(async move {
+                update_progress(&app, &db, &jid, 0, 1, Some(msg)).await;
+            });
+        }
+    }
+
+    let progress = ReembedProgress {
+        app_handle: app_handle.clone(),
+        db: db.clone(),
+        job_id: job_id.to_string(),
+    };
+
+    let count = crate::graph::sync::reembed_all(
+        db,
+        &graph_service.vector_store,
+        &graph_service.embedding_service,
+        &cancel_flag,
+        &progress,
+    )
+    .await
+    .map_err(|e| format!("Re-embed failed: {e}"))?;
+
+    update_progress(
+        app_handle, db, job_id, 1, 1,
+        Some(format!("Done — re-embedded {count} attachments")),
+    ).await;
+
+    Ok(Some(
+        serde_json::json!({ "attachmentsReembedded": count }).to_string(),
+    ))
 }

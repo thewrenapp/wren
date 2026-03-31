@@ -1,11 +1,11 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { useSettingsStore, LLM_PROVIDER_DEFAULTS } from "@/stores/settingsStore";
 import { useJobStore } from "@/stores/jobStore";
 import { toast } from "@/stores/toastStore";
-import { listLlmModels, validateLlmConfig, type LlmModelInfo } from "@/services/tauri/commands";
-import { Loader2, CheckCircle2, XCircle, Eye, EyeOff } from "lucide-react";
+import { listLlmModels, validateLlmConfig, graphStatus, graphIndexAll, graphAutoRelate, graphRebuild, graphReembed, type LlmModelInfo, type GraphStatus } from "@/services/tauri/commands";
+import { Loader2, CheckCircle2, XCircle, Eye, EyeOff, Network, AlertTriangle } from "lucide-react";
 
 const PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI" },
@@ -49,6 +49,34 @@ function isAutoDisabledReasoning(provider: string, modelId: string): boolean {
   return false;
 }
 
+/** Cloud embedding models available per LLM provider. */
+const CLOUD_EMBEDDING_MODELS: Record<string, { id: string; name: string }[]> = {
+  openai: [
+    { id: "text-embedding-3-small", name: "text-embedding-3-small (1536d, recommended)" },
+    { id: "text-embedding-3-large", name: "text-embedding-3-large (3072d, highest quality)" },
+  ],
+  anthropic: [],
+  gemini: [
+    { id: "text-embedding-004", name: "text-embedding-004 (768d)" },
+  ],
+  ollama: [
+    { id: "nomic-embed-text", name: "nomic-embed-text (768d)" },
+    { id: "mxbai-embed-large", name: "mxbai-embed-large (1024d)" },
+    { id: "all-minilm", name: "all-minilm (384d)" },
+    { id: "snowflake-arctic-embed", name: "snowflake-arctic-embed (1024d)" },
+  ],
+  ollama_cloud: [
+    { id: "nomic-embed-text", name: "nomic-embed-text (768d)" },
+    { id: "mxbai-embed-large", name: "mxbai-embed-large (1024d)" },
+    { id: "all-minilm", name: "all-minilm (384d)" },
+    { id: "snowflake-arctic-embed", name: "snowflake-arctic-embed (1024d)" },
+  ],
+  lmstudio: [
+    { id: "nomic-embed-text-v1.5-GGUF", name: "nomic-embed-text v1.5 (768d)" },
+    { id: "text-embedding-bge-m3-GGUF", name: "BGE-M3 (1024d)" },
+  ],
+};
+
 /** Fallback defaults shown before the API model list loads. */
 const DEFAULT_MODELS: Record<string, { id: string; name: string }[]> = {
   openai: [
@@ -74,6 +102,10 @@ export function AISearchSection() {
   const {
     embeddingModel,
     setEmbeddingModel,
+    embeddingSource,
+    setEmbeddingSource,
+    cloudEmbeddingModel,
+    setCloudEmbeddingModel,
     enableOcr,
     setEnableOcr,
     forceOcr,
@@ -92,6 +124,8 @@ export function AISearchSection() {
     setLlmTokenBudget,
     llmContextWindow,
     setLlmContextWindow,
+    graphAutoIndex,
+    setGraphAutoIndex,
   } = useSettingsStore();
 
   const hasActiveReindex = useJobStore((s) =>
@@ -109,11 +143,75 @@ export function AISearchSection() {
   const [models, setModels] = useState<LlmModelInfo[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
 
+  // Knowledge graph status
+  const [graphStat, setGraphStat] = useState<GraphStatus | null>(null);
+
+  const hasActiveGraphJob = useJobStore((s) =>
+    s.jobs.some(
+      (j) =>
+        (j.jobType === "graph_index_all" || j.jobType === "graph_relate") &&
+        (j.status === "pending" || j.status === "running")
+    )
+  );
+
+  const loadGraphStatus = useCallback(async () => {
+    try {
+      const status = await graphStatus();
+      setGraphStat(status);
+    } catch (err) {
+      console.error("Failed to load graph status:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadGraphStatus();
+  }, [loadGraphStatus]);
+
+  // Refresh graph status when graph jobs finish
+  useEffect(() => {
+    if (!hasActiveGraphJob) {
+      loadGraphStatus();
+    }
+  }, [hasActiveGraphJob, loadGraphStatus]);
+
+  const handleBuildGraph = async () => {
+    try {
+      await graphIndexAll();
+      toast.info("Knowledge graph build started in background");
+    } catch (err) {
+      toast.error(`Failed to start graph build: ${err}`);
+    }
+  };
+
+  const handleRebuildGraph = async () => {
+    if (!window.confirm(
+      "This will delete all existing knowledge graph data (entities, claims, vectors) and rebuild from scratch.\n\nThis is needed when the embedding model changes. Continue?"
+    )) return;
+    try {
+      await graphRebuild();
+      toast.info("Knowledge graph cleared — rebuilding in background");
+      loadGraphStatus();
+    } catch (err) {
+      toast.error(`Failed to rebuild graph: ${err}`);
+    }
+  };
+
+  const handleFindRelated = async () => {
+    try {
+      await graphAutoRelate();
+      toast.info("Finding related papers in background");
+    } catch (err) {
+      toast.error(`Failed to start auto-relate: ${err}`);
+    }
+  };
+
   const providerConfig = LLM_PROVIDER_DEFAULTS[llmProvider] ?? LLM_PROVIDER_DEFAULTS.openai;
   const requiresApiKey = providerConfig.requiresApiKey;
   const isLocal = !requiresApiKey;
   const hasApiKey = llmApiKey.length > 0;
   const isConfigured = isLocal || hasApiKey;
+
+  const providerLabel = PROVIDER_OPTIONS.find(p => p.value === llmProvider)?.label ?? llmProvider;
 
   const defaultModels = DEFAULT_MODELS[llmProvider] ?? [];
   const defaultModelIds = defaultModels.map((m) => m.id);
@@ -173,16 +271,56 @@ export function AISearchSection() {
     setTestResult(null);
   };
 
+  const triggerEmbeddingRebuild = async () => {
+    const rebuild = window.confirm(
+      "The embedding model has changed. Vectors need to be regenerated for semantic search to work.\n\nThis will NOT re-run LLM extraction — your entities and claims are safe.\n\nRe-embed now?"
+    );
+    if (rebuild) {
+      try {
+        await graphReembed();
+        toast.info("Re-embedding knowledge graph with new model...");
+        loadGraphStatus();
+      } catch (err) {
+        toast.error(`Failed to re-embed: ${err}`);
+      }
+    } else {
+      toast.warning("Semantic search won't work until vectors are re-embedded.");
+    }
+  };
+
+  const handleEmbeddingModelChange = (newModel: string) => {
+    const hasExistingGraph = graphStat && graphStat.chunkCount > 0;
+    setEmbeddingModel(newModel);
+    if (hasExistingGraph) {
+      triggerEmbeddingRebuild();
+    }
+  };
+
+  const handleCloudEmbeddingModelChange = (newModel: string) => {
+    const hasExistingGraph = graphStat && graphStat.chunkCount > 0;
+    setCloudEmbeddingModel(newModel);
+    if (hasExistingGraph) {
+      triggerEmbeddingRebuild();
+    }
+  };
+
+  const handleEmbeddingSourceChange = (newSource: "local" | "cloud") => {
+    const hasExistingGraph = graphStat && graphStat.chunkCount > 0;
+    setEmbeddingSource(newSource);
+    if (hasExistingGraph) {
+      triggerEmbeddingRebuild();
+    }
+  };
+
   return (
     <div className="space-y-8">
-      {/* LLM Document Parsing */}
+      {/* ── Section 1: AI Provider (shared config) ─────────────────── */}
       <section className="space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          LLM Document Parsing
+          AI Provider
         </h3>
         <p className="text-xs text-muted-foreground">
-          Use an LLM to parse extracted text into structured sections.
-          {requiresApiKey ? " Requires an API key." : " Connects to a locally running server."}
+          Configure your LLM provider. This connection is used for document parsing, knowledge extraction, and cloud embeddings.
         </p>
 
         <div className="space-y-4">
@@ -272,6 +410,37 @@ export function AISearchSection() {
             </div>
           )}
 
+          {/* Base URL */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">
+              {isLocal ? "Server URL" : "Base URL"}
+            </label>
+            <input
+              type="url"
+              value={llmBaseUrl}
+              onChange={(e) => setLlmBaseUrl(e.target.value)}
+              placeholder={providerConfig.baseUrl}
+              className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              {isLocal
+                ? `Default: ${providerConfig.baseUrl}`
+                : "Change only for custom or proxy endpoints."}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Section 2: AI Document Parsing ─────────────────────────── */}
+      <section className="space-y-4">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          AI Document Parsing
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          Parse extracted text into structured sections using {providerLabel}.
+        </p>
+
+        <div className="space-y-4">
           {/* Model */}
           <div className="space-y-2">
             <label className="text-sm font-medium">Model</label>
@@ -326,7 +495,7 @@ export function AISearchSection() {
             )}
           </div>
 
-          {/* Context Window (shown for local providers, or when overridden) */}
+          {/* Context Window (shown for local providers) */}
           {isLocal && (
             <div className="space-y-2">
               <label className="text-sm font-medium">Context Window</label>
@@ -345,29 +514,9 @@ export function AISearchSection() {
               </select>
               <p className="text-xs text-muted-foreground">
                 Context window of your local model. Larger windows mean fewer chunks and better structure discovery.
-                Check your model's documentation for the supported context size.
               </p>
             </div>
           )}
-
-          {/* Base URL */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">
-              {isLocal ? "Server URL" : "Base URL"}
-            </label>
-            <input
-              type="url"
-              value={llmBaseUrl}
-              onChange={(e) => setLlmBaseUrl(e.target.value)}
-              placeholder={providerConfig.baseUrl}
-              className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 font-mono"
-            />
-            <p className="text-xs text-muted-foreground">
-              {isLocal
-                ? `Default: ${providerConfig.baseUrl}`
-                : "Change only for custom or proxy endpoints."}
-            </p>
-          </div>
 
           {/* Token Budget */}
           <div className="space-y-2">
@@ -400,9 +549,9 @@ export function AISearchSection() {
               onCheckedChange={(checked) => setLlmAutoParseOnImport(checked === true)}
             />
             <div>
-              <span className="text-sm">Auto-parse documents with AI</span>
+              <span className="text-sm">Auto-parse documents on import</span>
               <p className="text-xs text-muted-foreground">
-                Automatically run AI structuring after text extraction — applies to imports and new attachments.
+                Automatically run AI structuring after text extraction.
                 {requiresApiKey ? " Uses API credits." : ""}
               </p>
             </div>
@@ -410,42 +559,217 @@ export function AISearchSection() {
         </div>
       </section>
 
-      {/* Semantic Search */}
+      {/* ── Section 3: Knowledge Graph ─────────────────────────────── */}
+      <section className="space-y-4">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          Knowledge Graph
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          Extract entities, claims, and relationships from parsed documents using
+          {" "}<strong>{providerLabel} / {llmModel || "—"}</strong>.
+          {" "}Enables concept-based search and automatic paper linking.
+        </p>
+
+        {!isConfigured && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground rounded-md border bg-muted/30 px-3 py-2">
+            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+            Configure an AI provider above to enable knowledge graph features.
+          </div>
+        )}
+
+        {/* Status */}
+        {graphStat && isConfigured && (
+          <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Network className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium">
+                {graphStat.papersIndexed} of {graphStat.totalParseable} documents indexed
+              </span>
+            </div>
+            {graphStat.totalParseable > 0 && (
+              <div className="w-full bg-muted rounded-full h-1.5">
+                <div
+                  className="bg-primary h-1.5 rounded-full transition-all"
+                  style={{
+                    width: `${Math.round((graphStat.papersIndexed / graphStat.totalParseable) * 100)}%`,
+                  }}
+                />
+              </div>
+            )}
+            <div className="flex gap-4 text-xs text-muted-foreground">
+              <span>{graphStat.entityCount} entities</span>
+              <span>{graphStat.claimCount} claims</span>
+              <span>{graphStat.chunkCount} chunks</span>
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        {isConfigured && (
+          <>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBuildGraph}
+                disabled={hasActiveGraphJob}
+              >
+                {hasActiveGraphJob && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Build Knowledge Graph
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleFindRelated}
+                disabled={hasActiveGraphJob || !graphStat?.papersIndexed}
+              >
+                Find Related Papers
+              </Button>
+              {graphStat && graphStat.papersIndexed > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRebuildGraph}
+                  disabled={hasActiveGraphJob}
+                  className="text-destructive hover:text-destructive"
+                >
+                  Rebuild
+                </Button>
+              )}
+            </div>
+            {hasActiveGraphJob && (
+              <p className="text-xs text-muted-foreground">
+                Running in background — check the task tracker for progress
+              </p>
+            )}
+
+            {/* Auto-index toggle */}
+            <label className="flex items-center gap-3 cursor-pointer">
+              <Checkbox
+                checked={graphAutoIndex}
+                onCheckedChange={(checked) => setGraphAutoIndex(checked === true)}
+              />
+              <div>
+                <span className="text-sm">Auto-index after AI parsing</span>
+                <p className="text-xs text-muted-foreground">
+                  Automatically add documents to the knowledge graph after AI structuring completes.
+                </p>
+              </div>
+            </label>
+          </>
+        )}
+      </section>
+
+      {/* ── Section 4: Semantic Search / Embeddings ────────────────── */}
       <section className="space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
           Semantic Search
         </h3>
+        <p className="text-xs text-muted-foreground">
+          Embedding model used for vector search across entities and document chunks.
+        </p>
 
         <div className="space-y-3">
+          {/* Embedding source toggle */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Embedding Model</label>
+            <label className="text-sm font-medium">Embedding Source</label>
             <select
-              value={embeddingModel}
-              onChange={(e) => setEmbeddingModel(e.target.value)}
+              value={embeddingSource}
+              onChange={(e) => handleEmbeddingSourceChange(e.target.value as "local" | "cloud")}
               className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
             >
-              <option value="all-MiniLM-L6-v2">
-                all-MiniLM-L6-v2 (Fast, 384 dims)
-              </option>
-              <option value="all-MiniLM-L12-v2">
-                all-MiniLM-L12-v2 (Balanced, 384 dims)
-              </option>
-              <option value="bge-small-en-v1.5">
-                BGE Small EN v1.5 (Quality, 384 dims)
-              </option>
-              <option value="bge-base-en-v1.5">
-                BGE Base EN v1.5 (Best, 768 dims)
-              </option>
+              <option value="local">Local (fastembed, runs on your machine)</option>
+              <option value="cloud">Cloud (use {providerLabel}&apos;s embedding API)</option>
             </select>
-            <p className="text-xs text-muted-foreground">
-              Used for semantic search. Changing this will require re-indexing
-              your library.
-            </p>
           </div>
+
+          {/* Local embedding model selector */}
+          {embeddingSource === "local" && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Local Embedding Model</label>
+              <select
+                value={embeddingModel}
+                onChange={(e) => handleEmbeddingModelChange(e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <optgroup label="English — Fast">
+                  <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2 (384d, fastest)</option>
+                  <option value="all-MiniLM-L12-v2">all-MiniLM-L12-v2 (384d, balanced)</option>
+                  <option value="snowflake-arctic-embed-xs">Snowflake Arctic Embed XS (384d, fast)</option>
+                </optgroup>
+                <optgroup label="English — Quality">
+                  <option value="bge-small-en-v1.5">BGE Small EN v1.5 (384d)</option>
+                  <option value="bge-base-en-v1.5">BGE Base EN v1.5 (768d)</option>
+                  <option value="bge-large-en-v1.5">BGE Large EN v1.5 (1024d)</option>
+                  <option value="gte-base-en-v1.5">GTE Base EN v1.5 (768d)</option>
+                  <option value="gte-large-en-v1.5">GTE Large EN v1.5 (1024d)</option>
+                  <option value="snowflake-arctic-embed-m">Snowflake Arctic Embed M (768d)</option>
+                  <option value="snowflake-arctic-embed-l">Snowflake Arctic Embed L (1024d, best)</option>
+                  <option value="mxbai-embed-large-v1">Mxbai Embed Large v1 (1024d)</option>
+                </optgroup>
+                <optgroup label="English — Long Context">
+                  <option value="nomic-embed-text-v1.5">Nomic Embed Text v1.5 (768d, 8K ctx)</option>
+                  <option value="jina-embeddings-v2-base-en">Jina Embeddings v2 Base EN (768d, 8K ctx)</option>
+                  <option value="snowflake-arctic-embed-m-long">Snowflake Arctic Embed M Long (768d, 2K ctx)</option>
+                </optgroup>
+                <optgroup label="Multilingual">
+                  <option value="bge-m3">BGE-M3 (1024d, 100+ languages, 8K ctx)</option>
+                  <option value="multilingual-e5-small">Multilingual E5 Small (384d)</option>
+                  <option value="multilingual-e5-base">Multilingual E5 Base (768d)</option>
+                  <option value="multilingual-e5-large">Multilingual E5 Large (1024d)</option>
+                  <option value="paraphrase-ml-minilm-l12-v2">Paraphrase ML MiniLM L12 v2 (384d)</option>
+                </optgroup>
+                <optgroup label="Code">
+                  <option value="jina-embeddings-v2-base-code">Jina Embeddings v2 Base Code (768d)</option>
+                </optgroup>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Downloads the model on first use (~25-90 MB). Changing models requires rebuilding the knowledge graph.
+              </p>
+            </div>
+          )}
+
+          {/* Cloud embedding model selector */}
+          {embeddingSource === "cloud" && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Cloud Embedding Model</label>
+              {llmProvider === "anthropic" ? (
+                <p className="text-xs text-yellow-600 dark:text-yellow-400 p-2 rounded-md bg-yellow-500/10 border border-yellow-500/20">
+                  Anthropic does not offer embedding models. Switch to a different provider above,
+                  or use local embeddings instead.
+                </p>
+              ) : (
+                <>
+                  <select
+                    value={cloudEmbeddingModel}
+                    onChange={(e) => handleCloudEmbeddingModelChange(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                  >
+                    {(CLOUD_EMBEDDING_MODELS[llmProvider] ?? []).map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                    {/* Show saved model if not in the preset list */}
+                    {cloudEmbeddingModel &&
+                      !(CLOUD_EMBEDDING_MODELS[llmProvider] ?? []).some((m) => m.id === cloudEmbeddingModel) && (
+                      <option value={cloudEmbeddingModel}>{cloudEmbeddingModel}</option>
+                    )}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Uses the API key and endpoint from {providerLabel} above.
+                    {(llmProvider === "ollama" || llmProvider === "lmstudio") &&
+                      " Make sure the embedding model is pulled/downloaded in your local server."}
+                    {" "}Changing models requires rebuilding the knowledge graph.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </section>
 
-      {/* Document Extraction */}
+      {/* ── Section 5: Document Extraction ─────────────────────────── */}
       <section className="space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
           Document Extraction
@@ -478,17 +802,16 @@ export function AISearchSection() {
             <span className="text-sm">Force OCR for all documents</span>
             <p className="text-xs text-muted-foreground">
               Always run OCR, even for PDFs that have a text layer. Use this if you have
-              scanned PDFs with incomplete or low-quality embedded text. Slower but more thorough.
-              Applies to imports and index rebuilds.
+              scanned PDFs with incomplete or low-quality embedded text.
             </p>
           </div>
         </label>
       </section>
 
-      {/* Indexing */}
+      {/* ── Section 6: Full-text Search Index ──────────────────────── */}
       <section className="space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          Indexing
+          Search Index
         </h3>
 
         <div className="space-y-3">

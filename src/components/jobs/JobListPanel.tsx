@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useJobStore, jobDisplayName, type Job } from "@/stores/jobStore";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -40,9 +41,17 @@ function JobRow({
   onCancel: (id: string, force?: boolean) => void;
   onRetry: (id: string) => void;
 }) {
+  // Optimistic cancel: show "Cancelling..." immediately on click,
+  // don't wait for the backend event to arrive
+  const [localCancelling, setLocalCancelling] = useState(false);
   const isActive = job.status === "pending" || job.status === "running";
-  const isCancelling = isActive && job.progressMessage === "Cancelling...";
+  const isCancelling = localCancelling || (isActive && job.progressMessage === "Cancelling...");
   const isPaused = job.status === "cancelled" && job.progressMessage === "Paused";
+
+  // Reset local state when job finishes
+  if (!isActive && localCancelling) {
+    setLocalCancelling(false);
+  }
   const progress =
     job.progressTotal > 0
       ? Math.min(100, (job.progressCurrent / job.progressTotal) * 100)
@@ -63,7 +72,7 @@ function JobRow({
               variant="ghost"
               size="icon"
               className="h-6 w-6"
-              onClick={() => onCancel(job.id, false)}
+              onClick={() => { setLocalCancelling(true); onCancel(job.id, false); }}
               title="Pause (checkpoint saved, can resume)"
             >
               <Pause className="h-3.5 w-3.5" />
@@ -74,7 +83,7 @@ function JobRow({
               variant="ghost"
               size="icon"
               className="h-6 w-6"
-              onClick={() => onCancel(job.id, true)}
+              onClick={() => { setLocalCancelling(true); onCancel(job.id, true); }}
               title="Cancel"
             >
               <X className="h-3.5 w-3.5" />

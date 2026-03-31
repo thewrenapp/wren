@@ -20,6 +20,7 @@ import {
   StickyNote,
   Sparkles,
   CircleCheck,
+  Scale,
 } from 'lucide-react';
 import { IconTagOff } from '@tabler/icons-react';
 import {
@@ -43,6 +44,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useLibraryStore, type EntrySummary } from '@/stores/libraryStore';
 import { useTabStore } from '@/stores/tabStore';
+import { useUIStore } from '@/stores/uiStore';
 import {
   showEntryInFinder,
   showEntriesInFinder,
@@ -625,6 +627,16 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
           <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
         )}
       </DropdownMenuItem>
+
+      {!isMultiSelect && (
+        <DropdownMenuItem onClick={() => {
+          useUIStore.getState().showClaimRelations(entry.id, entry.title);
+          onClose?.();
+        }}>
+          <Scale className='h-4 w-4 mr-2' />
+          View Claim Relations
+        </DropdownMenuItem>
+      )}
 
       <DropdownMenuSub>
         <DropdownMenuSubTrigger>
@@ -1211,6 +1223,13 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
             <CircleCheck className='h-4 w-4 ml-1 text-green-600' />
           )}
         </ContextMenuItem>
+
+        {!isMultiSelect && (
+          <ContextMenuItem onClick={() => useUIStore.getState().showClaimRelations(entry.id, entry.title)}>
+            <Scale className='h-4 w-4 mr-2' />
+            View Claim Relations
+          </ContextMenuItem>
+        )}
 
         <ContextMenuSub>
           <ContextMenuSubTrigger>

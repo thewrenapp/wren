@@ -73,6 +73,7 @@ import {
   Highlighter,
   MessageCircle,
   Paperclip,
+  Scale,
 } from "lucide-react";
 import { sidebarIcons } from "@/lib/icons";
 import { IconTagOff } from "@tabler/icons-react";
@@ -124,11 +125,16 @@ import {
   getEntryAttachments,
   fullTextSearch,
   parseEntries,
+  graphConceptSearch,
+  graphIndexAll,
+  graphAutoRelate,
+  graphRebuild,
   type ExportOptions,
   type BiblatexPreviewResult,
   type Attachment,
   type EntrySummary,
   type FullSearchResult,
+  type ConceptSearchResult,
 } from "@/services/tauri";
 import { useSchemaStore } from "@/stores/schemaStore";
 import { ExportOptionsDialog } from "@/components/dialogs/ExportOptionsDialog";
@@ -337,11 +343,13 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
 
   const [searchResults, setSearchResults] = useState<EntrySummary[]>([]);
   const [fullSearchResults, setFullSearchResults] = useState<FullSearchResult[]>([]);
+  const [semanticResults, setSemanticResults] = useState<ConceptSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchOffset, setSearchOffset] = useState(0);
   const [hasMoreResults, setHasMoreResults] = useState(false);
   const [isLoadingMoreResults, setIsLoadingMoreResults] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const searchTimeoutRef = useRef<number | null>(null);
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -352,7 +360,9 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     if (!search.trim()) {
       setSearchResults([]);
       setFullSearchResults([]);
+      setSemanticResults([]);
       setIsSearching(false);
+      setSearchError(null);
       setSearchTotal(0);
       setSearchOffset(0);
       setHasMoreResults(false);
@@ -360,13 +370,23 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     }
 
     setIsSearching(true);
+    setSearchError(null);
     searchTimeoutRef.current = window.setTimeout(async () => {
       try {
-        if (searchMode === "full") {
+        if (searchMode === "semantic") {
+          // Semantic / concept search via knowledge graph
+          const results = await graphConceptSearch(search.trim(), 20);
+          setSemanticResults(results);
+          setSearchResults([]);
+          setFullSearchResults([]);
+          setSearchTotal(results.length);
+          setHasMoreResults(false);
+        } else if (searchMode === "full") {
           // Full text search (searches inside PDF content, notes, etc.)
           const results = await fullTextSearch(search.trim(), 50, 0);
           setFullSearchResults(results);
           setSearchResults([]);
+          setSemanticResults([]);
           setSearchTotal(results.length);
           setHasMoreResults(false);
         } else {
@@ -379,14 +399,31 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
           });
           setSearchResults(result.entries);
           setFullSearchResults([]);
+          setSemanticResults([]);
           setSearchTotal(result.total);
           setSearchOffset(result.entries.length);
           setHasMoreResults(result.entries.length < result.total);
         }
       } catch (err) {
         console.error("Search error:", err);
+        const errMsg = String(err);
+        // Surface meaningful errors to the user instead of silently clearing
+        if (searchMode === "semantic") {
+          if (errMsg.includes("dimension") || errMsg.includes("vector")) {
+            setSearchError("Embedding model mismatch — rebuild the Knowledge Graph in Settings.");
+          } else if (errMsg.includes("fastembed") || errMsg.includes("onnx")) {
+            setSearchError("Embedding model failed to load. Try a different model in Settings > Semantic Search.");
+          } else {
+            setSearchError("Concept search failed. Check your embedding configuration in Settings.");
+          }
+        } else if (searchMode === "full") {
+          setSearchError("Full-text search failed. Try rebuilding the search index in Settings.");
+        } else {
+          setSearchError(`Search failed: ${errMsg.slice(0, 120)}`);
+        }
         setSearchResults([]);
         setFullSearchResults([]);
+        setSemanticResults([]);
         setSearchTotal(0);
         setSearchOffset(0);
         setHasMoreResults(false);
@@ -2288,6 +2325,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       {/* Dialog */}
       <div className="absolute left-1/2 top-[15%] -translate-x-1/2 w-full max-w-xl px-4">
         <Command
+          shouldFilter={!(isSearching || searchResults.length > 0 || fullSearchResults.length > 0 || semanticResults.length > 0)}
           filter={(value, search) => {
             if (!search) return 1;
             const searchLower = search.toLowerCase();
@@ -2403,6 +2441,13 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
               <Search className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
               {isSearching ? (
                 <p className="text-sm text-muted-foreground">Searching…</p>
+              ) : searchError ? (
+                <>
+                  <p className="text-sm text-destructive">{searchError}</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">
+                    Open Settings to fix the configuration
+                  </p>
+                </>
               ) : (
                 <>
                   <p className="text-sm text-muted-foreground">No results found</p>
@@ -2423,7 +2468,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                   <Command.Item
                     key={entry.id}
                     value={entry.title}
-                    forceMount
+
                     onSelect={() =>
                       handleSelect(() =>
                         openTab({
@@ -2478,7 +2523,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                   <Command.Item
                     key={`${result.entryId}-${result.attachmentId ?? 'meta'}-${idx}`}
                     value={`${result.title} ${result.snippet}`}
-                    forceMount
+
                     onSelect={() =>
                       handleSelect(() =>
                         openTab({
@@ -2521,8 +2566,69 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
               </Command.Group>
             )}
 
-            {/* Commands */}
-            <>
+            {/* Semantic search results (concept search via knowledge graph) */}
+            {semanticResults.length > 0 && (
+              <Command.Group>
+                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                  Concept Matches ({semanticResults.length})
+                </div>
+                {semanticResults.map((result) => (
+                  <Command.Item
+                    key={`semantic-${result.entryId}`}
+                    value={`${result.title} ${result.matchedConcepts.map(c => c.name).join(" ")}`}
+
+                    onSelect={() =>
+                      handleSelect(() =>
+                        openTab({
+                          type: "entry",
+                          title: result.title || "Untitled",
+                          entryId: String(result.entryId),
+                        })
+                      )
+                    }
+                    className="flex items-start gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg mt-0.5 bg-violet-500/10">
+                      <Sparkles className="h-4 w-4 text-violet-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="block text-sm font-medium truncate">{result.title || "Untitled"}</span>
+                      {result.creators && (
+                        <span className="text-xs text-muted-foreground">{result.creators}</span>
+                      )}
+                      {result.matchedConcepts.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {result.matchedConcepts.slice(0, 4).map((concept, i) => (
+                            <span
+                              key={i}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-700 dark:text-violet-300"
+                            >
+                              {concept.name}
+                            </span>
+                          ))}
+                          {result.matchedConcepts.length > 4 && (
+                            <span className="text-[10px] text-muted-foreground">
+                              +{result.matchedConcepts.length - 4} more
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {result.evidenceSnippets.length > 0 && (
+                        <p className="text-xs text-muted-foreground line-clamp-2 mt-1">
+                          {result.evidenceSnippets[0].text}
+                        </p>
+                      )}
+                      <span className="text-xs text-muted-foreground/60 mt-0.5">
+                        relevance: {(result.relevanceScore * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            )}
+
+            {/* Commands — hidden when backend search returned results or is loading */}
+            {!(isSearching || searchResults.length > 0 || fullSearchResults.length > 0 || semanticResults.length > 0) && <>
               {/* Context-specific commands based on active viewer */}
               {viewerContext === "pdf" && (
                 <Command.Group>
@@ -4278,6 +4384,97 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                       <span className="text-xs text-muted-foreground">Re-extract text from all documents (background task)</span>
                     </div>
                   </Command.Item>
+                  <Command.Item
+                    value="build knowledge graph index entities claims"
+                    onSelect={async () => {
+                      setCommandPaletteOpen(false);
+                      try {
+                        await graphIndexAll();
+                        toast.info("Knowledge graph build started in background");
+                      } catch (err) {
+                        toast.error(`Failed to start graph build: ${err}`);
+                      }
+                    }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10">
+                      <Sparkles className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Build Knowledge Graph</span>
+                      <span className="text-xs text-muted-foreground">Extract entities and claims from all parsed documents</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="find related papers auto relate connections"
+                    onSelect={async () => {
+                      setCommandPaletteOpen(false);
+                      try {
+                        await graphAutoRelate();
+                        toast.info("Finding related papers in background");
+                      } catch (err) {
+                        toast.error(`Failed to start auto-relate: ${err}`);
+                      }
+                    }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10">
+                      <Sparkles className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Find Related Papers</span>
+                      <span className="text-xs text-muted-foreground">Discover connections between papers via shared concepts</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="view claim relations contradicts supports refines cross paper"
+                    onSelect={() => {
+                      setCommandPaletteOpen(false);
+                      const selectedIds = useLibraryStore.getState().selectedEntryIds;
+                      if (selectedIds.length === 1) {
+                        const entry = useLibraryStore.getState().entries.find(e => e.id === selectedIds[0]);
+                        if (entry) {
+                          useUIStore.getState().showClaimRelations(entry.id, entry.title);
+                        }
+                      } else {
+                        toast.info("Select a single paper to view claim relations");
+                      }
+                    }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10">
+                      <Scale className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">View Claim Relations</span>
+                      <span className="text-xs text-muted-foreground">See supporting, contradicting, and refining claims across papers</span>
+                    </div>
+                  </Command.Item>
+                  <Command.Item
+                    value="rebuild knowledge graph reset reindex embeddings"
+                    onSelect={async () => {
+                      setCommandPaletteOpen(false);
+                      const confirmed = window.confirm(
+                        "This will delete all extracted entities, claims, and embeddings, then rebuild from scratch.\n\nContinue?"
+                      );
+                      if (!confirmed) return;
+                      try {
+                        await graphRebuild();
+                        toast.info("Knowledge graph cleared — rebuilding in background");
+                      } catch (err) {
+                        toast.error(`Failed to rebuild graph: ${err}`);
+                      }
+                    }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
+                  >
+                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-destructive/10">
+                      <RotateCcw className="h-4 w-4 text-destructive" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-sm font-medium">Rebuild Knowledge Graph</span>
+                      <span className="text-xs text-muted-foreground">Clear all graph data and re-extract from scratch</span>
+                    </div>
+                  </Command.Item>
                 </Command.Group>
 
                 {/* Saved Searches */}
@@ -4472,7 +4669,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     <ShortcutBadge keys={["⌘", ","]} />
                   </Command.Item>
                 </Command.Group>
-            </>
+            </>}
           </Command.List>
 
           {/* Footer with keyboard hints */}

@@ -41,6 +41,10 @@ pub enum JobType {
     BulkImportFolder,
     OcrExtract,
     LlmParse,
+    GraphIndex,
+    GraphIndexAll,
+    GraphRelate,
+    GraphReembed,
 }
 
 impl JobType {
@@ -51,6 +55,10 @@ impl JobType {
             JobType::BulkImportFolder => "bulk_import_folder",
             JobType::OcrExtract => "ocr_extract",
             JobType::LlmParse => "llm_parse",
+            JobType::GraphIndex => "graph_index",
+            JobType::GraphIndexAll => "graph_index_all",
+            JobType::GraphRelate => "graph_relate",
+            JobType::GraphReembed => "graph_reembed",
         }
     }
 
@@ -61,6 +69,10 @@ impl JobType {
             JobType::BulkImportFolder => "Import Folder",
             JobType::OcrExtract => "OCR Extraction",
             JobType::LlmParse => "Parse Document Structure",
+            JobType::GraphIndex => "Build Knowledge Graph (Entry)",
+            JobType::GraphIndexAll => "Build Knowledge Graph (All)",
+            JobType::GraphRelate => "Find Related Papers",
+            JobType::GraphReembed => "Re-embed Knowledge Graph",
         }
     }
 
@@ -71,6 +83,10 @@ impl JobType {
             "bulk_import_folder" => Some(JobType::BulkImportFolder),
             "ocr_extract" => Some(JobType::OcrExtract),
             "llm_parse" => Some(JobType::LlmParse),
+            "graph_index" => Some(JobType::GraphIndex),
+            "graph_index_all" => Some(JobType::GraphIndexAll),
+            "graph_relate" => Some(JobType::GraphRelate),
+            "graph_reembed" => Some(JobType::GraphReembed),
             _ => None,
         }
     }
@@ -84,6 +100,10 @@ impl JobType {
             JobType::BulkImportFolder => true,  // same dedup
             JobType::OcrExtract => true,
             JobType::LlmParse => true,          // checkpointed, can resume
+            JobType::GraphIndex => true,        // clears and rebuilds
+            JobType::GraphIndexAll => true,
+            JobType::GraphRelate => true,       // idempotent (OR IGNORE)
+            JobType::GraphReembed => true,      // drops and recreates vectors
         }
     }
 
@@ -97,6 +117,10 @@ impl JobType {
             JobType::BulkImportFolder => false,
             JobType::OcrExtract => false,       // kreuzberg is async internally
             JobType::LlmParse => false,         // network I/O (API calls)
+            JobType::GraphIndex => false,       // LLM API calls + I/O
+            JobType::GraphIndexAll => false,
+            JobType::GraphRelate => false,
+            JobType::GraphReembed => false,     // embedding I/O
         }
     }
 }
@@ -154,4 +178,16 @@ pub struct OcrExtractPayload {
 pub struct LlmParsePayload {
     pub attachment_id: i64,
     pub entry_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphIndexPayload {
+    pub entry_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRelatePayload {
+    pub entry_ids: Option<Vec<i64>>,
 }

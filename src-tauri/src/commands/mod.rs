@@ -4,6 +4,7 @@ pub mod duplicates;
 pub mod entries;
 pub mod entry_links;
 pub mod export;
+pub mod graph;
 pub mod import;
 pub mod inline_tables;
 pub mod llm;

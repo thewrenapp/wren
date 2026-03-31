@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::db;
+use crate::graph::GraphService;
 use crate::jobs::queue::JobQueue;
 use crate::search::SearchIndex;
 
@@ -13,6 +14,7 @@ pub struct AppState {
     pub library_path: Arc<RwLock<PathBuf>>,
     pub search_index: Arc<SearchIndex>,
     pub job_queue: Arc<JobQueue>,
+    pub graph_service: Arc<GraphService>,
 }
 
 impl AppState {
@@ -42,6 +44,103 @@ impl AppState {
         tracing::info!("Search index initialized at {:?}", index_path);
 
         let search_index = Arc::new(search_index);
+
+        // Read embedding settings
+        let embedding_source: String = sqlx::query_scalar(
+            "SELECT value FROM settings WHERE key = 'embedding_source' LIMIT 1",
+        )
+        .fetch_optional(&db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "local".to_string());
+
+        let embedding_model: String = sqlx::query_scalar(
+            "SELECT value FROM settings WHERE key = 'embedding_model' LIMIT 1",
+        )
+        .fetch_optional(&db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "all-MiniLM-L6-v2".to_string());
+
+        // Build the embedding service (local or cloud)
+        let embedding_service = if embedding_source == "cloud" {
+            let cloud_model: String = sqlx::query_scalar(
+                "SELECT value FROM settings WHERE key = 'cloud_embedding_model' LIMIT 1",
+            )
+            .fetch_optional(&db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "text-embedding-3-small".to_string());
+
+            let llm_provider: String = sqlx::query_scalar(
+                "SELECT value FROM settings WHERE key = 'llm_provider' LIMIT 1",
+            )
+            .fetch_optional(&db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "openai".to_string());
+
+            let api_key: String = sqlx::query_scalar(
+                &format!("SELECT value FROM settings WHERE key = 'llm_api_key_{}' LIMIT 1", llm_provider),
+            )
+            .fetch_optional(&db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+
+            let base_url: String = sqlx::query_scalar(
+                "SELECT value FROM settings WHERE key = 'llm_base_url' LIMIT 1",
+            )
+            .fetch_optional(&db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
+            let dims = crate::graph::embeddings::resolve_cloud_model_dims(&llm_provider, &cloud_model);
+            tracing::info!(
+                "Cloud embedding configured: provider={}, model={}, dims={}",
+                llm_provider, cloud_model, dims
+            );
+
+            Some((llm_provider, cloud_model, api_key, base_url, dims))
+        } else {
+            None
+        };
+
+        // Initialize graph service (knowledge graph + vector store)
+        let wren_dir = library_path.join(".wren");
+        let graph_service = match GraphService::new(db.clone(), &wren_dir, &embedding_model, embedding_service.as_ref()).await {
+            Ok(gs) => {
+                tracing::info!("Graph service initialized at {:?}", wren_dir.join("lance_db"));
+                Arc::new(gs)
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize graph service: {}. Falling back to local embeddings.", e);
+                // Cloud config may be the cause; retry with local-only (None)
+                match GraphService::new(db.clone(), &wren_dir, &embedding_model, None).await {
+                    Ok(gs) => {
+                        tracing::info!("Graph service fallback (local embeddings) initialized");
+                        Arc::new(gs)
+                    }
+                    Err(e2) => {
+                        tracing::error!("Graph service fallback also failed: {}. Graph features will be unavailable.", e2);
+                        // Last resort: try with default model
+                        Arc::new(
+                            GraphService::new(db.clone(), &wren_dir, "all-MiniLM-L6-v2", None)
+                                .await
+                                .expect("Graph service minimal fallback failed — cannot start app"),
+                        )
+                    }
+                }
+            }
+        };
+
         let library_path = Arc::new(RwLock::new(library_path));
 
         // Initialize job queue
@@ -67,6 +166,7 @@ impl AppState {
             library_path,
             search_index,
             job_queue,
+            graph_service,
         })
     }
 

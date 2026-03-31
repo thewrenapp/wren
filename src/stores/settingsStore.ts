@@ -23,6 +23,8 @@ interface SettingsState {
 
   // Embedding
   embeddingModel: string;
+  embeddingSource: "local" | "cloud";
+  cloudEmbeddingModel: string;
 
   // OCR Settings
   enableOcr: boolean;
@@ -38,6 +40,9 @@ interface SettingsState {
   llmTokenBudget: number;
   llmContextWindow: number; // 0 = auto-detect from provider defaults
 
+  // Knowledge Graph
+  graphAutoIndex: boolean;
+
   // Code Editor
   showCodeLineNumbers: boolean;
 
@@ -51,6 +56,8 @@ interface SettingsState {
   setLibraryPath: (path: string) => void;
   setAutoRenameFiles: (enabled: boolean) => void;
   setEmbeddingModel: (model: string) => void;
+  setEmbeddingSource: (source: "local" | "cloud") => void;
+  setCloudEmbeddingModel: (model: string) => void;
   setEnableOcr: (enabled: boolean) => void;
   setForceOcr: (enabled: boolean) => void;
   setLlmProvider: (provider: string) => void;
@@ -60,6 +67,7 @@ interface SettingsState {
   setLlmAutoParseOnImport: (enabled: boolean) => void;
   setLlmTokenBudget: (budget: number) => void;
   setLlmContextWindow: (size: number) => void;
+  setGraphAutoIndex: (enabled: boolean) => void;
   setShowWelcomeOnStartup: (show: boolean) => void;
   loadFromBackend: () => Promise<void>;
 }
@@ -81,6 +89,8 @@ export const useSettingsStore = create<SettingsState>()(
       libraryPath: "~/Wren",
       autoRenameFiles: true,
       embeddingModel: "all-MiniLM-L6-v2",
+      embeddingSource: "local",
+      cloudEmbeddingModel: "text-embedding-3-small",
       enableOcr: true,
       forceOcr: false,
       llmProvider: "openai",
@@ -91,6 +101,7 @@ export const useSettingsStore = create<SettingsState>()(
       llmAutoParseOnImport: false,
       llmTokenBudget: 200000,
       llmContextWindow: 0,
+      graphAutoIndex: true,
       showCodeLineNumbers: false,
       showWelcomeOnStartup: true,
 
@@ -109,7 +120,39 @@ export const useSettingsStore = create<SettingsState>()(
           toast.error("Failed to update setting");
         }
       },
-      setEmbeddingModel: (model) => set({ embeddingModel: model }),
+      setEmbeddingModel: async (model) => {
+        const prev = get().embeddingModel;
+        set({ embeddingModel: model });
+        try {
+          await updateSetting("embedding_model", model);
+        } catch (err) {
+          console.error("Failed to update embedding_model setting:", err);
+          set({ embeddingModel: prev });
+          toast.error("Failed to update setting");
+        }
+      },
+      setEmbeddingSource: async (source) => {
+        const prev = get().embeddingSource;
+        set({ embeddingSource: source });
+        try {
+          await updateSetting("embedding_source", source);
+        } catch (err) {
+          console.error("Failed to update embedding_source setting:", err);
+          set({ embeddingSource: prev });
+          toast.error("Failed to update setting");
+        }
+      },
+      setCloudEmbeddingModel: async (model) => {
+        const prev = get().cloudEmbeddingModel;
+        set({ cloudEmbeddingModel: model });
+        try {
+          await updateSetting("cloud_embedding_model", model);
+        } catch (err) {
+          console.error("Failed to update cloud_embedding_model setting:", err);
+          set({ cloudEmbeddingModel: prev });
+          toast.error("Failed to update setting");
+        }
+      },
       setEnableOcr: async (enabled) => {
         const prev = get().enableOcr;
         set({ enableOcr: enabled });
@@ -225,6 +268,17 @@ export const useSettingsStore = create<SettingsState>()(
           toast.error("Failed to update setting");
         }
       },
+      setGraphAutoIndex: async (enabled) => {
+        const prev = get().graphAutoIndex;
+        set({ graphAutoIndex: enabled });
+        try {
+          await updateSetting("graph_auto_index", enabled ? "true" : "false");
+        } catch (err) {
+          console.error("Failed to update graph_auto_index setting:", err);
+          set({ graphAutoIndex: prev });
+          toast.error("Failed to update setting");
+        }
+      },
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
       loadFromBackend: async () => {
         try {
@@ -233,6 +287,14 @@ export const useSettingsStore = create<SettingsState>()(
           if (autoRename) {
             set({ autoRenameFiles: autoRename.value === "true" });
           }
+          const embeddingModel = settings.find(s => s.key === "embedding_model");
+          if (embeddingModel) set({ embeddingModel: embeddingModel.value });
+          const embeddingSource = settings.find(s => s.key === "embedding_source");
+          if (embeddingSource && (embeddingSource.value === "local" || embeddingSource.value === "cloud")) {
+            set({ embeddingSource: embeddingSource.value });
+          }
+          const cloudEmbeddingModel = settings.find(s => s.key === "cloud_embedding_model");
+          if (cloudEmbeddingModel) set({ cloudEmbeddingModel: cloudEmbeddingModel.value });
           const enableOcr = settings.find(s => s.key === "enable_ocr");
           if (enableOcr) {
             set({ enableOcr: enableOcr.value === "true" });
@@ -265,6 +327,8 @@ export const useSettingsStore = create<SettingsState>()(
           if (llmTokenBudget) set({ llmTokenBudget: parseInt(llmTokenBudget.value, 10) || 200000 });
           const llmContextWindow = settings.find(s => s.key === "llm_context_window");
           if (llmContextWindow) set({ llmContextWindow: parseInt(llmContextWindow.value, 10) || 0 });
+          const graphAutoIndex = settings.find(s => s.key === "graph_auto_index");
+          if (graphAutoIndex) set({ graphAutoIndex: graphAutoIndex.value !== "false" });
         } catch (err) {
           console.error("Failed to load settings from backend:", err);
         }

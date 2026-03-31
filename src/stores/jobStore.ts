@@ -27,6 +27,9 @@ const JOB_TYPE_NAMES: Record<string, string> = {
   bulk_import_folder: "Import Folder",
   ocr_extract: "OCR Extraction",
   llm_parse: "Parse Document Structure",
+  graph_index: "Index to Knowledge Graph",
+  graph_index_all: "Build Knowledge Graph",
+  graph_relate: "Find Related Papers",
 };
 
 export function jobDisplayName(job: Job): string {
