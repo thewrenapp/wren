@@ -1,5 +1,5 @@
 import React, { useCallback } from "react";
-import { X, Pin, FolderOpen, FileText, Copy, Library, ChevronRight, ArrowRightFromLine, ArrowLeftFromLine, Scale } from "lucide-react";
+import { X, Pin, FolderOpen, FileText, Copy, Library, ChevronRight, ArrowRightFromLine, ArrowLeftFromLine } from "lucide-react";
 import { useTabStore, getTabsForPane, type Tab } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { cn } from "@/lib/utils";
@@ -193,10 +193,6 @@ function TabContextMenu({ tab, tabIndex, totalTabs, pane = "left", children }: {
             <ContextMenuItem onClick={handleFindInFinder}>
               <FolderOpen className="h-4 w-4 mr-2" />
               Find in Finder
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => useUIStore.getState().showClaimRelations(Number(tab.entryId), tab.title)}>
-              <Scale className="h-4 w-4 mr-2" />
-              View Claim Relations
             </ContextMenuItem>
             <ContextMenuSeparator />
           </>

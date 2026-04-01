@@ -128,6 +128,8 @@ export interface EntrySummary {
   thumbnailPath?: string;
   hasExtractedText: boolean;
   hasStructuredContent: boolean;
+  ragIndexed?: boolean;
+  ragIndexedAt?: string | null;
 }
 
 /**

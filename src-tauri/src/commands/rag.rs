@@ -423,6 +423,87 @@ pub async fn rag_build_collection_raptor(
     Ok(job_id)
 }
 
+/// Get RAPTOR summaries for an entry (per-document summaries at all levels).
+#[tauri::command]
+pub async fn rag_get_summaries(
+    state: State<'_, AppState>,
+    entry_id: i64,
+) -> Result<Vec<RagSummary>, String> {
+    let db = &state.db;
+    let embed_config = resolve_embed_config(db).await?;
+    let dimension = resolve_dimension(&embed_config).await?;
+    let lib_path = state.library_path.read().await;
+    let store = open_vector_store(&lib_path, dimension).await?;
+
+    // Get attachment IDs for this entry
+    let att_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM attachments WHERE entry_id = ? AND markdown_path IS NOT NULL",
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut summaries = Vec::new();
+    for att_id in &att_ids {
+        let filter = format!("document_id = '{}' AND level > 0", att_id);
+        if let Ok(nodes) = store.get_nodes_with_embeddings(Some(&filter)).await {
+            for node in nodes {
+                summaries.push(RagSummary {
+                    level: node.level,
+                    content: node.content,
+                    document_id: node.document_id,
+                    source: "document".to_string(),
+                });
+            }
+        }
+    }
+
+    summaries.sort_by_key(|s| s.level);
+    Ok(summaries)
+}
+
+/// Get cross-document RAPTOR summaries for a collection.
+#[tauri::command]
+pub async fn rag_get_collection_summaries(
+    state: State<'_, AppState>,
+    collection_id: i64,
+) -> Result<Vec<RagSummary>, String> {
+    let db = &state.db;
+    let embed_config = resolve_embed_config(db).await?;
+    let dimension = resolve_dimension(&embed_config).await?;
+    let lib_path = state.library_path.read().await;
+    let store = open_vector_store(&lib_path, dimension).await?;
+
+    // Cross-doc summaries may be stored as 'collection_{id}' or '__corpus__' (legacy)
+    let scope_id = format!("collection_{}", collection_id);
+    let filter = format!("document_id = '{}' OR document_id = '__corpus__'", scope_id);
+
+    let nodes = store.get_nodes_with_embeddings(Some(&filter)).await?;
+
+    let mut summaries: Vec<RagSummary> = nodes
+        .into_iter()
+        .map(|n| RagSummary {
+            level: n.level,
+            content: n.content,
+            document_id: n.document_id,
+            source: "collection".to_string(),
+        })
+        .collect();
+
+    summaries.sort_by_key(|s| s.level);
+    Ok(summaries)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RagSummary {
+    pub level: usize,
+    pub content: String,
+    pub document_id: String,
+    pub source: String,
+}
+
 /// Rebuild the entire RAG index (drop and re-create).
 #[tauri::command]
 pub async fn rag_rebuild(state: State<'_, AppState>) -> Result<(), String> {

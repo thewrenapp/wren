@@ -61,10 +61,33 @@ pub fn show_main_window(app_handle: &tauri::AppHandle) {
     #[cfg(target_os = "macos")]
     {
         let _ = app_handle.set_dock_visibility(true);
+        restore_dock_icon();
     }
     if let Some(window) = app_handle.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+    }
+}
+
+/// Explicitly re-set the dock icon after showing.
+/// `set_dock_visibility(true)` restores the dock entry but macOS loses the
+/// programmatic icon image (especially in dev mode where there is no .app bundle).
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn restore_dock_icon() {
+    unsafe {
+        use cocoa::base::id;
+        use objc::*;
+
+        let icon_bytes = include_bytes!("../icons/128x128@2x.png");
+        let ns_data: id = msg_send![class!(NSData),
+            dataWithBytes: icon_bytes.as_ptr()
+            length: icon_bytes.len()
+        ];
+        let ns_image: id = msg_send![class!(NSImage), alloc];
+        let ns_image: id = msg_send![ns_image, initWithData: ns_data];
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app, setApplicationIconImage: ns_image];
     }
 }

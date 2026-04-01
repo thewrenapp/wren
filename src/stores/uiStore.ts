@@ -95,6 +95,13 @@ interface UIState {
     entryTitle: string;
   };
 
+  // RAPTOR summaries dialog
+  raptorDialog: {
+    entryId: number;
+    entryTitle: string;
+    collectionIds: number[];
+  } | null;
+
   // Active filters
   activeFilter: 'all' | 'pdfs' | 'notes' | 'recent' | 'untagged' | 'duplicates' | 'trash';
 
@@ -153,6 +160,10 @@ interface UIState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
 
+  // RAPTOR summaries dialog actions
+  showRaptorDialog: (entryId: number, entryTitle: string, collectionIds: number[]) => void;
+  hideRaptorDialog: () => void;
+
   // Claim Relations dialog actions
   showClaimRelations: (entryId: number, entryTitle: string) => void;
   hideClaimRelations: () => void;
@@ -202,6 +213,7 @@ export const useUIStore = create<UIState>()(
         entryId: null,
         entryTitle: '',
       },
+      raptorDialog: null,
       activeFilter: 'all',
       hideImportedTags: true,
       sidebarCollapsed: false,
@@ -342,6 +354,12 @@ export const useUIStore = create<UIState>()(
             entryTitle,
           },
         }),
+
+      showRaptorDialog: (entryId, entryTitle, collectionIds) =>
+        set({ raptorDialog: { entryId, entryTitle, collectionIds } }),
+
+      hideRaptorDialog: () =>
+        set({ raptorDialog: null }),
 
       hideClaimRelations: () =>
         set({

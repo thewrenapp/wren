@@ -143,6 +143,10 @@ pub struct Entry {
     pub tags: Vec<Tag>,
     pub collections: Vec<i64>,
     pub attachments: Vec<Attachment>,
+    #[serde(rename = "ragIndexed")]
+    pub rag_indexed: bool,
+    #[serde(rename = "ragIndexedAt")]
+    pub rag_indexed_at: Option<String>,
 }
 
 impl Entry {
@@ -210,6 +214,10 @@ pub struct EntrySummary {
     pub has_extracted_text: bool,
     #[serde(rename = "hasStructuredContent")]
     pub has_structured_content: bool,
+    #[serde(rename = "ragIndexed")]
+    pub rag_indexed: bool,
+    #[serde(rename = "ragIndexedAt")]
+    pub rag_indexed_at: Option<String>,
 }
 
 // =====================================================

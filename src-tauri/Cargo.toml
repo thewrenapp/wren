@@ -7,6 +7,9 @@ license = "MIT"
 repository = ""
 edition = "2021"
 
+[lints.rust]
+unexpected_cfgs = "allow"
+
 [lib]
 name = "wren_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
@@ -98,3 +101,7 @@ directories = "6"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-shell = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"

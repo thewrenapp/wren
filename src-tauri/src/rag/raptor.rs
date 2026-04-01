@@ -1561,7 +1561,7 @@ pub async fn build_cross_doc_tier(
                         content: summary,
                         embedding: Vec::new(),
                         level,
-                        document_id: "__corpus__".to_string(),
+                        document_id: conversation_id.to_string(),
                         source_chunk_ids: source_ids,
                     });
                     succeeded += 1;
@@ -1654,7 +1654,7 @@ pub async fn build_cross_doc_tier(
         let summary_nodes: Vec<RaptorSummaryNode> = level_nodes.iter()
             .map(|n| RaptorSummaryNode {
                 id: n.id.clone(),
-                document_id: "__corpus__".to_string(),
+                document_id: conversation_id.to_string(),
                 level: n.level,
                 content: n.content.clone(),
             })
@@ -1688,10 +1688,11 @@ pub async fn build_cross_doc_tier(
                     "INSERT OR REPLACE INTO document_summaries \
                      (id, document_id, conversation_id, level, source_chunk_ids, source_document_ids, \
                       child_ids, content, token_estimate, membership_hash) \
-                     VALUES (?, '__corpus__', ?, ?, ?, ?, ?, ?, ?, ?)"
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 .bind(summary_id)
-                .bind(conversation_id)
+                .bind(conversation_id) // document_id
+                .bind(conversation_id) // conversation_id
                 .bind(level as i64)
                 .bind(&source_json)
                 .bind(&source_docs_json)

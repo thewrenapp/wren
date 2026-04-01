@@ -17,8 +17,8 @@ import {
   Trash2,
   Sparkles,
   Network,
-  Loader2,
-  Scale,
+  CheckCircle2,
+  TreePine,
 } from "lucide-react";
 import { AttachmentIcon } from "@/lib/icons";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -79,11 +79,6 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Backlinks state
   const [backlinks, setBacklinks] = useState<BacklinkInfo[]>([]);
 
-  // Knowledge graph removed — replaced by RAG system
-  const knowledge: any = null;
-  const knowledgeLoading = false;
-  const indexingGraph = false;
-
   // Load schema on mount
   useEffect(() => {
     if (!isLoaded) {
@@ -107,18 +102,6 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
       .then(setBacklinks)
       .catch(() => setBacklinks([]));
   }, [entry.id, entryVersion]);
-
-  // Knowledge graph fetch removed — RAG system handles search differently
-  const loadKnowledge = useCallback(async () => {}, [entry.id]);
-
-  useEffect(() => {
-    loadKnowledge();
-  }, [loadKnowledge]);
-
-  const handleIndexGraph = async () => {
-    // Graph indexing removed — RAG indexing happens automatically
-    toast.info("RAG indexing is automatic after document import");
-  };
 
   // Fetch item type info when entry changes or edited item type changes
   useEffect(() => {
@@ -734,122 +717,32 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
           )}
         </InfoSection>
 
-        {/* Knowledge Graph Section */}
+        {/* Semantic Index Section */}
         <InfoSection
-          title="Knowledge"
+          title="Semantic Index"
           icon={<Network className="h-4 w-4" />}
-          count={knowledge ? (knowledge.entities.length + knowledge.claims.length) : undefined}
         >
-          {knowledgeLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Loading...
-            </div>
-          ) : knowledge?.graphIndexed ? (
-            <div className="space-y-3">
-              {/* Entities */}
-              {knowledge.entities.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Entities</p>
-                  <div className="flex flex-wrap gap-1">
-                    {knowledge.entities.map((entity: any) => (
-                      <span
-                        key={entity.id}
-                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary"
-                        title={entity.description || entity.category}
-                      >
-                        {entity.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {/* Claims */}
-              {knowledge.claims.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Claims</p>
-                  <div className="space-y-1.5">
-                    {knowledge.claims.slice(0, 8).map((claim: any) => (
-                      <div key={claim.id} className="text-xs text-muted-foreground leading-relaxed">
-                        <span className="inline-block px-1 py-0.5 rounded bg-muted text-[10px] font-medium mr-1">
-                          {claim.claimType}
-                        </span>
-                        {claim.statement}
-                      </div>
-                    ))}
-                    {knowledge.claims.length > 8 && (
-                      <p className="text-xs text-muted-foreground/60">
-                        +{knowledge.claims.length - 8} more claims
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-              {/* Related Papers */}
-              {knowledge.relatedPapers.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Related Papers</p>
-                  <div className="space-y-1">
-                    {knowledge.relatedPapers.map((paper: any, idx: number) => (
-                      <div
-                        key={idx}
-                        className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer"
-                        onClick={() => {
-                          const { openTab } = useTabStore.getState();
-                          openTab({
-                            type: "entry",
-                            title: paper.title,
-                            entryId: String(paper.entryId),
-                          });
-                        }}
-                      >
-                        <Link2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm truncate block">{paper.title}</span>
-                          {paper.context && (
-                            <span className="text-xs text-muted-foreground/60 truncate block">{paper.context}</span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {knowledge.entities.length === 0 && knowledge.claims.length === 0 && (
-                <p className="text-sm text-muted-foreground">No knowledge extracted yet</p>
-              )}
-              {/* Claim Relations button */}
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full gap-2"
-                onClick={() => useUIStore.getState().showClaimRelations(entry.id, entry.title)}
-              >
-                <Scale className="h-3.5 w-3.5" />
-                View Claim Relations
-              </Button>
-              {knowledge.indexedAt && (
-                <p className="text-[10px] text-muted-foreground/50">
-                  Indexed {formatRelativeDate(knowledge.indexedAt)}
-                </p>
-              )}
-            </div>
+          {entry.ragIndexed ? (
+            <SemanticIndexContent entry={entry} collectionIds={fullEntry?.collections ?? []} />
           ) : (
             <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">Not indexed in knowledge graph</p>
+              <p className="text-sm text-muted-foreground">Not yet indexed</p>
               <Button
                 variant="outline"
                 size="sm"
                 className="w-full gap-2"
-                onClick={handleIndexGraph}
-                disabled={indexingGraph}
+                onClick={async () => {
+                  try {
+                    const { ragIndexEntry } = await import('@/services/tauri/commands');
+                    await ragIndexEntry(entry.id);
+                    toast.info('Indexing started in background');
+                  } catch (err) {
+                    toast.error(`Failed: ${err}`);
+                  }
+                }}
               >
-                {indexingGraph ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Network className="h-3.5 w-3.5" />
-                )}
-                Index this entry
+                <Network className="h-3.5 w-3.5" />
+                Build Semantic Index
               </Button>
             </div>
           )}
@@ -1061,4 +954,49 @@ function formatItemType(type: string): string {
     attachment: "Attachment",
   };
   return typeMap[type] || type.replace(/([A-Z])/g, " $1").trim();
+}
+
+/** Semantic Index panel content — shows status, RAPTOR summaries, and collection cross-doc summaries. */
+function SemanticIndexContent({ entry, collectionIds }: { entry: EntrySummary; collectionIds: number[] }) {
+  const { showRaptorDialog } = useUIStore();
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+        Indexed for semantic search
+      </div>
+      {entry.ragIndexedAt && (
+        <p className="text-[10px] text-muted-foreground/50">
+          Indexed {formatRelativeDate(entry.ragIndexedAt)}
+        </p>
+      )}
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full gap-2"
+        onClick={() => showRaptorDialog(entry.id, entry.title, collectionIds)}
+      >
+        <TreePine className="h-3.5 w-3.5" />
+        View RAPTOR Summaries
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full gap-2"
+        onClick={async () => {
+          try {
+            const { ragIndexEntry } = await import('@/services/tauri/commands');
+            await ragIndexEntry(entry.id);
+            toast.info('Re-indexing started');
+          } catch (err) {
+            toast.error(`Failed: ${err}`);
+          }
+        }}
+      >
+        <Network className="h-3.5 w-3.5" />
+        Re-index
+      </Button>
+    </div>
+  );
 }

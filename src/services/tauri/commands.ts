@@ -84,6 +84,8 @@ export interface Entry {
   collections: number[];
   attachments: Attachment[];
   attachmentCount: number;
+  ragIndexed?: boolean;
+  ragIndexedAt?: string | null;
 }
 
 export interface EntrySummary {
@@ -104,6 +106,8 @@ export interface EntrySummary {
   thumbnailPath?: string;
   hasExtractedText: boolean;
   hasStructuredContent: boolean;
+  ragIndexed?: boolean;
+  ragIndexedAt?: string | null;
 }
 
 export interface Attachment {
@@ -1226,6 +1230,21 @@ export async function ragIndexEntry(entryId: number): Promise<string> {
 
 export async function ragIndexAll(): Promise<string> {
   return invoke('rag_index_all');
+}
+
+export interface RagSummary {
+  level: number;
+  content: string;
+  documentId: string;
+  source: string; // "document" | "collection"
+}
+
+export async function ragGetSummaries(entryId: number): Promise<RagSummary[]> {
+  return invoke('rag_get_summaries', { entryId });
+}
+
+export async function ragGetCollectionSummaries(collectionId: number): Promise<RagSummary[]> {
+  return invoke('rag_get_collection_summaries', { collectionId });
 }
 
 export async function ragBuildCollectionRaptor(collectionId: number): Promise<string> {

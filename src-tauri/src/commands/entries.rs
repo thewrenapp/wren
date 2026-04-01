@@ -70,6 +70,9 @@ struct EntryRow {
     access_date: Option<String>,
     date_added: String,
     date_modified: String,
+    #[sqlx(default)]
+    rag_indexed: bool,
+    rag_indexed_at: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -89,6 +92,9 @@ struct EntrySummaryRow {
     thumbnail_path: Option<String>,
     has_extracted_text: bool,
     has_structured_content: bool,
+    #[sqlx(default)]
+    rag_indexed: bool,
+    rag_indexed_at: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -1230,7 +1236,9 @@ pub async fn get_entries(
             EXISTS(SELECT 1 FROM attachments a
                    WHERE a.entry_id = e.id AND a.markdown_path IS NOT NULL) as has_extracted_text,
             EXISTS(SELECT 1 FROM parsed_content pc
-                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content
+                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content,
+            COALESCE(e.rag_indexed, 0) as rag_indexed,
+            e.rag_indexed_at
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.is_deleted = 0
@@ -1299,6 +1307,8 @@ pub async fn get_entries(
             thumbnail_path: entry.thumbnail_path,
             has_extracted_text: entry.has_extracted_text,
             has_structured_content: entry.has_structured_content,
+            rag_indexed: entry.rag_indexed,
+            rag_indexed_at: entry.rag_indexed_at.clone(),
         });
     }
 
@@ -1411,7 +1421,9 @@ pub async fn get_entries_paged(
             EXISTS(SELECT 1 FROM attachments a
                    WHERE a.entry_id = e.id AND a.markdown_path IS NOT NULL) as has_extracted_text,
             EXISTS(SELECT 1 FROM parsed_content pc
-                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content
+                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content,
+            COALESCE(e.rag_indexed, 0) as rag_indexed,
+            e.rag_indexed_at
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.is_deleted = 0
@@ -1511,6 +1523,8 @@ pub async fn get_entries_paged(
             thumbnail_path: entry.thumbnail_path,
             has_extracted_text: entry.has_extracted_text,
             has_structured_content: entry.has_structured_content,
+            rag_indexed: entry.rag_indexed,
+            rag_indexed_at: entry.rag_indexed_at.clone(),
         });
     }
 
@@ -1592,7 +1606,8 @@ pub async fn get_entry(
         r#"
         SELECT
             e.id, e.key, it.name as item_type, it.display_name as item_type_display,
-            e.title, e.date, e.url, e.access_date, e.date_added, e.date_modified
+            e.title, e.date, e.url, e.access_date, e.date_added, e.date_modified,
+            COALESCE(e.rag_indexed, 0) as rag_indexed, e.rag_indexed_at
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.id = ?
@@ -1601,7 +1616,8 @@ pub async fn get_entry(
         r#"
         SELECT
             e.id, e.key, it.name as item_type, it.display_name as item_type_display,
-            e.title, e.date, e.url, e.access_date, e.date_added, e.date_modified
+            e.title, e.date, e.url, e.access_date, e.date_added, e.date_modified,
+            COALESCE(e.rag_indexed, 0) as rag_indexed, e.rag_indexed_at
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.id = ? AND e.is_deleted = 0
@@ -1651,6 +1667,8 @@ pub async fn get_entry(
         tags,
         collections,
         attachments,
+        rag_indexed: entry.rag_indexed,
+        rag_indexed_at: entry.rag_indexed_at,
     })
 }
 
@@ -2126,6 +2144,25 @@ pub async fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), Str
         tracing::error!("Failed to commit search index: {}", e);
     }
 
+    // Clean up RAG vectors
+    // Clean up RAG vectors and rebuild cross-doc RAPTOR for affected collections
+    let db = state.db.clone();
+    let lp = state.library_path.clone();
+    let affected_collections: Vec<i64> = sqlx::query_scalar(
+        "SELECT collection_id FROM collection_entries WHERE entry_id = ?",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    tokio::spawn(async move {
+        crate::commands::collections::cleanup_entry_vectors(&db, &lp, id).await;
+        for cid in affected_collections {
+            crate::commands::rag::spawn_collection_raptor_rebuild(db.clone(), lp.clone(), cid);
+        }
+    });
+
     Ok(())
 }
 
@@ -2154,7 +2191,9 @@ pub async fn get_trashed_entries(state: State<'_, AppState>) -> Result<Vec<Entry
             EXISTS(SELECT 1 FROM attachments a
                    WHERE a.entry_id = e.id AND a.markdown_path IS NOT NULL) as has_extracted_text,
             EXISTS(SELECT 1 FROM parsed_content pc
-                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content
+                   WHERE pc.entry_id = e.id AND pc.status IN ('success', 'partial')) as has_structured_content,
+            COALESCE(e.rag_indexed, 0) as rag_indexed,
+            e.rag_indexed_at
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.is_deleted = 1
@@ -2204,6 +2243,8 @@ pub async fn get_trashed_entries(state: State<'_, AppState>) -> Result<Vec<Entry
             thumbnail_path: entry.thumbnail_path,
             has_extracted_text: entry.has_extracted_text,
             has_structured_content: entry.has_structured_content,
+            rag_indexed: entry.rag_indexed,
+            rag_indexed_at: entry.rag_indexed_at.clone(),
         });
     }
 
@@ -2344,6 +2385,9 @@ pub async fn permanent_delete_entry(state: State<'_, AppState>, id: i64) -> Resu
             .fetch_all(&state.db)
             .await
             .map_err(|e| e.to_string())?;
+
+    // Clean up RAG vectors before CASCADE deletes attachments
+    crate::commands::collections::cleanup_entry_vectors(&state.db, &state.library_path, id).await;
 
     // Delete entry from DB (CASCADE will delete fields, creators, attachments, etc.)
     sqlx::query("DELETE FROM entries WHERE id = ?")
@@ -4144,7 +4188,8 @@ pub async fn duplicate_entry(state: State<'_, AppState>, id: i64) -> Result<Entr
         r#"
         SELECT
             e.id, e.key, it.name as item_type, it.display_name as item_type_display,
-            e.title, e.date, e.url, e.access_date, e.date_added, e.date_modified
+            e.title, e.date, e.url, e.access_date, e.date_added, e.date_modified,
+            COALESCE(e.rag_indexed, 0) as rag_indexed, e.rag_indexed_at
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.id = ?
