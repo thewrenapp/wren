@@ -17,7 +17,7 @@ cc = "1"
 
 [dependencies]
 # Tauri
-tauri = { version = "2.10", features = ["macos-private-api", "protocol-asset"] }
+tauri = { version = "2.10", features = ["macos-private-api", "protocol-asset", "tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -58,25 +58,6 @@ arrow = "57"
 arrow-array = "57"
 arrow-schema = "57"
 
-# AST-based code chunking for RAG
-tree-sitter = "0.24"
-tree-sitter-rust = "0.23"
-tree-sitter-python = "0.23"
-tree-sitter-javascript = "0.23"
-tree-sitter-typescript = "0.23"
-tree-sitter-go = "0.23"
-tree-sitter-java = "0.23"
-tree-sitter-c = "0.23"
-tree-sitter-cpp = "0.23"
-tree-sitter-ruby = "0.23"
-tree-sitter-json = "0.23"
-tree-sitter-css = "0.23"
-tree-sitter-html = "0.23"
-tree-sitter-bash = "0.23"
-tree-sitter-lua = "0.5"
-tree-sitter-swift = "0.7"
-tree-sitter-md = "0.5"
-tree-sitter-toml-ng = "0.7"
 
 # Parallel processing (RAPTOR kNN graph)
 rayon = "1.11"

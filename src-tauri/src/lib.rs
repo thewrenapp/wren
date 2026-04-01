@@ -8,6 +8,7 @@ pub mod pdf;
 pub mod rag;
 pub mod search;
 pub mod state;
+pub mod tray;
 
 use state::AppState;
 use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -147,8 +148,26 @@ pub fn run() {
                 }
             });
 
+            // Setup system tray (non-fatal)
+            if let Err(e) = tray::setup_tray(app) {
+                tracing::warn!("Failed to setup system tray: {e}");
+            }
+
             tracing::info!("Wren setup complete");
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Hide main window to tray instead of quitting
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = window.app_handle().set_dock_visibility(false);
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             // Entries

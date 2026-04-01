@@ -148,7 +148,7 @@ impl VectorStore {
     /// Insert chunks with their embeddings into the vector store.
     pub async fn upsert_chunks(
         &self,
-        chunks: &[super::chunker::DocumentChunk],
+        chunks: &[super::indexer::DocumentChunk],
         embeddings: &[Vec<f32>],
         filename: &str,
     ) -> Result<usize, String> {

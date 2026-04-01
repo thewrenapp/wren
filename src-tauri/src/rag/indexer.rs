@@ -6,8 +6,38 @@ use std::path::Path;
 
 use sqlx::SqlitePool;
 
-use super::chunker::{ChunkConfig, DocumentChunk};
 use super::embeddings::{self, EmbeddingConfig};
+
+/// Configuration for prose chunking.
+pub struct ChunkConfig {
+    pub target_chunk_size: usize,
+    pub overlap_size: usize,
+    pub min_chunk_size: usize,
+}
+
+impl Default for ChunkConfig {
+    fn default() -> Self {
+        Self {
+            target_chunk_size: 1500,
+            overlap_size: 200,
+            min_chunk_size: 100,
+        }
+    }
+}
+
+/// A chunk of document text with metadata.
+#[derive(Debug, Clone)]
+pub struct DocumentChunk {
+    pub chunk_id: String,
+    pub document_id: String,
+    pub chunk_index: usize,
+    pub page_number: Option<usize>,
+    pub section_name: Option<String>,
+    pub content: String,
+    pub start_offset: usize,
+    pub end_offset: usize,
+    pub token_estimate: i64,
+}
 use super::store::VectorStore;
 
 /// Config for optional RAPTOR indexing.

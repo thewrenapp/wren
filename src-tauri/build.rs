@@ -8,6 +8,7 @@ fn main() {
     // pdfium API subset. They're only needed because Tauri's cdylib link
     // requires all symbols to resolve.
     println!("cargo:rerun-if-changed=pdfium_stubs.c");
+    println!("cargo:rerun-if-changed=icons/tray-icon@2x.png");
     cc::Build::new()
         .file("pdfium_stubs.c")
         .compile("pdfium_stubs");
