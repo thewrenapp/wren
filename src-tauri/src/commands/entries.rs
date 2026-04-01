@@ -1858,8 +1858,9 @@ pub async fn update_entry(
     get_entry(state, id, None).await
 }
 
-/// Sync attachment filenames with entry metadata (Zotero 8-style behavior)
-async fn sync_entry_attachment_filenames(
+/// Sync attachment filenames with entry metadata (Zotero 8-style behavior).
+/// Called after metadata changes (manual edit, AI extraction, etc.)
+pub async fn sync_entry_attachment_filenames(
     db: &sqlx::SqlitePool,
     library_path: &tokio::sync::RwLock<std::path::PathBuf>,
     entry_id: i64,
@@ -3210,7 +3211,7 @@ pub async fn add_file_attachment(
     }
 
     // Enqueue background text extraction job for extractable file types
-    // (kreuzberg supports PDF, EPUB, HTML, DOCX, images, etc.)
+    // (ferrules for PDF, html2text/undoc/epub for other formats)
     let extractable = matches!(
         attachment_type,
         "pdf" | "snapshot" | "generic" | "image" | "epub"
@@ -3290,6 +3291,11 @@ pub async fn add_entry_to_collection(
     .await
     .map_err(|e| e.to_string())?;
 
+    // Rebuild cross-doc RAPTOR for this collection in background
+    crate::commands::rag::spawn_collection_raptor_rebuild(
+        state.db.clone(), state.library_path.clone(), collection_id,
+    );
+
     Ok(())
 }
 
@@ -3306,6 +3312,11 @@ pub async fn remove_entry_from_collection(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Rebuild cross-doc RAPTOR for this collection in background
+    crate::commands::rag::spawn_collection_raptor_rebuild(
+        state.db.clone(), state.library_path.clone(), collection_id,
+    );
 
     Ok(())
 }

@@ -1,8 +1,9 @@
 pub mod anthropic;
 pub mod context_windows;
 pub mod gemini;
-pub mod lmstudio;
+pub mod metadata_extractor;
 pub mod ollama;
+pub mod omlx;
 pub mod openai;
 pub mod pipeline;
 pub mod prompts;
@@ -12,8 +13,8 @@ use provider::LlmProvider;
 
 /// Create the appropriate LLM provider based on provider name and settings.
 ///
-/// For cloud providers (openai, anthropic, gemini), an API key is required.
-/// For local providers (ollama, lmstudio), only a base URL is needed.
+/// For cloud providers (openai, anthropic, gemini, omlx), an API key is required.
+/// For local providers (ollama), only a base URL is needed.
 pub fn create_provider(
     provider_name: &str,
     api_key: String,
@@ -23,12 +24,12 @@ pub fn create_provider(
         "anthropic" => Box::new(anthropic::AnthropicProvider::new(api_key, base_url)),
         "gemini" => Box::new(gemini::GeminiProvider::new(api_key, base_url)),
         "ollama" | "ollama_cloud" => Box::new(ollama::OllamaProvider::new(api_key, base_url)),
-        "lmstudio" => Box::new(lmstudio::LmStudioProvider::new(base_url)),
+        "omlx" | "lmstudio" => Box::new(omlx::OmlxProvider::new(api_key, base_url)),
         _ => Box::new(openai::OpenAiProvider::new(api_key, base_url)),
     }
 }
 
 /// Returns true if the provider requires an API key.
 pub fn provider_requires_api_key(provider_name: &str) -> bool {
-    matches!(provider_name, "openai" | "anthropic" | "gemini" | "ollama_cloud")
+    matches!(provider_name, "openai" | "anthropic" | "gemini" | "ollama_cloud" | "omlx")
 }

@@ -85,6 +85,7 @@ impl LlmProvider for AnthropicProvider {
             .map(|m| ModelInfo {
                 name: m.display_name,
                 id: m.id,
+                model_type: None,
             })
             .collect();
 

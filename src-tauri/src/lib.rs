@@ -5,6 +5,7 @@ pub mod graph;
 pub mod jobs;
 pub mod llm;
 pub mod pdf;
+pub mod rag;
 pub mod search;
 pub mod state;
 
@@ -292,16 +293,15 @@ pub fn run() {
             commands::llm::delete_parsed_content,
             commands::llm::list_llm_models,
             commands::llm::validate_llm_config,
-            // Knowledge Graph
-            commands::graph::graph_concept_search,
-            commands::graph::graph_get_paper_knowledge,
-            commands::graph::graph_status,
-            commands::graph::graph_index_entry,
-            commands::graph::graph_index_all,
-            commands::graph::graph_auto_relate,
-            commands::graph::graph_rebuild,
-            commands::graph::graph_reembed,
-            commands::graph::graph_get_claim_relations,
+            // AI Metadata
+            commands::metadata_ai::extract_metadata_with_ai,
+            // RAG
+            commands::rag::rag_search,
+            commands::rag::rag_status,
+            commands::rag::rag_index_entry,
+            commands::rag::rag_index_all,
+            commands::rag::rag_build_collection_raptor,
+            commands::rag::rag_rebuild,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

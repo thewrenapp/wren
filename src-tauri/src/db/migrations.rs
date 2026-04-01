@@ -500,6 +500,37 @@ async fn run_incremental_migrations(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await;
 
+    // RAG indexing tracking on parsed_content (replaces graph_indexed)
+    let _ = sqlx::query("ALTER TABLE parsed_content ADD COLUMN rag_indexed INTEGER DEFAULT 0")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE parsed_content ADD COLUMN rag_indexed_at TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_parsed_content_rag ON parsed_content(rag_indexed, status)")
+        .execute(pool)
+        .await;
+
+    // Migrate lmstudio → omlx in settings
+    let _ = sqlx::query("UPDATE settings SET value = 'omlx' WHERE key = 'llm_provider' AND value = 'lmstudio'")
+        .execute(pool)
+        .await;
+
+    // RAG indexed flag on entries table (not parsed_content which may not exist)
+    let _ = sqlx::query("ALTER TABLE entries ADD COLUMN rag_indexed INTEGER DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE entries ADD COLUMN rag_indexed_at TEXT")
+        .execute(pool).await;
+
+    // Seed RAG settings
+    let _ = sqlx::query(
+        r#"INSERT OR IGNORE INTO settings (key, value, value_type) VALUES
+            ('rag_auto_index', 'true', 'boolean')
+        "#
+    )
+    .execute(pool)
+    .await;
+
     Ok(())
 }
 

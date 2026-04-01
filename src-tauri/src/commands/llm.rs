@@ -385,6 +385,13 @@ pub async fn list_llm_models(
         .await
         .unwrap_or_default();
 
+    tracing::info!(
+        "[list_models] provider={}, api_key_len={}, base_url={}",
+        provider_name,
+        api_key.len(),
+        base_url,
+    );
+
     if crate::llm::provider_requires_api_key(&provider_name) && api_key.is_empty() {
         return Err("API key not configured".to_string());
     }
@@ -411,7 +418,15 @@ pub async fn validate_llm_config(
         .await
         .unwrap_or_default();
 
+    tracing::info!(
+        "[validate] provider={}, api_key_len={}, base_url={}",
+        provider_name,
+        api_key.len(),
+        base_url,
+    );
+
     if crate::llm::provider_requires_api_key(&provider_name) && api_key.is_empty() {
+        tracing::warn!("[validate] API key empty for provider {}", provider_name);
         return Ok(false);
     }
 

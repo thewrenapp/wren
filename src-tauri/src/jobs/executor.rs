@@ -10,12 +10,51 @@ use super::types::*;
 use crate::search::extractor::{is_worth_saving, markdown_path_for, save_markdown, ExtractionConfig};
 use crate::search::SearchIndex;
 
+/// Eagerly initialize the Ferrules PDF parser (lazy on first call, cached after).
+async fn ensure_pdf_parser(
+    cell: &tokio::sync::OnceCell<ferrules_core::FerrulesParser>,
+) -> Option<&ferrules_core::FerrulesParser> {
+    match cell
+        .get_or_try_init(|| async {
+            tracing::info!("Lazily initializing Ferrules PDF parser (ONNX + CoreML)...");
+            let parser = tokio::task::spawn_blocking(|| {
+                let ort_config = ferrules_core::layout::model::ORTConfig::default();
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    ferrules_core::FerrulesParser::new(ort_config)
+                }))
+                .map_err(|panic| {
+                    let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic during ONNX model loading".to_string()
+                    };
+                    anyhow::anyhow!("PDF parser init panicked: {}", msg)
+                })
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("PDF parser init task failed: {}", e))??;
+            tracing::info!("Ferrules PDF parser initialized successfully");
+            Ok::<_, anyhow::Error>(parser)
+        })
+        .await
+    {
+        Ok(parser) => Some(parser),
+        Err(e) => {
+            tracing::error!("Failed to initialize PDF parser: {}", e);
+            None
+        }
+    }
+}
+
 /// Dispatch a job to the appropriate handler
 pub async fn run_job(
     db: &SqlitePool,
     app_handle: &AppHandle,
     search_index: &Arc<SearchIndex>,
     library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+    pdf_parser: &Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
     job_id: &str,
     job_type_str: &str,
     payload_json: &str,
@@ -25,7 +64,7 @@ pub async fn run_job(
         "reindex_library" => {
             let payload: ReindexPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_reindex(db, app_handle, search_index, library_path, job_id, &payload, cancel_flag)
+            execute_reindex(db, app_handle, search_index, library_path, pdf_parser, job_id, &payload, cancel_flag)
                 .await
         }
         "bulk_import_pdfs" => {
@@ -43,7 +82,7 @@ pub async fn run_job(
         "ocr_extract" => {
             let payload: OcrExtractPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_ocr_extract(db, app_handle, search_index, library_path, job_id, &payload, cancel_flag)
+            execute_ocr_extract(db, app_handle, search_index, library_path, pdf_parser, job_id, &payload, cancel_flag)
                 .await
         }
         "llm_parse" => {
@@ -52,21 +91,24 @@ pub async fn run_job(
             execute_llm_parse(db, app_handle, library_path, job_id, &payload, cancel_flag)
                 .await
         }
-        "graph_index" => {
-            let payload: GraphIndexPayload =
+        "rag_collection_raptor" => {
+            let payload: RagCollectionRaptorPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_graph_index(db, app_handle, job_id, &payload, cancel_flag).await
+            execute_collection_raptor(db, app_handle, library_path, job_id, &payload, cancel_flag).await
         }
-        "graph_index_all" => {
-            execute_graph_index_all(db, app_handle, job_id, cancel_flag).await
-        }
-        "graph_relate" => {
-            let payload: GraphRelatePayload =
+        "rag_index" => {
+            let payload: RagIndexPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_graph_relate(db, app_handle, job_id, &payload, cancel_flag).await
+            execute_rag_index(db, app_handle, library_path, job_id, &payload, cancel_flag).await
         }
-        "graph_reembed" => {
-            execute_graph_reembed(db, app_handle, job_id, cancel_flag).await
+        "metadata_extract" => {
+            let payload: MetadataExtractPayload =
+                serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
+            execute_metadata_extract(db, app_handle, library_path, job_id, &payload).await
+        }
+        // Graph RAG jobs removed
+        "graph_index" | "graph_index_all" | "graph_relate" | "graph_reembed" => {
+            Err("Graph RAG has been removed.".to_string())
         }
         _ => Err(format!("Unknown job type: {}", job_type_str)),
     }
@@ -142,14 +184,12 @@ async fn execute_reindex(
     app_handle: &AppHandle,
     search_index: &Arc<SearchIndex>,
     library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+    pdf_parser: &Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
     job_id: &str,
-    payload: &ReindexPayload,
+    _payload: &ReindexPayload,
     cancel_flag: CancelFlag,
 ) -> Result<Option<String>, String> {
-    let config = ExtractionConfig {
-        enable_ocr: payload.enable_ocr,
-        force_ocr: payload.force_ocr,
-    };
+    let config = ExtractionConfig;
 
     // Get all entries
     let entries: Vec<EntrySearchRow> = sqlx::query_as(
@@ -271,7 +311,7 @@ async fn execute_reindex(
                     };
 
                     match search_index
-                        .index_attachment_content(&attachment_data, &config)
+                        .index_attachment_content(&attachment_data, &config, ensure_pdf_parser(&pdf_parser).await)
                         .await
                     {
                         Ok(result) => {
@@ -379,6 +419,18 @@ async fn execute_reindex(
     // Final commit
     search_index.commit().await.map_err(|e| e.to_string())?;
 
+    // Also rebuild semantic (RAG vector) index
+    let rag_auto = crate::commands::settings::is_setting_enabled(db, "rag_auto_index").await;
+    if rag_auto {
+        update_progress(app_handle, db, job_id, total, total, Some("Building semantic index...".to_string())).await;
+        for entry in &entries {
+            if cancel_flag.load(Ordering::Relaxed) { break; }
+            if let Err(e) = auto_rag_index(db, entry.id, library_path).await {
+                tracing::warn!("RAG index failed for entry {} during reindex: {}", entry.id, e);
+            }
+        }
+    }
+
     Ok(Some(
         serde_json::json!({"totalIndexed": total}).to_string(),
     ))
@@ -419,6 +471,7 @@ async fn execute_ocr_extract(
     app_handle: &AppHandle,
     search_index: &Arc<SearchIndex>,
     library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+    pdf_parser: &Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
     job_id: &str,
     payload: &OcrExtractPayload,
     cancel_flag: CancelFlag,
@@ -476,32 +529,8 @@ async fn execute_ocr_extract(
     .await;
 
     // Read OCR settings from DB
-    let enable_ocr = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT value FROM settings WHERE key = 'enable_ocr'",
-    )
-    .fetch_optional(db)
-    .await
-    .ok()
-    .flatten()
-    .flatten()
-    .map(|v| v == "true")
-    .unwrap_or(true);
-
-    let force_ocr = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT value FROM settings WHERE key = 'force_ocr'",
-    )
-    .fetch_optional(db)
-    .await
-    .ok()
-    .flatten()
-    .flatten()
-    .map(|v| v == "true")
-    .unwrap_or(false);
-
-    let config = ExtractionConfig {
-        enable_ocr,
-        force_ocr,
-    };
+    // OCR is handled automatically by ferrules — no config needed
+    let config = ExtractionConfig;
 
     let attachment_data = crate::search::indexer::AttachmentData {
         entry_id: info.entry_id,
@@ -514,7 +543,7 @@ async fn execute_ocr_extract(
 
     // Extract text, index, and save markdown
     match search_index
-        .index_attachment_content(&attachment_data, &config)
+        .index_attachment_content(&attachment_data, &config, ensure_pdf_parser(&pdf_parser).await)
         .await
     {
         Ok(result) => {
@@ -553,6 +582,50 @@ async fn execute_ocr_extract(
             }
 
             search_index.commit().await.map_err(|e| e.to_string())?;
+
+            // Auto-extract metadata with AI if enabled and entry has no real title
+            // (i.e. title looks like a filename — no spaces, or matches the attachment filename)
+            if worth_saving {
+                let auto_metadata = crate::commands::settings::is_setting_enabled(db, "ai_auto_metadata").await;
+                if auto_metadata {
+                    let current_title: Option<String> = sqlx::query_scalar(
+                        "SELECT title FROM entries WHERE id = ?",
+                    )
+                    .bind(info.entry_id)
+                    .fetch_optional(db)
+                    .await
+                    .ok()
+                    .flatten();
+
+                    // Only extract if title looks like a filename (no spaces, or very short)
+                    let needs_metadata = current_title
+                        .as_ref()
+                        .map(|t| {
+                            let t = t.trim();
+                            t.is_empty()
+                                || !t.contains(' ')
+                                || t.ends_with(".pdf")
+                                || t.starts_with("Untitled")
+                        })
+                        .unwrap_or(true);
+
+                    if needs_metadata {
+                        if let Err(e) = auto_extract_metadata(db, info.entry_id, library_path).await {
+                            tracing::warn!("Auto AI metadata failed for entry {}: {}", info.entry_id, e);
+                        }
+                    }
+                }
+            }
+
+            // Auto-index into RAG if enabled
+            if worth_saving {
+                let rag_auto = crate::commands::settings::is_setting_enabled(db, "rag_auto_index").await;
+                if rag_auto {
+                    if let Err(e) = auto_rag_index(db, info.entry_id, library_path).await {
+                        tracing::warn!("Auto RAG index failed for entry {}: {}", info.entry_id, e);
+                    }
+                }
+            }
 
             // Auto-parse hook: if LLM auto-parse is enabled and we have extracted text,
             // enqueue an LlmParse job
@@ -896,28 +969,12 @@ async fn execute_llm_parse(
             let structured_md_path = full_md_path.with_extension("structured.md");
             let _ = tokio::fs::write(&structured_md_path, &parsed.structured_markdown).await;
 
-            // Auto-trigger graph indexing if enabled
-            let graph_auto_index = crate::commands::settings::is_setting_enabled(db, "graph_auto_index").await;
-            if graph_auto_index {
-                let graph_payload = serde_json::json!({
-                    "entryId": payload.entry_id,
-                });
-                let graph_job_id = uuid::Uuid::new_v4().to_string();
-                let _ = sqlx::query(
-                    r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
-                       VALUES (?, 'graph_index', 'pending', ?, ?, 0)"#,
-                )
-                .bind(&graph_job_id)
-                .bind(format!("Index Knowledge Graph #{}", payload.entry_id))
-                .bind(graph_payload.to_string())
-                .execute(db)
-                .await;
-
-                tracing::info!(
-                    "Auto-enqueued graph_index job {} for entry {}",
-                    graph_job_id,
-                    payload.entry_id
-                );
+            // Auto-index into RAG if enabled
+            let rag_auto = crate::commands::settings::is_setting_enabled(db, "rag_auto_index").await;
+            if rag_auto {
+                if let Err(e) = auto_rag_index(db, payload.entry_id, library_path).await {
+                    tracing::warn!("Auto RAG index failed for entry {}: {}", payload.entry_id, e);
+                }
             }
 
             update_progress(app_handle, db, job_id, 1, 1, Some("Done".to_string())).await;
@@ -973,398 +1030,332 @@ async fn execute_llm_parse(
     }
 }
 
-// ── Graph executor functions ─────────────────────────────────────────
-
-/// Helper to get graph service + LLM provider from AppHandle.
-async fn get_graph_deps(
-    app_handle: &AppHandle,
+/// Inline RAG indexing: resolve embedding config → open store → index entry.
+/// Called after OCR extraction and LLM parse when auto-index is enabled.
+async fn auto_rag_index(
     db: &SqlitePool,
-) -> Result<
-    (
-        Arc<crate::graph::GraphService>,
-        Box<dyn crate::llm::provider::LlmProvider>,
-        String,
-    ),
-    String,
-> {
-    use tauri::Manager;
-    let state = app_handle.state::<crate::state::AppState>();
-    let graph_service = state.graph_service.clone();
+    entry_id: i64,
+    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+) -> Result<(), String> {
+    let embed_config = crate::rag::embeddings::resolve_embedding_config(db).await?;
 
+    let dimension = match crate::rag::embeddings::probe_dimension(&embed_config).await {
+        Ok(d) => d,
+        Err(_) => crate::rag::embeddings::known_dimension(
+            &embed_config.provider_type,
+            &embed_config.model,
+        )
+        .ok_or_else(|| "Cannot determine embedding dimension".to_string())?,
+    };
+
+    let lib_path = library_path.read().await;
+    let lance_path = lib_path.join(".wren").join("rag_vectors");
+    let store = crate::rag::store::VectorStore::new(&lance_path, dimension).await?;
+
+    // Build RAPTOR config if enabled
+    let raptor = {
+        let enabled = crate::commands::settings::is_setting_enabled(db, "raptor_enabled").await;
+        if enabled {
+            let provider = crate::commands::settings::get_setting_value(db, "llm_provider").await.unwrap_or_default();
+            let api_key = crate::commands::settings::get_setting_value(db, &format!("llm_api_key_{}", provider)).await.unwrap_or_default();
+            let base_url = crate::commands::settings::get_setting_value(db, "llm_base_url").await;
+            let model = crate::commands::settings::get_setting_value(db, "rag_gen_model").await
+                .filter(|m| !m.is_empty())
+                .or_else(|| {
+                    // Sync fallback - can't await here but we already have the value
+                    None
+                });
+            // Need the model - try llm_model
+            let model = match model {
+                Some(m) => m,
+                None => crate::commands::settings::get_setting_value(db, "llm_model").await.unwrap_or_default(),
+            };
+            if !model.is_empty() {
+                Some(crate::rag::indexer::RaptorIndexConfig {
+                    enabled: true,
+                    gen_config: crate::rag::retrieval::RagGenModelConfig {
+                        provider_type: provider,
+                        api_key,
+                        base_url,
+                        model,
+                    },
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    let count = crate::rag::indexer::index_entry(db, &store, &embed_config, entry_id, &lib_path, raptor.as_ref()).await?;
+    tracing::info!("Auto RAG indexed entry {} — {} chunks", entry_id, count);
+
+    Ok(())
+}
+
+/// Auto-extract metadata with AI after PDF text extraction.
+async fn auto_extract_metadata(
+    db: &SqlitePool,
+    entry_id: i64,
+    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+) -> Result<(), String> {
     let provider_name = crate::commands::settings::get_setting_value(db, "llm_provider")
         .await
         .unwrap_or_else(|| "openai".to_string());
-    let api_key = crate::commands::settings::get_setting_value(
-        db,
-        &format!("llm_api_key_{provider_name}"),
-    )
-    .await
-    .unwrap_or_default();
+    let api_key = crate::commands::settings::get_setting_value(db, &format!("llm_api_key_{}", provider_name))
+        .await
+        .unwrap_or_default();
     let base_url = crate::commands::settings::get_setting_value(db, "llm_base_url")
         .await
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .unwrap_or_default();
     let model = crate::commands::settings::get_setting_value(db, "llm_model")
         .await
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_default();
 
-    let provider = crate::llm::create_provider(&provider_name, api_key, base_url);
-
-    Ok((graph_service, provider, model))
-}
-
-/// Index a single entry into the knowledge graph.
-async fn execute_graph_index(
-    db: &SqlitePool,
-    app_handle: &AppHandle,
-    job_id: &str,
-    payload: &GraphIndexPayload,
-    cancel_flag: CancelFlag,
-) -> Result<Option<String>, String> {
-    let (graph_service, provider, model) =
-        get_graph_deps(app_handle, db).await?;
-
-    struct JobProgress<'a> {
-        app_handle: &'a AppHandle,
-        db: &'a SqlitePool,
-        job_id: &'a str,
+    if model.is_empty() {
+        return Err("No LLM model configured".to_string());
     }
 
-    impl crate::graph::sync::GraphProgressCallback for JobProgress<'_> {
-        fn update(&self, message: &str) {
-            let app = self.app_handle.clone();
-            let db = self.db.clone();
-            let jid = self.job_id.to_string();
-            let msg = message.to_string();
-            tokio::spawn(async move {
-                update_progress(&app, &db, &jid, 0, 1, Some(msg)).await;
-            });
+    // Read extracted text
+    let lib_path = library_path.read().await;
+    let md_path: Option<String> = sqlx::query_scalar(
+        "SELECT markdown_path FROM attachments WHERE entry_id = ? AND markdown_path IS NOT NULL LIMIT 1",
+    )
+    .bind(entry_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?
+    .flatten();
+
+    let md_path = md_path.ok_or_else(|| "No extracted text".to_string())?;
+    let text = tokio::fs::read_to_string(lib_path.join(&md_path))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if text.trim().len() < 50 {
+        return Err("Text too short".to_string());
+    }
+
+    let provider = crate::llm::create_provider(&provider_name, api_key, base_url);
+    let metadata = crate::llm::metadata_extractor::extract_metadata(provider.as_ref(), &model, &text)
+        .await
+        .map_err(|e| format!("{}", e))?;
+
+    // Apply to DB (reuse the same logic as the command)
+    // Update title
+    if let Some(ref title) = metadata.title {
+        if !title.is_empty() {
+            let _ = sqlx::query("UPDATE entries SET title = ?, date_modified = datetime('now') WHERE id = ?")
+                .bind(title).bind(entry_id).execute(db).await;
+        }
+    }
+    // Update creators
+    if !metadata.authors.is_empty() {
+        let _ = sqlx::query("DELETE FROM entry_creators WHERE entry_id = ?")
+            .bind(entry_id).execute(db).await;
+        for (i, author) in metadata.authors.iter().enumerate() {
+            let parts: Vec<&str> = author.rsplitn(2, ' ').collect();
+            let (first, last) = if parts.len() == 2 { (Some(parts[1]), parts[0]) } else { (None, author.as_str()) };
+            let _ = sqlx::query(
+                "INSERT INTO entry_creators (entry_id, creator_type_id, first_name, last_name, name, sort_order) VALUES (?, 1, ?, ?, ?, ?)",
+            ).bind(entry_id).bind(first).bind(last).bind(author).bind(i as i32).execute(db).await;
         }
     }
 
-    let progress = JobProgress {
-        app_handle,
-        db,
-        job_id,
+    // Update fields (year, abstract, journal, DOI)
+    if let Some(ref year) = metadata.year {
+        if !year.is_empty() {
+            upsert_entry_field(db, entry_id, "date", year).await;
+        }
+    }
+    if let Some(ref abs) = metadata.abstract_text {
+        if !abs.is_empty() {
+            upsert_entry_field(db, entry_id, "abstractNote", abs).await;
+        }
+    }
+    if let Some(ref journal) = metadata.journal {
+        if !journal.is_empty() {
+            upsert_entry_field(db, entry_id, "publicationTitle", journal).await;
+        }
+    }
+    if let Some(ref doi) = metadata.doi {
+        if !doi.is_empty() {
+            upsert_entry_field(db, entry_id, "DOI", doi).await;
+        }
+    }
+
+    // Auto-rename attachments if setting enabled
+    if let Err(e) = crate::commands::entries::sync_entry_attachment_filenames(
+        db, library_path, entry_id,
+    ).await {
+        tracing::warn!("Auto-rename after metadata extract failed for entry {}: {}", entry_id, e);
+    }
+
+    tracing::info!("Auto AI metadata for entry {}: title={:?}, authors={}, year={:?}", entry_id, metadata.title, metadata.authors.len(), metadata.year);
+    Ok(())
+}
+
+/// Upsert a field value in entry_fields.
+async fn upsert_entry_field(db: &SqlitePool, entry_id: i64, field_name: &str, value: &str) {
+    let field_id: Option<i64> = sqlx::query_scalar("SELECT id FROM fields WHERE name = ?")
+        .bind(field_name)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+
+    let field_id = match field_id {
+        Some(id) => id,
+        None => return, // Field type doesn't exist in schema, skip
     };
 
-    let count = crate::graph::sync::index_entry_to_graph(
-        db,
-        &graph_service.vector_store,
-        &graph_service.embedding_service,
-        provider.as_ref(),
-        &model,
-        payload.entry_id,
-        &cancel_flag,
-        &progress,
+    let _ = sqlx::query(
+        "INSERT INTO entry_fields (entry_id, field_id, value) VALUES (?, ?, ?) ON CONFLICT(entry_id, field_id) DO UPDATE SET value = excluded.value",
     )
-    .await
-    .map_err(|e| format!("Graph indexing failed: {e}"))?;
+    .bind(entry_id)
+    .bind(field_id)
+    .bind(value)
+    .execute(db)
+    .await;
+}
+
+/// Execute AI metadata extraction as a background job.
+async fn execute_metadata_extract(
+    db: &SqlitePool,
+    app_handle: &AppHandle,
+    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+    job_id: &str,
+    payload: &MetadataExtractPayload,
+) -> Result<Option<String>, String> {
+    update_progress(app_handle, db, job_id, 0, 1, Some("Extracting metadata with AI...".to_string())).await;
+
+    auto_extract_metadata(db, payload.entry_id, library_path).await?;
 
     update_progress(app_handle, db, job_id, 1, 1, Some("Done".to_string())).await;
 
-    Ok(Some(
-        serde_json::json!({ "attachmentsIndexed": count }).to_string(),
-    ))
+    Ok(Some(serde_json::json!({"entryId": payload.entry_id}).to_string()))
 }
 
-/// Index all unindexed papers into the knowledge graph.
-async fn execute_graph_index_all(
+/// Execute RAG indexing (chunk + embed + vector store + optional RAPTOR) for a single entry.
+async fn execute_rag_index(
     db: &SqlitePool,
     app_handle: &AppHandle,
+    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
     job_id: &str,
+    payload: &RagIndexPayload,
     cancel_flag: CancelFlag,
 ) -> Result<Option<String>, String> {
-    let (graph_service, provider, model) =
-        get_graph_deps(app_handle, db).await?;
-
-    // Find all entries with unindexed parsed_content, including titles
-    #[derive(Debug, FromRow)]
-    struct EntryToIndex {
-        entry_id: i64,
-        title: String,
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err("Job cancelled".to_string());
     }
+    let raptor_enabled = crate::commands::settings::is_setting_enabled(db, "raptor_enabled").await;
+    let total_steps: i64 = if raptor_enabled { 4 } else { 3 };
 
-    let entries: Vec<EntryToIndex> = sqlx::query_as(
-        r#"SELECT DISTINCT pc.entry_id, COALESCE(e.title, 'Untitled') as title
-           FROM parsed_content pc
-           JOIN entries e ON e.id = pc.entry_id
-           WHERE pc.graph_indexed = 0 AND pc.status = 'success'"#,
-    )
-    .fetch_all(db)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let total = entries.len() as i64;
-    update_progress(
-        app_handle,
-        db,
-        job_id,
-        0,
-        total,
-        Some(format!("Found {total} entries to index")),
-    )
-    .await;
-
-    struct JobProgress<'a> {
-        app_handle: &'a AppHandle,
-        db: &'a SqlitePool,
-        job_id: &'a str,
-        current: std::sync::atomic::AtomicI64,
-        total: i64,
-    }
-
-    impl crate::graph::sync::GraphProgressCallback for JobProgress<'_> {
-        fn update(&self, message: &str) {
-            let app = self.app_handle.clone();
-            let db = self.db.clone();
-            let jid = self.job_id.to_string();
-            let current = self.current.load(Ordering::Relaxed);
-            let total = self.total;
-            let msg = format!("({}/{}) {}", current + 1, total, message);
-            tokio::spawn(async move {
-                update_progress(&app, &db, &jid, current, total, Some(msg)).await;
-            });
-        }
-    }
-
-    let progress = JobProgress {
-        app_handle,
-        db,
-        job_id,
-        current: std::sync::atomic::AtomicI64::new(0),
-        total,
+    // Step 1: Resolve embedding config
+    update_progress(app_handle, db, job_id, 0, total_steps, Some("Resolving embedding config...".to_string())).await;
+    let embed_config = crate::rag::embeddings::resolve_embedding_config(db).await?;
+    let dimension = match crate::rag::embeddings::probe_dimension(&embed_config).await {
+        Ok(d) => d,
+        Err(_) => crate::rag::embeddings::known_dimension(&embed_config.provider_type, &embed_config.model)
+            .ok_or_else(|| "Cannot determine embedding dimension".to_string())?,
     };
 
-    let mut total_indexed = 0;
-    for (i, entry) in entries.iter().enumerate() {
-        if cancel_flag.load(Ordering::Relaxed) {
-            return Err("Job cancelled".to_string());
-        }
+    if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
 
-        progress.current.store(i as i64, Ordering::Relaxed);
+    // Step 2: Chunking & embedding
+    update_progress(app_handle, db, job_id, 1, total_steps, Some("Chunking & embedding document...".to_string())).await;
+    let lib_path = library_path.read().await;
+    let lance_path = lib_path.join(".wren").join("rag_vectors");
+    let store = crate::rag::store::VectorStore::new(&lance_path, dimension).await?;
 
-        update_progress(
-            app_handle,
-            db,
-            job_id,
-            i as i64,
-            total,
-            Some(format!("({}/{}) {} — Starting...", i + 1, total, entry.title)),
-        )
-        .await;
-
-        match crate::graph::sync::index_entry_to_graph(
-            db,
-            &graph_service.vector_store,
-            &graph_service.embedding_service,
-            provider.as_ref(),
-            &model,
-            entry.entry_id,
-            &cancel_flag,
-            &progress,
-        )
-        .await
-        {
-            Ok(count) => total_indexed += count,
-            Err(e) => {
-                tracing::error!("Failed to graph-index entry {} ({}): {}", entry.entry_id, entry.title, e);
-            }
-        }
-    }
-
-    update_progress(app_handle, db, job_id, total, total, Some(format!("Done — indexed {total_indexed} attachments from {total} entries"))).await;
-
-    Ok(Some(
-        serde_json::json!({
-            "entriesProcessed": entries.len(),
-            "attachmentsIndexed": total_indexed,
+    let raptor_config = if raptor_enabled {
+        let provider = crate::commands::settings::get_setting_value(db, "llm_provider").await.unwrap_or_default();
+        let api_key = crate::commands::settings::get_setting_value(db, &format!("llm_api_key_{}", provider)).await.unwrap_or_default();
+        let base_url = crate::commands::settings::get_setting_value(db, "llm_base_url").await;
+        let model = crate::commands::settings::get_setting_value(db, "rag_gen_model").await
+            .filter(|m| !m.is_empty())
+            .or(crate::commands::settings::get_setting_value(db, "llm_model").await);
+        model.map(|m| crate::rag::indexer::RaptorIndexConfig {
+            enabled: true,
+            gen_config: crate::rag::retrieval::RagGenModelConfig {
+                provider_type: provider,
+                api_key,
+                base_url,
+                model: m,
+            },
         })
-        .to_string(),
-    ))
-}
-
-/// Find and create links between related papers.
-async fn execute_graph_relate(
-    db: &SqlitePool,
-    app_handle: &AppHandle,
-    job_id: &str,
-    payload: &GraphRelatePayload,
-    cancel_flag: CancelFlag,
-) -> Result<Option<String>, String> {
-    use tauri::Manager;
-    let state = app_handle.state::<crate::state::AppState>();
-    let graph_service = state.graph_service.clone();
-
-    let entry_ids = if let Some(ref ids) = payload.entry_ids {
-        ids.clone()
     } else {
-        // Incremental: only entries that were indexed/re-indexed since their last relate run
-        // This covers new papers AND papers that were re-indexed (graph_indexed_at > graph_related_at)
-        sqlx::query_scalar(
-            r#"SELECT DISTINCT entry_id FROM parsed_content
-               WHERE graph_indexed = 1
-                 AND (graph_related_at IS NULL OR graph_indexed_at > graph_related_at)"#,
-        )
-        .fetch_all(db)
-        .await
-        .map_err(|e| e.to_string())?
+        None
     };
 
-    let total = entry_ids.len() as i64;
-    update_progress(
-        app_handle,
-        db,
-        job_id,
-        0,
-        total,
-        Some(format!("Finding related papers (0/{total})...")),
-    )
-    .await;
+    if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
 
-    if cancel_flag.load(Ordering::Relaxed) {
-        return Err("Job cancelled".to_string());
+    let count = crate::rag::indexer::index_entry(
+        db, &store, &embed_config, payload.entry_id, &lib_path, raptor_config.as_ref(),
+    ).await?;
+
+    if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
+
+    // Step 3: Vector store indexed
+    update_progress(app_handle, db, job_id, 2, total_steps, Some(format!("Indexed {} chunks into vector store", count))).await;
+
+    // Step 4: RAPTOR (if enabled — already ran inside index_entry)
+    if raptor_enabled {
+        update_progress(app_handle, db, job_id, 3, total_steps, Some("RAPTOR hierarchical indexing complete".to_string())).await;
     }
 
-    let created = crate::graph::relate::auto_relate_papers(
-        db,
-        &graph_service.vector_store,
-        &graph_service.embedding_service,
-        &entry_ids,
-        0.3, // threshold
-        &cancel_flag,
-    )
-    .await
-    .map_err(|e| format!("Auto-relate failed: {e}"))?;
+    update_progress(app_handle, db, job_id, total_steps, total_steps, Some("Done".to_string())).await;
 
-    if cancel_flag.load(Ordering::Relaxed) {
-        return Err("Job cancelled".to_string());
-    }
-
-    // ── Phase 2: Classify claim relations ────────────────────────
-    update_progress(
-        app_handle, db, job_id, total, total + 1,
-        Some("Classifying claim relations...".to_string()),
-    ).await;
-
-    let (_, provider, model) = get_graph_deps(app_handle, db).await?;
-    let mut usage = crate::llm::provider::TokenUsageSummary::default();
-
-    struct RelateProgress {
-        app_handle: AppHandle,
-        db: SqlitePool,
-        job_id: String,
-    }
-    impl crate::graph::sync::GraphProgressCallback for RelateProgress {
-        fn update(&self, message: &str) {
-            let app = self.app_handle.clone();
-            let db = self.db.clone();
-            let jid = self.job_id.clone();
-            let msg = message.to_string();
-            tokio::spawn(async move {
-                update_progress(&app, &db, &jid, 0, 1, Some(msg)).await;
-            });
-        }
-    }
-
-    let relate_progress = RelateProgress {
-        app_handle: app_handle.clone(),
-        db: db.clone(),
-        job_id: job_id.to_string(),
-    };
-
-    let relations_created = crate::graph::relate::classify_claim_relations(
-        db,
-        &graph_service.vector_store,
-        &graph_service.embedding_service,
-        provider.as_ref(),
-        &model,
-        &entry_ids,
-        0.6, // min_similarity for claim pairs
-        &cancel_flag,
-        &relate_progress,
-        &mut usage,
-    )
-    .await
-    .unwrap_or_else(|e| {
-        tracing::warn!("Claim relation classification failed: {e}");
-        0
-    });
-
-    // Stamp graph_related_at on all processed entries so incremental runs skip them next time
-    for &eid in &entry_ids {
-        let _ = sqlx::query(
-            "UPDATE parsed_content SET graph_related_at = datetime('now') WHERE entry_id = ? AND graph_indexed = 1",
-        )
-        .bind(eid)
-        .execute(db)
-        .await;
-    }
-
-    update_progress(app_handle, db, job_id, total + 1, total + 1, Some("Done".to_string())).await;
-
-    Ok(Some(
-        serde_json::json!({
-            "entriesProcessed": entry_ids.len(),
-            "linksCreated": created.len(),
-            "claimRelationsCreated": relations_created,
-            "tokensUsed": usage.total_tokens,
-        })
-        .to_string(),
-    ))
+    Ok(Some(serde_json::json!({"entryId": payload.entry_id, "chunks": count}).to_string()))
 }
 
-/// Re-embed all graph data with the current embedding model.
-/// No LLM calls — just re-chunks + re-embeds existing SQLite data.
-async fn execute_graph_reembed(
+/// Execute cross-document RAPTOR for a collection as a background job.
+async fn execute_collection_raptor(
     db: &SqlitePool,
     app_handle: &AppHandle,
+    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
     job_id: &str,
+    payload: &RagCollectionRaptorPayload,
     cancel_flag: CancelFlag,
 ) -> Result<Option<String>, String> {
-    use tauri::Manager;
-    let state = app_handle.state::<crate::state::AppState>();
-    let graph_service = state.graph_service.clone();
+    if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
+    update_progress(app_handle, db, job_id, 0, 2, Some("Resolving config...".to_string())).await;
 
-    struct ReembedProgress {
-        app_handle: AppHandle,
-        db: SqlitePool,
-        job_id: String,
-    }
-
-    impl crate::graph::sync::GraphProgressCallback for ReembedProgress {
-        fn update(&self, message: &str) {
-            let app = self.app_handle.clone();
-            let db = self.db.clone();
-            let jid = self.job_id.clone();
-            let msg = message.to_string();
-            tokio::spawn(async move {
-                update_progress(&app, &db, &jid, 0, 1, Some(msg)).await;
-            });
-        }
-    }
-
-    let progress = ReembedProgress {
-        app_handle: app_handle.clone(),
-        db: db.clone(),
-        job_id: job_id.to_string(),
+    let embed_config = crate::rag::embeddings::resolve_embedding_config(db).await?;
+    let dimension = match crate::rag::embeddings::probe_dimension(&embed_config).await {
+        Ok(d) => d,
+        Err(_) => crate::rag::embeddings::known_dimension(&embed_config.provider_type, &embed_config.model)
+            .ok_or_else(|| "Cannot determine embedding dimension".to_string())?,
     };
 
-    let count = crate::graph::sync::reembed_all(
-        db,
-        &graph_service.vector_store,
-        &graph_service.embedding_service,
-        &cancel_flag,
-        &progress,
-    )
-    .await
-    .map_err(|e| format!("Re-embed failed: {e}"))?;
+    let lib_path = library_path.read().await;
+    let lance_path = lib_path.join(".wren").join("rag_vectors");
+    let store = crate::rag::store::VectorStore::new(&lance_path, dimension).await?;
 
-    update_progress(
-        app_handle, db, job_id, 1, 1,
-        Some(format!("Done — re-embedded {count} attachments")),
-    ).await;
+    let provider = crate::commands::settings::get_setting_value(db, "llm_provider").await.unwrap_or_default();
+    let api_key = crate::commands::settings::get_setting_value(db, &format!("llm_api_key_{}", provider)).await.unwrap_or_default();
+    let base_url = crate::commands::settings::get_setting_value(db, "llm_base_url").await;
+    let model = crate::commands::settings::get_setting_value(db, "rag_gen_model").await
+        .filter(|m| !m.is_empty())
+        .or(crate::commands::settings::get_setting_value(db, "llm_model").await)
+        .ok_or_else(|| "No RAG gen model configured".to_string())?;
 
-    Ok(Some(
-        serde_json::json!({ "attachmentsReembedded": count }).to_string(),
-    ))
+    let gen_config = crate::rag::retrieval::RagGenModelConfig {
+        provider_type: provider,
+        api_key,
+        base_url,
+        model,
+    };
+
+    if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
+    update_progress(app_handle, db, job_id, 1, 2, Some("Building cross-document summaries...".to_string())).await;
+
+    let count = crate::rag::indexer::build_collection_raptor(
+        db, &store, &embed_config, &gen_config, payload.collection_id,
+    ).await?;
+
+    update_progress(app_handle, db, job_id, 2, 2, Some(format!("Done — {} summary nodes", count))).await;
+
+    Ok(Some(serde_json::json!({"collectionId": payload.collection_id, "summaries": count}).to_string()))
 }

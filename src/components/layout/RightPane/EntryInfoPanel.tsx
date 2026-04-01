@@ -40,12 +40,9 @@ import {
   getTags,
   getCollections,
   getEntryBacklinks,
-  graphGetPaperKnowledge,
-  graphIndexEntry,
   type Entry as TauriEntry,
   type Creator,
   type BacklinkInfo,
-  type PaperKnowledgeGraph,
 } from "@/services/tauri";
 import { openFileWithDefaultApp, getLibraryPath, parseDocument } from "@/services/tauri/commands";
 import type { ItemTypeInfo } from "@/types/schema";
@@ -82,10 +79,10 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Backlinks state
   const [backlinks, setBacklinks] = useState<BacklinkInfo[]>([]);
 
-  // Knowledge graph state
-  const [knowledge, setKnowledge] = useState<PaperKnowledgeGraph | null>(null);
-  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
-  const [indexingGraph, setIndexingGraph] = useState(false);
+  // Knowledge graph removed — replaced by RAG system
+  const knowledge: any = null;
+  const knowledgeLoading = false;
+  const indexingGraph = false;
 
   // Load schema on mount
   useEffect(() => {
@@ -111,33 +108,16 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
       .catch(() => setBacklinks([]));
   }, [entry.id, entryVersion]);
 
-  // Fetch knowledge graph data
-  const loadKnowledge = useCallback(async () => {
-    setKnowledgeLoading(true);
-    try {
-      const data = await graphGetPaperKnowledge(entry.id);
-      setKnowledge(data);
-    } catch {
-      setKnowledge(null);
-    } finally {
-      setKnowledgeLoading(false);
-    }
-  }, [entry.id]);
+  // Knowledge graph fetch removed — RAG system handles search differently
+  const loadKnowledge = useCallback(async () => {}, [entry.id]);
 
   useEffect(() => {
     loadKnowledge();
   }, [loadKnowledge]);
 
   const handleIndexGraph = async () => {
-    setIndexingGraph(true);
-    try {
-      await graphIndexEntry(entry.id);
-      toast.info("Knowledge graph indexing started");
-    } catch (err) {
-      toast.error(`Failed to start graph indexing: ${err}`);
-    } finally {
-      setIndexingGraph(false);
-    }
+    // Graph indexing removed — RAG indexing happens automatically
+    toast.info("RAG indexing is automatic after document import");
   };
 
   // Fetch item type info when entry changes or edited item type changes
@@ -772,7 +752,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
                 <div>
                   <p className="text-xs font-medium text-muted-foreground mb-1">Entities</p>
                   <div className="flex flex-wrap gap-1">
-                    {knowledge.entities.map((entity) => (
+                    {knowledge.entities.map((entity: any) => (
                       <span
                         key={entity.id}
                         className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary"
@@ -789,7 +769,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
                 <div>
                   <p className="text-xs font-medium text-muted-foreground mb-1">Claims</p>
                   <div className="space-y-1.5">
-                    {knowledge.claims.slice(0, 8).map((claim) => (
+                    {knowledge.claims.slice(0, 8).map((claim: any) => (
                       <div key={claim.id} className="text-xs text-muted-foreground leading-relaxed">
                         <span className="inline-block px-1 py-0.5 rounded bg-muted text-[10px] font-medium mr-1">
                           {claim.claimType}
@@ -810,7 +790,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
                 <div>
                   <p className="text-xs font-medium text-muted-foreground mb-1">Related Papers</p>
                   <div className="space-y-1">
-                    {knowledge.relatedPapers.map((paper, idx) => (
+                    {knowledge.relatedPapers.map((paper: any, idx: number) => (
                       <div
                         key={idx}
                         className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer"

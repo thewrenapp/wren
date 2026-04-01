@@ -27,9 +27,9 @@ const JOB_TYPE_NAMES: Record<string, string> = {
   bulk_import_folder: "Import Folder",
   ocr_extract: "OCR Extraction",
   llm_parse: "Parse Document Structure",
-  graph_index: "Index to Knowledge Graph",
-  graph_index_all: "Build Knowledge Graph",
-  graph_relate: "Find Related Papers",
+  rag_index: "Build Semantic Index",
+  metadata_extract: "Extract Metadata with AI",
+  rag_collection_raptor: "Cross-doc RAPTOR",
 };
 
 export function jobDisplayName(job: Job): string {
@@ -130,6 +130,14 @@ export const useJobStore = create<JobState>()((set, get) => ({
     await get().loadJobs();
     const unlisten = await listen<Job>("job:updated", (event) => {
       get()._upsertJob(event.payload);
+      // Refresh library when metadata extraction or OCR extraction completes
+      const job = event.payload;
+      if (job.status === "completed" && (job.jobType === "metadata_extract" || job.jobType === "ocr_extract")) {
+        // Dynamic import to avoid circular dependency
+        import("@/stores/libraryStore").then(({ useLibraryStore }) => {
+          useLibraryStore.getState().refreshLibrary();
+        });
+      }
     });
     set({ _unlisten: unlisten });
   },

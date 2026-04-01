@@ -13,6 +13,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1"
 
 [dependencies]
 # Tauri
@@ -35,8 +36,15 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 # PDF metadata extraction
 lopdf = "0.34"
 
-# Document extraction (PDF, EPUB, HTML, images, DOCX, 56+ formats)
-kreuzberg = { version = "4", features = ["pdf", "bundled-pdfium", "html", "ocr", "office"] }
+# PDF parsing (ferrules: layout analysis + OCR + table detection)
+ferrules-core = { path = "../../ferrules/ferrules-core" }
+# Pin ort-sys to match ferrules-core's ort rc.9 (rc.10 has incompatible API)
+ort-sys = "=2.0.0-rc.9"
+
+# Document parsing (non-PDF formats)
+html2text = "0.12"
+undoc = { git = "https://github.com/iyulab/undoc", features = ["docx", "xlsx", "pptx", "async"] }
+epub = "2"
 
 # Markdown processing
 comrak = { version = "0.28", features = ["syntect"] }
@@ -44,10 +52,39 @@ comrak = { version = "0.28", features = ["syntect"] }
 # Full-text search
 tantivy = "0.22"
 
-# Embeddings & vector store
-fastembed = "5"
-lancedb = "0.26"
+# Vector store for RAG
+lancedb = { version = "0.26", default-features = false }
 arrow = "57"
+arrow-array = "57"
+arrow-schema = "57"
+
+# AST-based code chunking for RAG
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-c = "0.23"
+tree-sitter-cpp = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-json = "0.23"
+tree-sitter-css = "0.23"
+tree-sitter-html = "0.23"
+tree-sitter-bash = "0.23"
+tree-sitter-lua = "0.5"
+tree-sitter-swift = "0.7"
+tree-sitter-md = "0.5"
+tree-sitter-toml-ng = "0.7"
+
+# Parallel processing (RAPTOR kNN graph)
+rayon = "1.11"
+
+# Linear algebra (RAPTOR UMAP + GMM clustering)
+nalgebra = "0.32"
+rand = "0.8"
+ndarray = "0.15"
 
 # Async stream utilities
 futures = "0.3"

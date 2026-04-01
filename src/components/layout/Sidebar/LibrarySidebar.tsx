@@ -16,6 +16,7 @@ import {
   Check,
   BookmarkX,
   Tag,
+  TreePine,
 } from 'lucide-react';
 import { sidebarIcons } from '@/lib/icons';
 import { IconSearch } from '@tabler/icons-react';
@@ -1335,6 +1336,20 @@ export function LibrarySidebar({ expandCollectionsRef }: LibrarySidebarProps) {
                       </ContextMenuItem>
                     </ContextMenuSubContent>
                   </ContextMenuSub>
+                  <ContextMenuItem
+                    onClick={async () => {
+                      try {
+                        const { ragBuildCollectionRaptor } = await import('@/services/tauri/commands');
+                        await ragBuildCollectionRaptor(collection.id);
+                        toast.info(`Cross-doc summaries building for "${collection.name}"`);
+                      } catch (err) {
+                        toast.error(`Failed: ${err}`);
+                      }
+                    }}
+                  >
+                    <TreePine className='h-4 w-4 mr-2' />
+                    Rebuild Cross-doc Summaries
+                  </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
                     onClick={() => handleDeleteCollection(collection.id, collection.name)}

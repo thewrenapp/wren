@@ -1,11 +1,12 @@
 use anyhow::Result;
+use ferrules_core::layout::model::ORTConfig;
+use ferrules_core::FerrulesParser;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 
 use crate::db;
-use crate::graph::GraphService;
 use crate::jobs::queue::JobQueue;
 use crate::search::SearchIndex;
 
@@ -14,7 +15,8 @@ pub struct AppState {
     pub library_path: Arc<RwLock<PathBuf>>,
     pub search_index: Arc<SearchIndex>,
     pub job_queue: Arc<JobQueue>,
-    pub graph_service: Arc<GraphService>,
+    /// Ferrules PDF parser (lazy-initialized on first PDF upload).
+    pdf_parser: Arc<OnceCell<FerrulesParser>>,
 }
 
 impl AppState {
@@ -45,103 +47,9 @@ impl AppState {
 
         let search_index = Arc::new(search_index);
 
-        // Read embedding settings
-        let embedding_source: String = sqlx::query_scalar(
-            "SELECT value FROM settings WHERE key = 'embedding_source' LIMIT 1",
-        )
-        .fetch_optional(&db)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "local".to_string());
-
-        let embedding_model: String = sqlx::query_scalar(
-            "SELECT value FROM settings WHERE key = 'embedding_model' LIMIT 1",
-        )
-        .fetch_optional(&db)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "all-MiniLM-L6-v2".to_string());
-
-        // Build the embedding service (local or cloud)
-        let embedding_service = if embedding_source == "cloud" {
-            let cloud_model: String = sqlx::query_scalar(
-                "SELECT value FROM settings WHERE key = 'cloud_embedding_model' LIMIT 1",
-            )
-            .fetch_optional(&db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "text-embedding-3-small".to_string());
-
-            let llm_provider: String = sqlx::query_scalar(
-                "SELECT value FROM settings WHERE key = 'llm_provider' LIMIT 1",
-            )
-            .fetch_optional(&db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "openai".to_string());
-
-            let api_key: String = sqlx::query_scalar(
-                &format!("SELECT value FROM settings WHERE key = 'llm_api_key_{}' LIMIT 1", llm_provider),
-            )
-            .fetch_optional(&db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-
-            let base_url: String = sqlx::query_scalar(
-                "SELECT value FROM settings WHERE key = 'llm_base_url' LIMIT 1",
-            )
-            .fetch_optional(&db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-
-            let dims = crate::graph::embeddings::resolve_cloud_model_dims(&llm_provider, &cloud_model);
-            tracing::info!(
-                "Cloud embedding configured: provider={}, model={}, dims={}",
-                llm_provider, cloud_model, dims
-            );
-
-            Some((llm_provider, cloud_model, api_key, base_url, dims))
-        } else {
-            None
-        };
-
-        // Initialize graph service (knowledge graph + vector store)
-        let wren_dir = library_path.join(".wren");
-        let graph_service = match GraphService::new(db.clone(), &wren_dir, &embedding_model, embedding_service.as_ref()).await {
-            Ok(gs) => {
-                tracing::info!("Graph service initialized at {:?}", wren_dir.join("lance_db"));
-                Arc::new(gs)
-            }
-            Err(e) => {
-                tracing::error!("Failed to initialize graph service: {}. Falling back to local embeddings.", e);
-                // Cloud config may be the cause; retry with local-only (None)
-                match GraphService::new(db.clone(), &wren_dir, &embedding_model, None).await {
-                    Ok(gs) => {
-                        tracing::info!("Graph service fallback (local embeddings) initialized");
-                        Arc::new(gs)
-                    }
-                    Err(e2) => {
-                        tracing::error!("Graph service fallback also failed: {}. Graph features will be unavailable.", e2);
-                        // Last resort: try with default model
-                        Arc::new(
-                            GraphService::new(db.clone(), &wren_dir, "all-MiniLM-L6-v2", None)
-                                .await
-                                .expect("Graph service minimal fallback failed — cannot start app"),
-                        )
-                    }
-                }
-            }
-        };
-
         let library_path = Arc::new(RwLock::new(library_path));
+
+        let pdf_parser = Arc::new(OnceCell::const_new());
 
         // Initialize job queue
         let job_queue = Arc::new(JobQueue::new(
@@ -149,7 +57,8 @@ impl AppState {
             app_handle.clone(),
             search_index.clone(),
             library_path.clone(),
-            2, // max concurrent jobs
+            pdf_parser.clone(),
+            1, // max concurrent jobs (safe for local models like oMLX)
         ));
 
         // Recover jobs that were interrupted by app shutdown
@@ -166,15 +75,48 @@ impl AppState {
             library_path,
             search_index,
             job_queue,
-            graph_service,
+            pdf_parser,
         })
     }
 
+    /// Get or lazily initialize the PDF parser (first call loads ONNX models).
+    pub async fn get_pdf_parser(&self) -> Result<&FerrulesParser> {
+        self.pdf_parser
+            .get_or_try_init(|| async {
+                tracing::info!("Lazily initializing Ferrules PDF parser (ONNX + CoreML)...");
+                let parser = tokio::task::spawn_blocking(|| {
+                    let ort_config = ORTConfig::default();
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        FerrulesParser::new(ort_config)
+                    }))
+                    .map_err(|panic| {
+                        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "unknown panic during ONNX model loading".to_string()
+                        };
+                        anyhow::anyhow!("PDF parser init panicked: {}", msg)
+                    })
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("PDF parser init task failed: {}", e))??;
+
+                tracing::info!("Ferrules PDF parser initialized successfully");
+                Ok(parser)
+            })
+            .await
+    }
+
+    /// Get a cloneable reference to the PDF parser cell.
+    pub fn pdf_parser_ref(&self) -> Arc<OnceCell<FerrulesParser>> {
+        self.pdf_parser.clone()
+    }
+
     fn get_library_path() -> Result<PathBuf> {
-        // Default to ~/Wren
         let home = directories::UserDirs::new()
             .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-
         Ok(home.home_dir().join("Wren"))
     }
 
@@ -184,9 +126,6 @@ impl AppState {
     }
 
     /// Backfill existing notes into parsed_content table.
-    /// Handles two cases:
-    /// 1. Notes with markdown_path set but no parsed_content row
-    /// 2. Imported .md files with file_path but NULL markdown_path (fixes them too)
     async fn backfill_note_parsed_content(pool: &SqlitePool, library_path: &std::path::Path) {
         #[derive(sqlx::FromRow)]
         struct NoteRow {
@@ -196,7 +135,6 @@ impl AppState {
             markdown_path: Option<String>,
         }
 
-        // Find all note attachments missing a parsed_content row
         let rows: Vec<NoteRow> = sqlx::query_as(
             r#"SELECT a.id, a.entry_id, a.file_path, a.markdown_path FROM attachments a
                JOIN attachment_types at ON a.attachment_type_id = at.id
@@ -216,11 +154,9 @@ impl AppState {
         tracing::info!("Backfilling {} note(s) into parsed_content", rows.len());
 
         for note in rows {
-            // Determine which path to read from
             let (full_path, needs_markdown_path_fix) = if let Some(ref md) = note.markdown_path {
                 (library_path.join(md), false)
             } else if let Some(ref fp) = note.file_path {
-                // Imported .md file with file_path but no markdown_path
                 let fp_path = std::path::PathBuf::from(fp);
                 if fp_path.is_absolute() {
                     (fp_path, true)
@@ -232,7 +168,6 @@ impl AppState {
             };
 
             if let Ok(content) = std::fs::read_to_string(&full_path) {
-                // Fix missing markdown_path for imported notes
                 if needs_markdown_path_fix {
                     if let Ok(relative) = full_path.strip_prefix(library_path) {
                         let rel_str = relative.to_string_lossy().to_string();

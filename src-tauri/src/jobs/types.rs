@@ -41,10 +41,9 @@ pub enum JobType {
     BulkImportFolder,
     OcrExtract,
     LlmParse,
-    GraphIndex,
-    GraphIndexAll,
-    GraphRelate,
-    GraphReembed,
+    MetadataExtract,
+    RagIndex,
+    RagCollectionRaptor,
 }
 
 impl JobType {
@@ -55,10 +54,9 @@ impl JobType {
             JobType::BulkImportFolder => "bulk_import_folder",
             JobType::OcrExtract => "ocr_extract",
             JobType::LlmParse => "llm_parse",
-            JobType::GraphIndex => "graph_index",
-            JobType::GraphIndexAll => "graph_index_all",
-            JobType::GraphRelate => "graph_relate",
-            JobType::GraphReembed => "graph_reembed",
+            JobType::MetadataExtract => "metadata_extract",
+            JobType::RagIndex => "rag_index",
+            JobType::RagCollectionRaptor => "rag_collection_raptor",
         }
     }
 
@@ -69,10 +67,9 @@ impl JobType {
             JobType::BulkImportFolder => "Import Folder",
             JobType::OcrExtract => "OCR Extraction",
             JobType::LlmParse => "Parse Document Structure",
-            JobType::GraphIndex => "Build Knowledge Graph (Entry)",
-            JobType::GraphIndexAll => "Build Knowledge Graph (All)",
-            JobType::GraphRelate => "Find Related Papers",
-            JobType::GraphReembed => "Re-embed Knowledge Graph",
+            JobType::MetadataExtract => "Extract Metadata with AI",
+            JobType::RagIndex => "Build Semantic Index",
+            JobType::RagCollectionRaptor => "Cross-doc RAPTOR",
         }
     }
 
@@ -83,10 +80,9 @@ impl JobType {
             "bulk_import_folder" => Some(JobType::BulkImportFolder),
             "ocr_extract" => Some(JobType::OcrExtract),
             "llm_parse" => Some(JobType::LlmParse),
-            "graph_index" => Some(JobType::GraphIndex),
-            "graph_index_all" => Some(JobType::GraphIndexAll),
-            "graph_relate" => Some(JobType::GraphRelate),
-            "graph_reembed" => Some(JobType::GraphReembed),
+            "metadata_extract" => Some(JobType::MetadataExtract),
+            "rag_index" => Some(JobType::RagIndex),
+            "rag_collection_raptor" => Some(JobType::RagCollectionRaptor),
             _ => None,
         }
     }
@@ -100,27 +96,22 @@ impl JobType {
             JobType::BulkImportFolder => true,  // same dedup
             JobType::OcrExtract => true,
             JobType::LlmParse => true,          // checkpointed, can resume
-            JobType::GraphIndex => true,        // clears and rebuilds
-            JobType::GraphIndexAll => true,
-            JobType::GraphRelate => true,       // idempotent (OR IGNORE)
-            JobType::GraphReembed => true,      // drops and recreates vectors
+            JobType::MetadataExtract => true,
+            JobType::RagIndex => true,
+            JobType::RagCollectionRaptor => true,
         }
     }
 
-    /// Whether this job type is CPU-bound and should run on spawn_blocking.
-    /// I/O-bound jobs (DB queries, file reads, network) run on the async pool.
-    /// CPU-bound jobs (LLM inference, heavy computation) use the blocking pool.
     pub fn is_cpu_bound(&self) -> bool {
         match self {
-            JobType::ReindexLibrary => false,   // mostly I/O (DB + file reads)
+            JobType::ReindexLibrary => false,
             JobType::BulkImportPdfs => false,
             JobType::BulkImportFolder => false,
-            JobType::OcrExtract => false,       // kreuzberg is async internally
-            JobType::LlmParse => false,         // network I/O (API calls)
-            JobType::GraphIndex => false,       // LLM API calls + I/O
-            JobType::GraphIndexAll => false,
-            JobType::GraphRelate => false,
-            JobType::GraphReembed => false,     // embedding I/O
+            JobType::OcrExtract => false,
+            JobType::LlmParse => false,
+            JobType::MetadataExtract => false,
+            JobType::RagIndex => false,
+            JobType::RagCollectionRaptor => false,
         }
     }
 }
@@ -151,7 +142,11 @@ pub struct Job {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReindexPayload {
+    // OCR settings removed — ferrules handles OCR automatically.
+    // Fields kept for backward compat with existing job payloads in DB.
+    #[serde(default)]
     pub enable_ocr: bool,
+    #[serde(default)]
     pub force_ocr: bool,
 }
 
@@ -182,12 +177,19 @@ pub struct LlmParsePayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GraphIndexPayload {
+pub struct MetadataExtractPayload {
     pub entry_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GraphRelatePayload {
-    pub entry_ids: Option<Vec<i64>>,
+pub struct RagIndexPayload {
+    pub entry_id: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RagCollectionRaptorPayload {
+    pub collection_id: i64,
+}
+

@@ -1119,6 +1119,8 @@ export interface ParsedContentSummary {
 export interface LlmModelInfo {
   id: string;
   name: string;
+  /** Model type from oMLX: "llm", "embedding", "reranker", "vlm". Null for other providers. */
+  modelType?: string | null;
 }
 
 export async function parseDocument(attachmentId: number, entryId: number): Promise<string> {
@@ -1154,124 +1156,82 @@ export async function validateLlmConfig(): Promise<boolean> {
 }
 
 // =====================================================
-// Knowledge Graph Commands
+// RAG (Document Search) Commands
 // =====================================================
 
-export interface MatchedConcept {
-  name: string;
-  category: string;
-  description: string;
-  weight: number;
-}
-
-export interface EvidenceSnippet {
-  text: string;
-  sectionName: string;
-  source: string;
-  attachmentTitle: string;
-}
-
-export interface ConceptSearchResult {
-  entryId: number;
-  title: string;
-  creators: string;
-  relevanceScore: number;
-  matchedConcepts: MatchedConcept[];
-  evidenceSnippets: EvidenceSnippet[];
-}
-
-export interface EntityInfo {
-  id: number;
-  name: string;
-  description: string | null;
-  category: string;
-  relationType: string;
-  weight: number;
-}
-
-export interface ClaimInfo {
-  id: number;
-  statement: string;
-  evidenceText: string | null;
+export interface RagSearchResult {
+  chunkId: string;
+  documentId: string;
+  filename: string;
+  chunkIndex: number;
+  pageNumber: number | null;
   sectionName: string | null;
-  claimType: string;
-  confidence: number;
+  content: string;
+  relevanceScore: number;
+  level: number;
+  entryId: number | null;
+  entryTitle: string | null;
 }
 
-export interface RelatedPaperInfo {
-  entryId: number;
-  title: string;
-  creators: string;
-  linkType: string;
-  context: string | null;
-}
-
-export interface PaperKnowledgeGraph {
-  entities: EntityInfo[];
-  claims: ClaimInfo[];
-  relatedPapers: RelatedPaperInfo[];
-  graphIndexed: boolean;
-  indexedAt: string | null;
-}
-
-export interface GraphStatus {
-  papersIndexed: number;
+export interface RagStatus {
+  entriesIndexed: number;
   totalParseable: number;
-  entityCount: number;
-  claimCount: number;
-  chunkCount: number;
+  totalChunks: number;
 }
 
-export async function graphConceptSearch(
+// =====================================================
+// AI Metadata Extraction
+// =====================================================
+
+export interface ExtractedMetadata {
+  title: string | null;
+  authors: string[];
+  year: string | null;
+  abstract: string | null;
+  journal: string | null;
+  doi: string | null;
+  keywords: string[];
+  documentType: string | null;
+}
+
+export async function extractMetadataWithAi(entryId: number): Promise<string> {
+  return invoke('extract_metadata_with_ai', { entryId });
+}
+
+export interface RagSearchResponse {
+  results: RagSearchResult[];
+  strategy: string;
+  reranked: boolean;
+  cragActive: boolean;
+  raptorActive: boolean;
+  totalResults: number;
+  queryTimeMs: number;
+}
+
+export async function ragSearch(
   query: string,
   limit?: number,
-): Promise<ConceptSearchResult[]> {
-  return invoke('graph_concept_search', { query, limit: limit ?? null });
+  strategy?: "auto" | "semantic" | "hyde" | "step_back",
+): Promise<RagSearchResponse> {
+  return invoke('rag_search', { query, limit: limit ?? null, strategy: strategy ?? null });
 }
 
-export async function graphGetPaperKnowledge(entryId: number): Promise<PaperKnowledgeGraph> {
-  return invoke('graph_get_paper_knowledge', { entryId });
+export async function ragStatus(): Promise<RagStatus> {
+  return invoke('rag_status');
 }
 
-export async function graphStatus(): Promise<GraphStatus> {
-  return invoke('graph_status');
+export async function ragIndexEntry(entryId: number): Promise<string> {
+  return invoke('rag_index_entry', { entryId });
 }
 
-export async function graphIndexEntry(entryId: number): Promise<string> {
-  return invoke('graph_index_entry', { entryId });
+export async function ragIndexAll(): Promise<string> {
+  return invoke('rag_index_all');
 }
 
-export async function graphIndexAll(): Promise<string> {
-  return invoke('graph_index_all');
+export async function ragBuildCollectionRaptor(collectionId: number): Promise<string> {
+  return invoke('rag_build_collection_raptor', { collectionId });
 }
 
-export async function graphAutoRelate(entryIds?: number[]): Promise<string> {
-  return invoke('graph_auto_relate', { entryIds: entryIds ?? null });
-}
-
-export async function graphRebuild(): Promise<string> {
-  return invoke('graph_rebuild');
-}
-
-export async function graphReembed(): Promise<string> {
-  return invoke('graph_reembed');
-}
-
-export interface ClaimRelationInfo {
-  relationId: number;
-  sourceClaimId: number;
-  sourceStatement: string;
-  sourceEntryId: number;
-  sourceEntryTitle: string;
-  targetClaimId: number;
-  targetStatement: string;
-  targetEntryId: number;
-  targetEntryTitle: string;
-  relationType: string; // "supports" | "contradicts" | "refines"
-  confidence: number;
-  reasoning: string | null;
-}
-
-export async function graphGetClaimRelations(entryId: number): Promise<ClaimRelationInfo[]> {
-  return invoke('graph_get_claim_relations', { entryId });
+export async function ragRebuild(): Promise<void> {
+  return invoke('rag_rebuild');
 }

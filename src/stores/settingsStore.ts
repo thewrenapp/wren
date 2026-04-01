@@ -37,11 +37,19 @@ interface SettingsState {
   llmModel: string;
   llmBaseUrl: string;
   llmAutoParseOnImport: boolean;
+  aiAutoMetadata: boolean;
   llmTokenBudget: number;
   llmContextWindow: number; // 0 = auto-detect from provider defaults
 
-  // Knowledge Graph
-  graphAutoIndex: boolean;
+  // RAG (Document Search)
+  ragAutoIndex: boolean;
+  ragGenModel: string;         // LLM model for HyDE/step-back/CRAG (defaults to llmModel)
+  cragEnabled: boolean;
+  cragUpperThreshold: number;  // 1-100, default 60
+  cragLowerThreshold: number;  // 1-100, default 25
+  raptorEnabled: boolean;
+  raptorTokenBudget: number;   // default 2000
+  raptorRetrievalMode: string; // "collapsed" | "tree_traversal"
 
   // Code Editor
   showCodeLineNumbers: boolean;
@@ -65,9 +73,17 @@ interface SettingsState {
   setLlmModel: (model: string) => void;
   setLlmBaseUrl: (url: string) => void;
   setLlmAutoParseOnImport: (enabled: boolean) => void;
+  setAiAutoMetadata: (enabled: boolean) => void;
   setLlmTokenBudget: (budget: number) => void;
   setLlmContextWindow: (size: number) => void;
-  setGraphAutoIndex: (enabled: boolean) => void;
+  setRagAutoIndex: (enabled: boolean) => void;
+  setRagGenModel: (model: string) => void;
+  setCragEnabled: (enabled: boolean) => void;
+  setCragUpperThreshold: (value: number) => void;
+  setCragLowerThreshold: (value: number) => void;
+  setRaptorEnabled: (enabled: boolean) => void;
+  setRaptorTokenBudget: (value: number) => void;
+  setRaptorRetrievalMode: (mode: string) => void;
   setShowWelcomeOnStartup: (show: boolean) => void;
   loadFromBackend: () => Promise<void>;
 }
@@ -78,7 +94,7 @@ export const LLM_PROVIDER_DEFAULTS: Record<string, { baseUrl: string; defaultMod
   gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta", defaultModel: "gemini-2.0-flash", requiresApiKey: true },
   ollama: { baseUrl: "http://localhost:11434", defaultModel: "llama3.2", requiresApiKey: false },
   ollama_cloud: { baseUrl: "https://ollama.com", defaultModel: "", requiresApiKey: true },
-  lmstudio: { baseUrl: "http://localhost:1234/v1", defaultModel: "", requiresApiKey: false },
+  omlx: { baseUrl: "http://localhost:1234/v1", defaultModel: "", requiresApiKey: true },
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -99,9 +115,17 @@ export const useSettingsStore = create<SettingsState>()(
       llmModel: "gpt-4o-mini",
       llmBaseUrl: "https://api.openai.com/v1",
       llmAutoParseOnImport: false,
+      aiAutoMetadata: false,
       llmTokenBudget: 200000,
       llmContextWindow: 0,
-      graphAutoIndex: true,
+      ragAutoIndex: true,
+      ragGenModel: "",
+      cragEnabled: false,
+      cragUpperThreshold: 60,
+      cragLowerThreshold: 25,
+      raptorEnabled: false,
+      raptorTokenBudget: 2000,
+      raptorRetrievalMode: "tree_traversal",
       showCodeLineNumbers: false,
       showWelcomeOnStartup: true,
 
@@ -246,6 +270,10 @@ export const useSettingsStore = create<SettingsState>()(
           toast.error("Failed to update setting");
         }
       },
+      setAiAutoMetadata: async (enabled) => {
+        set({ aiAutoMetadata: enabled });
+        await updateSetting("ai_auto_metadata", enabled ? "true" : "false").catch(() => {});
+      },
       setLlmTokenBudget: async (budget) => {
         const prev = get().llmTokenBudget;
         set({ llmTokenBudget: budget });
@@ -268,16 +296,44 @@ export const useSettingsStore = create<SettingsState>()(
           toast.error("Failed to update setting");
         }
       },
-      setGraphAutoIndex: async (enabled) => {
-        const prev = get().graphAutoIndex;
-        set({ graphAutoIndex: enabled });
+      setRagAutoIndex: async (enabled) => {
+        const prev = get().ragAutoIndex;
+        set({ ragAutoIndex: enabled });
         try {
-          await updateSetting("graph_auto_index", enabled ? "true" : "false");
+          await updateSetting("rag_auto_index", enabled ? "true" : "false");
         } catch (err) {
-          console.error("Failed to update graph_auto_index setting:", err);
-          set({ graphAutoIndex: prev });
+          console.error("Failed to update rag_auto_index setting:", err);
+          set({ ragAutoIndex: prev });
           toast.error("Failed to update setting");
         }
+      },
+      setRagGenModel: async (model) => {
+        set({ ragGenModel: model });
+        await updateSetting("rag_gen_model", model).catch(() => {});
+      },
+      setCragEnabled: async (enabled) => {
+        set({ cragEnabled: enabled });
+        await updateSetting("crag_enabled", enabled ? "true" : "false").catch(() => {});
+      },
+      setCragUpperThreshold: async (value) => {
+        set({ cragUpperThreshold: value });
+        await updateSetting("crag_upper_threshold", String(value)).catch(() => {});
+      },
+      setCragLowerThreshold: async (value) => {
+        set({ cragLowerThreshold: value });
+        await updateSetting("crag_lower_threshold", String(value)).catch(() => {});
+      },
+      setRaptorEnabled: async (enabled) => {
+        set({ raptorEnabled: enabled });
+        await updateSetting("raptor_enabled", enabled ? "true" : "false").catch(() => {});
+      },
+      setRaptorTokenBudget: async (value) => {
+        set({ raptorTokenBudget: value });
+        await updateSetting("raptor_token_budget", String(value)).catch(() => {});
+      },
+      setRaptorRetrievalMode: async (mode) => {
+        set({ raptorRetrievalMode: mode });
+        await updateSetting("raptor_retrieval_mode", mode).catch(() => {});
       },
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
       loadFromBackend: async () => {
@@ -305,17 +361,28 @@ export const useSettingsStore = create<SettingsState>()(
           }
           // LLM settings
           const llmProvider = settings.find(s => s.key === "llm_provider");
-          if (llmProvider) set({ llmProvider: llmProvider.value });
+          let resolvedProvider = get().llmProvider;
+          if (llmProvider) {
+            // Migrate legacy "lmstudio" → "omlx" (persist to backend so Rust sees it too)
+            if (llmProvider.value === "lmstudio") {
+              resolvedProvider = "omlx";
+              set({ llmProvider: "omlx" });
+              // Persist migration to backend DB
+              updateSetting("llm_provider", "omlx").catch(() => {});
+            } else {
+              resolvedProvider = llmProvider.value;
+              set({ llmProvider: llmProvider.value });
+            }
+          }
 
           // Load per-provider API keys
-          const providerNames = ["openai", "anthropic", "gemini", "ollama", "ollama_cloud"];
+          const providerNames = ["openai", "anthropic", "gemini", "ollama", "ollama_cloud", "omlx"];
           const keys: Record<string, string> = { ...get().llmApiKeys };
           for (const p of providerNames) {
             const k = settings.find(s => s.key === `llm_api_key_${p}`);
             if (k) keys[p] = k.value;
           }
-          const activeProvider = llmProvider?.value || get().llmProvider;
-          set({ llmApiKeys: keys, llmApiKey: keys[activeProvider] || "" });
+          set({ llmApiKeys: keys, llmApiKey: keys[resolvedProvider] || "" });
 
           const llmModel = settings.find(s => s.key === "llm_model");
           if (llmModel) set({ llmModel: llmModel.value });
@@ -327,8 +394,26 @@ export const useSettingsStore = create<SettingsState>()(
           if (llmTokenBudget) set({ llmTokenBudget: parseInt(llmTokenBudget.value, 10) || 200000 });
           const llmContextWindow = settings.find(s => s.key === "llm_context_window");
           if (llmContextWindow) set({ llmContextWindow: parseInt(llmContextWindow.value, 10) || 0 });
-          const graphAutoIndex = settings.find(s => s.key === "graph_auto_index");
-          if (graphAutoIndex) set({ graphAutoIndex: graphAutoIndex.value !== "false" });
+          const aiAutoMeta = settings.find(s => s.key === "ai_auto_metadata");
+          if (aiAutoMeta) set({ aiAutoMetadata: aiAutoMeta.value === "true" });
+          const ragAutoIndex = settings.find(s => s.key === "rag_auto_index");
+          if (ragAutoIndex) set({ ragAutoIndex: ragAutoIndex.value !== "false" });
+
+          // RAG advanced settings
+          const ragGenModel = settings.find(s => s.key === "rag_gen_model");
+          if (ragGenModel) set({ ragGenModel: ragGenModel.value });
+          const cragEnabled = settings.find(s => s.key === "crag_enabled");
+          if (cragEnabled) set({ cragEnabled: cragEnabled.value === "true" });
+          const cragUpper = settings.find(s => s.key === "crag_upper_threshold");
+          if (cragUpper) set({ cragUpperThreshold: parseInt(cragUpper.value, 10) || 60 });
+          const cragLower = settings.find(s => s.key === "crag_lower_threshold");
+          if (cragLower) set({ cragLowerThreshold: parseInt(cragLower.value, 10) || 25 });
+          const raptorEnabled = settings.find(s => s.key === "raptor_enabled");
+          if (raptorEnabled) set({ raptorEnabled: raptorEnabled.value === "true" });
+          const raptorBudget = settings.find(s => s.key === "raptor_token_budget");
+          if (raptorBudget) set({ raptorTokenBudget: parseInt(raptorBudget.value, 10) || 2000 });
+          const raptorMode = settings.find(s => s.key === "raptor_retrieval_mode");
+          if (raptorMode) set({ raptorRetrievalMode: raptorMode.value });
         } catch (err) {
           console.error("Failed to load settings from backend:", err);
         }

@@ -4,6 +4,7 @@ use tantivy::{doc, IndexWriter, Term};
 use tracing::info;
 
 use super::extractor::{extract_text, ExtractionConfig, ExtractionMethod};
+use ferrules_core::FerrulesParser;
 use super::schema::SearchFields;
 
 /// Result of indexing an attachment
@@ -120,11 +121,12 @@ pub async fn index_attachment_content(
     fields: &SearchFields,
     attachment: &AttachmentData,
     config: &ExtractionConfig,
+    pdf_parser: Option<&FerrulesParser>,
 ) -> Result<IndexingResult> {
     let path = Path::new(&attachment.file_path);
 
     // Extract text content
-    let extraction = extract_text(path, config).await?;
+    let extraction = extract_text(path, config, pdf_parser).await?;
 
     if extraction.text.trim().is_empty() {
         info!(

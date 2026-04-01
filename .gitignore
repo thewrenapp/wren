@@ -32,3 +32,6 @@ src-tauri/target/
 .cache/
 *.tsbuildinfo
 **/*cache
+
+# Removed dependencies (kreuzberg OCR cache)
+src-tauri/.kreuzberg/

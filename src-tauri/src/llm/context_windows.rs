@@ -41,7 +41,7 @@ pub fn default_context(provider: &str, model: &str) -> ModelContext {
         "anthropic" => anthropic_context(model),
         "gemini" | "google" => gemini_context(model),
         "ollama" => ollama_context(model),
-        "lmstudio" => lmstudio_context(model),
+        "omlx" | "lmstudio" => omlx_context(model),
         "builtin" => 4_096,
         _ => 8_192, // conservative default for unknown providers
     };
@@ -94,9 +94,9 @@ fn ollama_context(_model: &str) -> usize {
     8_192
 }
 
-fn lmstudio_context(_model: &str) -> usize {
-    // LM Studio models typically have large context windows (32K-128K+).
-    // Users explicitly load models in LM Studio and can configure context there.
+fn omlx_context(_model: &str) -> usize {
+    // oMLX models typically have large context windows (32K-128K+).
+    // Users explicitly load models in oMLX and can configure context there.
     // Default to 32K which is safe for most modern models.
     32_768
 }

@@ -108,6 +108,7 @@ impl LlmProvider for GeminiProvider {
                 ModelInfo {
                     id,
                     name: display,
+                    model_type: None,
                 }
             })
             .collect();

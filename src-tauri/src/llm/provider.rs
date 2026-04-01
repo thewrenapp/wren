@@ -82,9 +82,13 @@ pub struct ToolCall {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
+    /// Model type: "llm", "embedding", "reranker", "vlm". Used by oMLX.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_type: Option<String>,
 }
 
 // ── Errors ──────────────────────────────────────────────────────────

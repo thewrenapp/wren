@@ -148,6 +148,25 @@ pub async fn delete_collection(state: State<'_, AppState>, id: i64) -> Result<()
         .await
         .map_err(|e| e.to_string())?;
 
+    // Clean up cross-doc RAPTOR summaries for this collection in background
+    {
+        let db = state.db.clone();
+        let library_path = state.library_path.clone();
+        let collection_id = id;
+        tokio::spawn(async move {
+            let lib_path = library_path.read().await;
+            let lance_path = lib_path.join(".wren").join("rag_vectors");
+            if let Ok(embed_config) = crate::rag::embeddings::resolve_embedding_config(&db).await {
+                let dim = crate::rag::embeddings::known_dimension(&embed_config.provider_type, &embed_config.model).unwrap_or(1536);
+                if let Ok(store) = crate::rag::store::VectorStore::new(&lance_path, dim).await {
+                    let scope_id = format!("collection_{}", collection_id);
+                    let _ = store.delete_document(&scope_id).await;
+                    tracing::info!("Cleaned up cross-doc RAPTOR for deleted collection {}", collection_id);
+                }
+            }
+        });
+    }
+
     Ok(())
 }
 
@@ -170,6 +189,10 @@ pub async fn add_item_to_collection(
     .await
     .map_err(|e| e.to_string())?;
 
+    crate::commands::rag::spawn_collection_raptor_rebuild(
+        state.db.clone(), state.library_path.clone(), collection_id,
+    );
+
     Ok(())
 }
 
@@ -185,6 +208,10 @@ pub async fn remove_item_from_collection(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    crate::commands::rag::spawn_collection_raptor_rebuild(
+        state.db.clone(), state.library_path.clone(), collection_id,
+    );
 
     Ok(())
 }
@@ -240,15 +267,20 @@ pub async fn merge_collections(
             .map_err(|e| e.to_string())?;
     }
 
-    // Delete source collections
+    // Delete source collections and their cross-doc RAPTOR summaries
     let merged_count = source_ids.len() as u32;
-    for source_id in source_ids {
+    for source_id in &source_ids {
         sqlx::query("DELETE FROM collections WHERE id = ?")
             .bind(source_id)
             .execute(&state.db)
             .await
             .map_err(|e| e.to_string())?;
     }
+
+    // Rebuild cross-doc RAPTOR for the target (merged) collection
+    crate::commands::rag::spawn_collection_raptor_rebuild(
+        state.db.clone(), state.library_path.clone(), target_id,
+    );
 
     Ok(merged_count)
 }

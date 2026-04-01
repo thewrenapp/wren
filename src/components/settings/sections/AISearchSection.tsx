@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useSettingsStore, LLM_PROVIDER_DEFAULTS } from "@/stores/settingsStore";
 import { useJobStore } from "@/stores/jobStore";
 import { toast } from "@/stores/toastStore";
-import { listLlmModels, validateLlmConfig, graphStatus, graphIndexAll, graphAutoRelate, graphRebuild, graphReembed, type LlmModelInfo, type GraphStatus } from "@/services/tauri/commands";
+import { listLlmModels, validateLlmConfig, ragStatus, ragIndexAll, ragRebuild, type LlmModelInfo, type RagStatus } from "@/services/tauri/commands";
 import { Loader2, CheckCircle2, XCircle, Eye, EyeOff, Network, AlertTriangle } from "lucide-react";
 
 const PROVIDER_OPTIONS = [
@@ -13,7 +13,7 @@ const PROVIDER_OPTIONS = [
   { value: "gemini", label: "Google Gemini" },
   { value: "ollama_cloud", label: "Ollama Cloud" },
   { value: "ollama", label: "Ollama (local)" },
-  { value: "lmstudio", label: "LM Studio (local)" },
+  { value: "omlx", label: "oMLX" },
 ] as const;
 
 const API_KEY_PLACEHOLDERS: Record<string, string> = {
@@ -45,7 +45,7 @@ function isAutoDisabledReasoning(provider: string, modelId: string): boolean {
   if (provider === "gemini" && m.includes("gemini-2.5")) return true;
   // Gemini 3 Flash: thinking set to "minimal" (mostly suppressed)
   if (provider === "gemini" && m.includes("gemini-3") && m.includes("flash")) return true;
-  if ((provider === "ollama" || provider === "ollama_cloud" || provider === "lmstudio") && (m.includes("qwen3") || m.includes("qwen-3") || m.includes("deepseek-r1") || m.includes("deepseek-v3.1") || m.includes("qwq") || m.includes("glm-4") || m.includes("gpt-oss") || m.includes("magistral") || m.includes("nemotron"))) return true;
+  if ((provider === "ollama" || provider === "ollama_cloud" || provider === "omlx") && (m.includes("qwen3") || m.includes("qwen-3") || m.includes("deepseek-r1") || m.includes("deepseek-v3.1") || m.includes("qwq") || m.includes("glm-4") || m.includes("gpt-oss") || m.includes("magistral") || m.includes("nemotron"))) return true;
   return false;
 }
 
@@ -71,10 +71,7 @@ const CLOUD_EMBEDDING_MODELS: Record<string, { id: string; name: string }[]> = {
     { id: "all-minilm", name: "all-minilm (384d)" },
     { id: "snowflake-arctic-embed", name: "snowflake-arctic-embed (1024d)" },
   ],
-  lmstudio: [
-    { id: "nomic-embed-text-v1.5-GGUF", name: "nomic-embed-text v1.5 (768d)" },
-    { id: "text-embedding-bge-m3-GGUF", name: "BGE-M3 (1024d)" },
-  ],
+  omlx: [], // oMLX embedding models fetched dynamically from API (filter by modelType === "embedding")
 };
 
 /** Fallback defaults shown before the API model list loads. */
@@ -95,21 +92,13 @@ const DEFAULT_MODELS: Record<string, { id: string; name: string }[]> = {
   ],
   ollama: [],
   ollama_cloud: [],
-  lmstudio: [],
+  omlx: [],
 };
 
 export function AISearchSection() {
   const {
-    embeddingModel,
-    setEmbeddingModel,
-    embeddingSource,
-    setEmbeddingSource,
     cloudEmbeddingModel,
     setCloudEmbeddingModel,
-    enableOcr,
-    setEnableOcr,
-    forceOcr,
-    setForceOcr,
     llmProvider,
     setLlmProvider,
     llmApiKey,
@@ -120,12 +109,28 @@ export function AISearchSection() {
     setLlmBaseUrl,
     llmAutoParseOnImport,
     setLlmAutoParseOnImport,
+    aiAutoMetadata,
+    setAiAutoMetadata,
     llmTokenBudget,
     setLlmTokenBudget,
     llmContextWindow,
     setLlmContextWindow,
-    graphAutoIndex,
-    setGraphAutoIndex,
+    ragAutoIndex,
+    setRagAutoIndex,
+    ragGenModel,
+    setRagGenModel,
+    cragEnabled,
+    setCragEnabled,
+    cragUpperThreshold,
+    setCragUpperThreshold,
+    cragLowerThreshold,
+    setCragLowerThreshold,
+    raptorEnabled,
+    setRaptorEnabled,
+    raptorTokenBudget,
+    setRaptorTokenBudget,
+    raptorRetrievalMode,
+    setRaptorRetrievalMode,
   } = useSettingsStore();
 
   const hasActiveReindex = useJobStore((s) =>
@@ -143,65 +148,64 @@ export function AISearchSection() {
   const [models, setModels] = useState<LlmModelInfo[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
 
-  // Knowledge graph status
-  const [graphStat, setGraphStat] = useState<GraphStatus | null>(null);
+  // Auto-load models for oMLX (embedding/reranker dropdowns need them).
+  // Retriggers when provider changes, API key changes, or test succeeds.
+  useEffect(() => {
+    if (llmProvider === "omlx") {
+      listLlmModels().then(setModels).catch(() => {});
+    }
+  }, [llmProvider, llmApiKey, testResult]);
+
+  // RAG index status
+  const [ragStat, setGraphStat] = useState<RagStatus | null>(null);
 
   const hasActiveGraphJob = useJobStore((s) =>
     s.jobs.some(
       (j) =>
-        (j.jobType === "graph_index_all" || j.jobType === "graph_relate") &&
+        (j.jobType === "rag_index_all" || j.jobType === "rag_index") &&
         (j.status === "pending" || j.status === "running")
     )
   );
 
-  const loadGraphStatus = useCallback(async () => {
+  const loadRagStatus = useCallback(async () => {
     try {
-      const status = await graphStatus();
+      const status = await ragStatus();
       setGraphStat(status);
     } catch (err) {
-      console.error("Failed to load graph status:", err);
+      console.error("Failed to load RAG status:", err);
     }
   }, []);
 
   useEffect(() => {
-    loadGraphStatus();
-  }, [loadGraphStatus]);
+    loadRagStatus();
+  }, [loadRagStatus]);
 
-  // Refresh graph status when graph jobs finish
+  // Refresh RAG status when RAG jobs finish
   useEffect(() => {
     if (!hasActiveGraphJob) {
-      loadGraphStatus();
+      loadRagStatus();
     }
-  }, [hasActiveGraphJob, loadGraphStatus]);
+  }, [hasActiveGraphJob, loadRagStatus]);
 
   const handleBuildGraph = async () => {
     try {
-      await graphIndexAll();
-      toast.info("Knowledge graph build started in background");
+      await ragIndexAll();
+      toast.info("RAG index build started in background");
     } catch (err) {
-      toast.error(`Failed to start graph build: ${err}`);
+      toast.error(`Failed to start RAG build: ${err}`);
     }
   };
 
   const handleRebuildGraph = async () => {
     if (!window.confirm(
-      "This will delete all existing knowledge graph data (entities, claims, vectors) and rebuild from scratch.\n\nThis is needed when the embedding model changes. Continue?"
+      "This will delete all existing RAG index data (chunks, vectors) and rebuild from scratch.\n\nThis is needed when the embedding model changes. Continue?"
     )) return;
     try {
-      await graphRebuild();
-      toast.info("Knowledge graph cleared — rebuilding in background");
-      loadGraphStatus();
+      await ragRebuild();
+      toast.info("RAG index cleared — rebuilding in background");
+      loadRagStatus();
     } catch (err) {
-      toast.error(`Failed to rebuild graph: ${err}`);
-    }
-  };
-
-  const handleFindRelated = async () => {
-    try {
-      await graphAutoRelate();
-      toast.info("Finding related papers in background");
-    } catch (err) {
-      toast.error(`Failed to start auto-relate: ${err}`);
+      toast.error(`Failed to rebuild RAG index: ${err}`);
     }
   };
 
@@ -220,7 +224,7 @@ export function AISearchSection() {
     try {
       await useJobStore.getState().enqueueJob(
         "reindex_library",
-        { enableOcr, forceOcr },
+        {},
         { title: "Reindex Library" }
       );
       toast.info("Library reindex started in background");
@@ -277,9 +281,9 @@ export function AISearchSection() {
     );
     if (rebuild) {
       try {
-        await graphReembed();
-        toast.info("Re-embedding knowledge graph with new model...");
-        loadGraphStatus();
+        await ragRebuild();
+        toast.info("Re-embedding RAG index with new model...");
+        loadRagStatus();
       } catch (err) {
         toast.error(`Failed to re-embed: ${err}`);
       }
@@ -288,25 +292,9 @@ export function AISearchSection() {
     }
   };
 
-  const handleEmbeddingModelChange = (newModel: string) => {
-    const hasExistingGraph = graphStat && graphStat.chunkCount > 0;
-    setEmbeddingModel(newModel);
-    if (hasExistingGraph) {
-      triggerEmbeddingRebuild();
-    }
-  };
-
   const handleCloudEmbeddingModelChange = (newModel: string) => {
-    const hasExistingGraph = graphStat && graphStat.chunkCount > 0;
+    const hasExistingGraph = ragStat && ragStat.totalChunks > 0;
     setCloudEmbeddingModel(newModel);
-    if (hasExistingGraph) {
-      triggerEmbeddingRebuild();
-    }
-  };
-
-  const handleEmbeddingSourceChange = (newSource: "local" | "cloud") => {
-    const hasExistingGraph = graphStat && graphStat.chunkCount > 0;
-    setEmbeddingSource(newSource);
     if (hasExistingGraph) {
       triggerEmbeddingRebuild();
     }
@@ -320,7 +308,7 @@ export function AISearchSection() {
           AI Provider
         </h3>
         <p className="text-xs text-muted-foreground">
-          Configure your LLM provider. This connection is used for document parsing, knowledge extraction, and cloud embeddings.
+          Configure your LLM provider. Used for document parsing, RAG generation, and embeddings.
         </p>
 
         <div className="space-y-4">
@@ -404,7 +392,7 @@ export function AISearchSection() {
               </Button>
               {testResult === "error" && (
                 <span className="text-xs text-muted-foreground">
-                  Make sure {llmProvider === "lmstudio" ? "LM Studio" : "Ollama"} is running
+                  Make sure {llmProvider === "omlx" ? "oMLX" : "Ollama"} is running
                 </span>
               )}
             </div>
@@ -463,6 +451,7 @@ export function AISearchSection() {
                 )}
                 {models
                   .filter((m) => !defaultModelIds.includes(m.id))
+                  .filter((m) => !m.modelType || m.modelType === "llm" || m.modelType === "vlm")
                   .map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.name}
@@ -541,6 +530,22 @@ export function AISearchSection() {
             </div>
           </div>
 
+          {/* Auto-extract metadata */}
+          <label className={`flex items-center gap-3 cursor-pointer ${!isConfigured ? "opacity-50 pointer-events-none" : ""}`}>
+            <Checkbox
+              checked={aiAutoMetadata}
+              disabled={!isConfigured}
+              onCheckedChange={(checked) => setAiAutoMetadata(checked === true)}
+            />
+            <div>
+              <span className="text-sm">Extract metadata with AI after PDF import</span>
+              <p className="text-xs text-muted-foreground">
+                Uses AI to extract title, authors, year, abstract from imported PDFs.
+                Not needed for BibTeX imports which already have metadata.
+              </p>
+            </div>
+          </label>
+
           {/* Auto-parse */}
           <label className={`flex items-center gap-3 cursor-pointer ${!isConfigured ? "opacity-50 pointer-events-none" : ""}`}>
             <Checkbox
@@ -559,253 +564,277 @@ export function AISearchSection() {
         </div>
       </section>
 
-      {/* ── Section 3: Knowledge Graph ─────────────────────────────── */}
-      <section className="space-y-4">
+
+      {/* ── Section 3: Documents & RAG ─────────────────────────────── */}
+      <section className="space-y-5">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          Knowledge Graph
+          Documents & RAG
         </h3>
         <p className="text-xs text-muted-foreground">
-          Extract entities, claims, and relationships from parsed documents using
-          {" "}<strong>{providerLabel} / {llmModel || "—"}</strong>.
-          {" "}Enables concept-based search and automatic paper linking.
+          Configure embedding, retrieval strategies, reranking, and hierarchical indexing for document search.
         </p>
 
         {!isConfigured && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground rounded-md border bg-muted/30 px-3 py-2">
             <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-            Configure an AI provider above to enable knowledge graph features.
+            Configure an AI provider above to enable RAG features.
           </div>
         )}
 
-        {/* Status */}
-        {graphStat && isConfigured && (
+        {isConfigured && (<>
+
+        {/* Embedding Model */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Embedding Model <span className="text-destructive">*</span></label>
+          <p className="text-xs text-muted-foreground">
+            Required. Vectorizes document chunks and search queries for similarity search.
+          </p>
+          {llmProvider === "anthropic" ? (
+            <p className="text-xs text-yellow-600 dark:text-yellow-400 p-2 rounded-md bg-yellow-500/10 border border-yellow-500/20">
+              Anthropic does not offer embedding models. Use oMLX or another provider for embeddings.
+            </p>
+          ) : (
+            <select
+              value={cloudEmbeddingModel}
+              onChange={(e) => handleCloudEmbeddingModelChange(e.target.value)}
+              className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            >
+              {llmProvider === "omlx" ? (
+                <>
+                  {models.filter(m => m.modelType === "embedding").map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                  {models.filter(m => m.modelType === "embedding").length === 0 && (
+                    <option value="" disabled>No embedding models loaded in oMLX</option>
+                  )}
+                </>
+              ) : (
+                (CLOUD_EMBEDDING_MODELS[llmProvider] ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))
+              )}
+              {cloudEmbeddingModel &&
+                !(llmProvider === "omlx"
+                  ? models.some(m => m.id === cloudEmbeddingModel)
+                  : (CLOUD_EMBEDDING_MODELS[llmProvider] ?? []).some(m => m.id === cloudEmbeddingModel)
+                ) && (
+                <option value={cloudEmbeddingModel}>{cloudEmbeddingModel}</option>
+              )}
+            </select>
+          )}
+        </div>
+
+        {/* RAG Generation Model */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">
+            RAG Generation Model <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            LLM for HyDE hypothetical answer generation, step-back query expansion, and CRAG evaluation.
+            Use a cheap/fast model. Without this, only basic semantic search is available.
+          </p>
+          <select
+            value={ragGenModel || ""}
+            onChange={(e) => setRagGenModel(e.target.value)}
+            className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+          >
+            <option value="">Same as AI parsing model ({llmModel || "none"})</option>
+            {models
+              .filter((m) => !m.modelType || m.modelType === "llm" || m.modelType === "vlm")
+              .map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+          </select>
+        </div>
+
+        {/* Reranker Model */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">
+            Reranker Model <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Cross-encoder for relevance scoring. Without this, results ranked by vector similarity only.
+          </p>
+          {llmProvider === "omlx" ? (
+            <select
+              defaultValue=""
+              onChange={async (e) => {
+                const model = e.target.value;
+                const { updateSetting } = await import("@/services/tauri/commands");
+                await updateSetting("reranker_provider", model ? "omlx" : "");
+                await updateSetting("reranker_model", model);
+              }}
+              className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            >
+              <option value="">None (vector similarity only)</option>
+              {models.filter(m => m.modelType === "reranker").map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">
+              Reranker models available with oMLX. Local Jina/Cohere reranker models can be loaded in oMLX.
+            </p>
+          )}
+        </div>
+
+        {/* CRAG (Corrective RAG) */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">
+            Corrective RAG (CRAG) <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Post-retrieval LLM evaluation. Scores relevance and rewrites query if results are poor. Requires a RAG gen model.
+          </p>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={cragEnabled}
+              onCheckedChange={(checked) => setCragEnabled(checked === true)}
+            />
+            <span className="text-sm">Enable CRAG evaluation</span>
+          </label>
+          {cragEnabled && (
+            <div className="space-y-3 pl-6">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">
+                  Upper threshold (Correct): {cragUpperThreshold}
+                </label>
+                <p className="text-[10px] text-muted-foreground/70">Score above this = results are relevant.</p>
+                <input type="range" min={10} max={90} step={5}
+                  value={cragUpperThreshold}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setCragUpperThreshold(val);
+                    if (cragLowerThreshold >= val) setCragLowerThreshold(Math.max(5, val - 5));
+                  }}
+                  className="w-full"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">
+                  Lower threshold (Rewrite): {cragLowerThreshold}
+                </label>
+                <p className="text-[10px] text-muted-foreground/70">Score below this = attempt query rewrite.</p>
+                <input type="range" min={5} max={50} step={5}
+                  value={cragLowerThreshold}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setCragLowerThreshold(val);
+                    if (cragUpperThreshold <= val) setCragUpperThreshold(Math.min(90, val + 5));
+                  }}
+                  className="w-full"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* RAPTOR (Hierarchical Indexing) */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">
+            Hierarchical Indexing (RAPTOR) <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Builds multi-level summary trees during indexing. Improves broad queries
+            (&ldquo;what is this about?&rdquo;) by searching summaries at different abstraction levels.
+            Requires a RAG gen model. Increases indexing time.
+          </p>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={raptorEnabled}
+              onCheckedChange={(checked) => setRaptorEnabled(checked === true)}
+            />
+            <span className="text-sm">Enable RAPTOR indexing</span>
+          </label>
+          {raptorEnabled && !ragGenModel && !llmModel && (
+            <p className="text-xs text-yellow-600 dark:text-yellow-400">
+              RAPTOR requires a RAG gen model for summarization. Configure one above.
+            </p>
+          )}
+          {raptorEnabled && (
+            <div className="space-y-3 pl-6">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">
+                  Retrieval token budget: {raptorTokenBudget.toLocaleString()} tokens
+                </label>
+                <input type="range" min={500} max={4000} step={100}
+                  value={raptorTokenBudget}
+                  onChange={(e) => setRaptorTokenBudget(Number(e.target.value))}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>500</span>
+                  <span>4000</span>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Retrieval mode</label>
+                <select
+                  value={raptorRetrievalMode}
+                  onChange={(e) => setRaptorRetrievalMode(e.target.value)}
+                  className="w-full px-3 py-1.5 text-sm border rounded-md bg-background"
+                >
+                  <option value="collapsed">Collapsed Tree (flat ranking)</option>
+                  <option value="tree_traversal">Tree Traversal (top-down)</option>
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Index Status & Actions */}
+        {ragStat && (
           <div className="rounded-md border bg-muted/30 p-3 space-y-2">
             <div className="flex items-center gap-2">
               <Network className="h-4 w-4 text-muted-foreground" />
               <span className="text-sm font-medium">
-                {graphStat.papersIndexed} of {graphStat.totalParseable} documents indexed
+                {ragStat.entriesIndexed} of {ragStat.totalParseable} documents indexed
               </span>
             </div>
-            {graphStat.totalParseable > 0 && (
+            {ragStat.totalParseable > 0 && (
               <div className="w-full bg-muted rounded-full h-1.5">
-                <div
-                  className="bg-primary h-1.5 rounded-full transition-all"
-                  style={{
-                    width: `${Math.round((graphStat.papersIndexed / graphStat.totalParseable) * 100)}%`,
-                  }}
+                <div className="bg-primary h-1.5 rounded-full transition-all"
+                  style={{ width: `${Math.round((ragStat.entriesIndexed / ragStat.totalParseable) * 100)}%` }}
                 />
               </div>
             )}
-            <div className="flex gap-4 text-xs text-muted-foreground">
-              <span>{graphStat.entityCount} entities</span>
-              <span>{graphStat.claimCount} claims</span>
-              <span>{graphStat.chunkCount} chunks</span>
-            </div>
           </div>
         )}
 
-        {/* Actions */}
-        {isConfigured && (
-          <>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleBuildGraph}
-                disabled={hasActiveGraphJob}
-              >
-                {hasActiveGraphJob && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Build Knowledge Graph
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleFindRelated}
-                disabled={hasActiveGraphJob || !graphStat?.papersIndexed}
-              >
-                Find Related Papers
-              </Button>
-              {graphStat && graphStat.papersIndexed > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleRebuildGraph}
-                  disabled={hasActiveGraphJob}
-                  className="text-destructive hover:text-destructive"
-                >
-                  Rebuild
-                </Button>
-              )}
-            </div>
-            {hasActiveGraphJob && (
-              <p className="text-xs text-muted-foreground">
-                Running in background — check the task tracker for progress
-              </p>
-            )}
-
-            {/* Auto-index toggle */}
-            <label className="flex items-center gap-3 cursor-pointer">
-              <Checkbox
-                checked={graphAutoIndex}
-                onCheckedChange={(checked) => setGraphAutoIndex(checked === true)}
-              />
-              <div>
-                <span className="text-sm">Auto-index after AI parsing</span>
-                <p className="text-xs text-muted-foreground">
-                  Automatically add documents to the knowledge graph after AI structuring completes.
-                </p>
-              </div>
-            </label>
-          </>
-        )}
-      </section>
-
-      {/* ── Section 4: Semantic Search / Embeddings ────────────────── */}
-      <section className="space-y-4">
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          Semantic Search
-        </h3>
-        <p className="text-xs text-muted-foreground">
-          Embedding model used for vector search across entities and document chunks.
-        </p>
-
-        <div className="space-y-3">
-          {/* Embedding source toggle */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Embedding Source</label>
-            <select
-              value={embeddingSource}
-              onChange={(e) => handleEmbeddingSourceChange(e.target.value as "local" | "cloud")}
-              className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-            >
-              <option value="local">Local (fastembed, runs on your machine)</option>
-              <option value="cloud">Cloud (use {providerLabel}&apos;s embedding API)</option>
-            </select>
-          </div>
-
-          {/* Local embedding model selector */}
-          {embeddingSource === "local" && (
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Local Embedding Model</label>
-              <select
-                value={embeddingModel}
-                onChange={(e) => handleEmbeddingModelChange(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-              >
-                <optgroup label="English — Fast">
-                  <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2 (384d, fastest)</option>
-                  <option value="all-MiniLM-L12-v2">all-MiniLM-L12-v2 (384d, balanced)</option>
-                  <option value="snowflake-arctic-embed-xs">Snowflake Arctic Embed XS (384d, fast)</option>
-                </optgroup>
-                <optgroup label="English — Quality">
-                  <option value="bge-small-en-v1.5">BGE Small EN v1.5 (384d)</option>
-                  <option value="bge-base-en-v1.5">BGE Base EN v1.5 (768d)</option>
-                  <option value="bge-large-en-v1.5">BGE Large EN v1.5 (1024d)</option>
-                  <option value="gte-base-en-v1.5">GTE Base EN v1.5 (768d)</option>
-                  <option value="gte-large-en-v1.5">GTE Large EN v1.5 (1024d)</option>
-                  <option value="snowflake-arctic-embed-m">Snowflake Arctic Embed M (768d)</option>
-                  <option value="snowflake-arctic-embed-l">Snowflake Arctic Embed L (1024d, best)</option>
-                  <option value="mxbai-embed-large-v1">Mxbai Embed Large v1 (1024d)</option>
-                </optgroup>
-                <optgroup label="English — Long Context">
-                  <option value="nomic-embed-text-v1.5">Nomic Embed Text v1.5 (768d, 8K ctx)</option>
-                  <option value="jina-embeddings-v2-base-en">Jina Embeddings v2 Base EN (768d, 8K ctx)</option>
-                  <option value="snowflake-arctic-embed-m-long">Snowflake Arctic Embed M Long (768d, 2K ctx)</option>
-                </optgroup>
-                <optgroup label="Multilingual">
-                  <option value="bge-m3">BGE-M3 (1024d, 100+ languages, 8K ctx)</option>
-                  <option value="multilingual-e5-small">Multilingual E5 Small (384d)</option>
-                  <option value="multilingual-e5-base">Multilingual E5 Base (768d)</option>
-                  <option value="multilingual-e5-large">Multilingual E5 Large (1024d)</option>
-                  <option value="paraphrase-ml-minilm-l12-v2">Paraphrase ML MiniLM L12 v2 (384d)</option>
-                </optgroup>
-                <optgroup label="Code">
-                  <option value="jina-embeddings-v2-base-code">Jina Embeddings v2 Base Code (768d)</option>
-                </optgroup>
-              </select>
-              <p className="text-xs text-muted-foreground">
-                Downloads the model on first use (~25-90 MB). Changing models requires rebuilding the knowledge graph.
-              </p>
-            </div>
-          )}
-
-          {/* Cloud embedding model selector */}
-          {embeddingSource === "cloud" && (
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Cloud Embedding Model</label>
-              {llmProvider === "anthropic" ? (
-                <p className="text-xs text-yellow-600 dark:text-yellow-400 p-2 rounded-md bg-yellow-500/10 border border-yellow-500/20">
-                  Anthropic does not offer embedding models. Switch to a different provider above,
-                  or use local embeddings instead.
-                </p>
-              ) : (
-                <>
-                  <select
-                    value={cloudEmbeddingModel}
-                    onChange={(e) => handleCloudEmbeddingModelChange(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                  >
-                    {(CLOUD_EMBEDDING_MODELS[llmProvider] ?? []).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                    {/* Show saved model if not in the preset list */}
-                    {cloudEmbeddingModel &&
-                      !(CLOUD_EMBEDDING_MODELS[llmProvider] ?? []).some((m) => m.id === cloudEmbeddingModel) && (
-                      <option value={cloudEmbeddingModel}>{cloudEmbeddingModel}</option>
-                    )}
-                  </select>
-                  <p className="text-xs text-muted-foreground">
-                    Uses the API key and endpoint from {providerLabel} above.
-                    {(llmProvider === "ollama" || llmProvider === "lmstudio") &&
-                      " Make sure the embedding model is pulled/downloaded in your local server."}
-                    {" "}Changing models requires rebuilding the knowledge graph.
-                  </p>
-                </>
-              )}
-            </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleBuildGraph} disabled={hasActiveGraphJob}>
+            {hasActiveGraphJob && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Build Semantic Index
+          </Button>
+          {ragStat && ragStat.entriesIndexed > 0 && (
+            <Button variant="outline" size="sm" onClick={handleRebuildGraph} disabled={hasActiveGraphJob}
+              className="text-destructive hover:text-destructive">
+              Rebuild Semantic Index
+            </Button>
           )}
         </div>
-      </section>
 
+        <label className="flex items-center gap-3 cursor-pointer">
+          <Checkbox checked={ragAutoIndex} onCheckedChange={(checked) => setRagAutoIndex(checked === true)} />
+          <div>
+            <span className="text-sm">Auto-index after text extraction</span>
+            <p className="text-xs text-muted-foreground">
+              Automatically chunk and embed documents into the RAG index after import.
+            </p>
+          </div>
+        </label>
+
+        </>)}
+      </section>
       {/* ── Section 5: Document Extraction ─────────────────────────── */}
       <section className="space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
           Document Extraction
         </h3>
         <p className="text-xs text-muted-foreground">
-          Text is extracted from PDFs, EPUB, HTML, images, and other document formats using kreuzberg.
+          PDFs are parsed with ferrules (deep learning layout analysis + automatic OCR + table detection).
+          OCR runs automatically when scanned pages are detected. Other formats (EPUB, HTML, DOCX) use format-specific parsers.
         </p>
-
-        <label className="flex items-center gap-3 cursor-pointer">
-          <Checkbox
-            checked={enableOcr}
-            onCheckedChange={(checked) => setEnableOcr(checked === true)}
-          />
-          <div>
-            <span className="text-sm">Enable OCR for scanned documents</span>
-            <p className="text-xs text-muted-foreground">
-              Uses Tesseract OCR (bundled) to extract text from scanned PDFs and images.
-              Disable for faster indexing if you only have text-based documents.
-            </p>
-          </div>
-        </label>
-
-        <label className={`flex items-center gap-3 cursor-pointer ${!enableOcr ? 'opacity-50 pointer-events-none' : ''}`}>
-          <Checkbox
-            checked={forceOcr}
-            disabled={!enableOcr}
-            onCheckedChange={(checked) => setForceOcr(checked === true)}
-          />
-          <div>
-            <span className="text-sm">Force OCR for all documents</span>
-            <p className="text-xs text-muted-foreground">
-              Always run OCR, even for PDFs that have a text layer. Use this if you have
-              scanned PDFs with incomplete or low-quality embedded text.
-            </p>
-          </div>
-        </label>
       </section>
 
       {/* ── Section 6: Full-text Search Index ──────────────────────── */}
@@ -837,7 +866,7 @@ export function AISearchSection() {
               {hasActiveReindex && (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               )}
-              Rebuild Search Index
+              Re-extract & Index Library
             </Button>
             {hasActiveReindex && (
               <span className="text-xs text-muted-foreground">
@@ -847,8 +876,8 @@ export function AISearchSection() {
           </div>
           {!hasActiveReindex && (
             <p className="text-xs text-muted-foreground">
-              Recreates the full-text search index from scratch. Also extracts and saves
-              markdown versions of all documents. Runs as a background task.
+              Re-runs text extraction (ferrules) on all documents, rebuilds full-text search,
+              and rebuilds semantic index. Use when documents or extraction settings change.
             </p>
           )}
         </div>

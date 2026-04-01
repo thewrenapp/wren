@@ -73,7 +73,6 @@ import {
   Highlighter,
   MessageCircle,
   Paperclip,
-  Scale,
 } from "lucide-react";
 import { sidebarIcons } from "@/lib/icons";
 import { IconTagOff } from "@tabler/icons-react";
@@ -125,16 +124,15 @@ import {
   getEntryAttachments,
   fullTextSearch,
   parseEntries,
-  graphConceptSearch,
-  graphIndexAll,
-  graphAutoRelate,
-  graphRebuild,
+  ragSearch,
+  ragIndexAll,
+  ragRebuild,
   type ExportOptions,
   type BiblatexPreviewResult,
   type Attachment,
   type EntrySummary,
   type FullSearchResult,
-  type ConceptSearchResult,
+  type RagSearchResult,
 } from "@/services/tauri";
 import { useSchemaStore } from "@/stores/schemaStore";
 import { ExportOptionsDialog } from "@/components/dialogs/ExportOptionsDialog";
@@ -343,7 +341,8 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
 
   const [searchResults, setSearchResults] = useState<EntrySummary[]>([]);
   const [fullSearchResults, setFullSearchResults] = useState<FullSearchResult[]>([]);
-  const [semanticResults, setSemanticResults] = useState<ConceptSearchResult[]>([]);
+  const [semanticResults, setSemanticResults] = useState<RagSearchResult[]>([]);
+  const [searchPipeline, setSearchPipeline] = useState<{ strategy: string; reranked: boolean; cragActive: boolean; raptorActive: boolean; queryTimeMs: number } | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchOffset, setSearchOffset] = useState(0);
@@ -374,12 +373,14 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     searchTimeoutRef.current = window.setTimeout(async () => {
       try {
         if (searchMode === "semantic") {
-          // Semantic / concept search via knowledge graph
-          const results = await graphConceptSearch(search.trim(), 20);
-          setSemanticResults(results);
+          // Semantic / concept search via RAG index
+          setSearchPipeline(null);
+          const response = await ragSearch(search.trim(), 20);
+          setSemanticResults(response.results);
+          setSearchPipeline({ strategy: response.strategy, reranked: response.reranked, cragActive: response.cragActive, raptorActive: response.raptorActive, queryTimeMs: response.queryTimeMs });
           setSearchResults([]);
           setFullSearchResults([]);
-          setSearchTotal(results.length);
+          setSearchTotal(response.totalResults);
           setHasMoreResults(false);
         } else if (searchMode === "full") {
           // Full text search (searches inside PDF content, notes, etc.)
@@ -430,7 +431,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       } finally {
         setIsSearching(false);
       }
-    }, 150);
+    }, searchMode === "semantic" ? 600 : 150);
   }, [search, searchMode, quickScope]);
 
   useEffect(() => {
@@ -2319,7 +2320,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       {/* Backdrop with blur */}
       <div
         className="absolute inset-0 bg-background/80 backdrop-blur-sm"
-        onClick={() => setCommandPaletteOpen(false)}
+        onClick={() => { if (!isSearching) setCommandPaletteOpen(false); }}
       />
 
       {/* Dialog */}
@@ -2339,7 +2340,11 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
         >
           {/* Search input */}
           <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
-            <Search className="h-5 w-5 text-primary shrink-0" />
+            {isSearching && searchMode === "semantic" ? (
+              <Loader2 className="h-5 w-5 text-primary shrink-0 animate-spin" />
+            ) : (
+              <Search className="h-5 w-5 text-primary shrink-0" />
+            )}
             <Command.Input
               value={search}
               onValueChange={setSearch}
@@ -2440,7 +2445,16 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
             <Command.Empty className="py-12 text-center">
               <Search className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
               {isSearching ? (
-                <p className="text-sm text-muted-foreground">Searching…</p>
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">
+                    {searchMode === "semantic" ? "Running semantic search…" : "Searching…"}
+                  </p>
+                  {searchMode === "semantic" && (
+                    <p className="text-[10px] text-muted-foreground/50">
+                      Embedding query → vector search → reranking → evaluating relevance
+                    </p>
+                  )}
+                </div>
               ) : searchError ? (
                 <>
                   <p className="text-sm text-destructive">{searchError}</p>
@@ -2566,25 +2580,36 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
               </Command.Group>
             )}
 
-            {/* Semantic search results (concept search via knowledge graph) */}
+            {/* Semantic search results (concept search via RAG index) */}
             {semanticResults.length > 0 && (
               <Command.Group>
-                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
-                  Concept Matches ({semanticResults.length})
+                <div className="px-2 py-1.5 space-y-0.5">
+                  <div className="text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                    Semantic Results ({semanticResults.length})
+                  </div>
+                  {searchPipeline && (
+                    <div className="flex gap-2 text-[10px] text-muted-foreground/50">
+                      <span>{searchPipeline.strategy === "auto" ? "auto" : searchPipeline.strategy}</span>
+                      {searchPipeline.raptorActive && <span>+ RAPTOR</span>}
+                      {searchPipeline.reranked && <span>+ reranked</span>}
+                      {searchPipeline.cragActive && <span>+ CRAG</span>}
+                      <span>{searchPipeline.queryTimeMs}ms</span>
+                    </div>
+                  )}
                 </div>
-                {semanticResults.map((result) => (
+                {semanticResults.map((result, idx) => (
                   <Command.Item
-                    key={`semantic-${result.entryId}`}
-                    value={`${result.title} ${result.matchedConcepts.map(c => c.name).join(" ")}`}
+                    key={`semantic-${result.chunkId}-${idx}`}
+                    value={`${result.entryTitle || result.filename} ${result.content.slice(0, 100)}`}
 
                     onSelect={() =>
-                      handleSelect(() =>
+                      result.entryId ? handleSelect(() =>
                         openTab({
                           type: "entry",
-                          title: result.title || "Untitled",
+                          title: result.entryTitle || "Untitled",
                           entryId: String(result.entryId),
                         })
-                      )
+                      ) : undefined
                     }
                     className="flex items-start gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
                   >
@@ -2592,32 +2617,11 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                       <Sparkles className="h-4 w-4 text-violet-500" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium truncate">{result.title || "Untitled"}</span>
-                      {result.creators && (
-                        <span className="text-xs text-muted-foreground">{result.creators}</span>
+                      <span className="block text-sm font-medium truncate">{result.entryTitle || result.filename || "Untitled"}</span>
+                      {result.sectionName && (
+                        <span className="text-xs text-muted-foreground">{result.sectionName}</span>
                       )}
-                      {result.matchedConcepts.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {result.matchedConcepts.slice(0, 4).map((concept, i) => (
-                            <span
-                              key={i}
-                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-700 dark:text-violet-300"
-                            >
-                              {concept.name}
-                            </span>
-                          ))}
-                          {result.matchedConcepts.length > 4 && (
-                            <span className="text-[10px] text-muted-foreground">
-                              +{result.matchedConcepts.length - 4} more
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {result.evidenceSnippets.length > 0 && (
-                        <p className="text-xs text-muted-foreground line-clamp-2 mt-1">
-                          {result.evidenceSnippets[0].text}
-                        </p>
-                      )}
+                      <p className="text-xs text-muted-foreground/80 mt-0.5 line-clamp-2">{result.content.slice(0, 200)}</p>
                       <span className="text-xs text-muted-foreground/60 mt-0.5">
                         relevance: {(result.relevanceScore * 100).toFixed(0)}%
                       </span>
@@ -4385,12 +4389,12 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     </div>
                   </Command.Item>
                   <Command.Item
-                    value="build knowledge graph index entities claims"
+                    value="build RAG index index entities claims"
                     onSelect={async () => {
                       setCommandPaletteOpen(false);
                       try {
-                        await graphIndexAll();
-                        toast.info("Knowledge graph build started in background");
+                        await ragIndexAll();
+                        toast.info("RAG index build started in background");
                       } catch (err) {
                         toast.error(`Failed to start graph build: ${err}`);
                       }
@@ -4410,7 +4414,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     onSelect={async () => {
                       setCommandPaletteOpen(false);
                       try {
-                        await graphAutoRelate();
+                        await ragIndexAll();
                         toast.info("Finding related papers in background");
                       } catch (err) {
                         toast.error(`Failed to start auto-relate: ${err}`);
@@ -4427,40 +4431,16 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
                     </div>
                   </Command.Item>
                   <Command.Item
-                    value="view claim relations contradicts supports refines cross paper"
-                    onSelect={() => {
-                      setCommandPaletteOpen(false);
-                      const selectedIds = useLibraryStore.getState().selectedEntryIds;
-                      if (selectedIds.length === 1) {
-                        const entry = useLibraryStore.getState().entries.find(e => e.id === selectedIds[0]);
-                        if (entry) {
-                          useUIStore.getState().showClaimRelations(entry.id, entry.title);
-                        }
-                      } else {
-                        toast.info("Select a single paper to view claim relations");
-                      }
-                    }}
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
-                  >
-                    <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10">
-                      <Scale className="h-4 w-4 text-primary" />
-                    </div>
-                    <div className="flex-1">
-                      <span className="block text-sm font-medium">View Claim Relations</span>
-                      <span className="text-xs text-muted-foreground">See supporting, contradicting, and refining claims across papers</span>
-                    </div>
-                  </Command.Item>
-                  <Command.Item
-                    value="rebuild knowledge graph reset reindex embeddings"
+                    value="rebuild RAG index reset reindex embeddings"
                     onSelect={async () => {
                       setCommandPaletteOpen(false);
                       const confirmed = window.confirm(
-                        "This will delete all extracted entities, claims, and embeddings, then rebuild from scratch.\n\nContinue?"
+                        "This will delete all RAG vectors and rebuild the index from scratch.\n\nContinue?"
                       );
                       if (!confirmed) return;
                       try {
-                        await graphRebuild();
-                        toast.info("Knowledge graph cleared — rebuilding in background");
+                        await ragRebuild();
+                        toast.info("RAG index cleared — rebuilding in background");
                       } catch (err) {
                         toast.error(`Failed to rebuild graph: ${err}`);
                       }

@@ -7,15 +7,14 @@ use super::provider::{
     ToolCall,
 };
 
-/// Ollama provider using native `/api/chat` endpoint.
-/// Supports both local Ollama and Ollama Cloud (with optional API key).
-pub struct OllamaProvider {
+/// oMLX provider using OpenAI-compatible API.
+pub struct OmlxProvider {
     client: Client,
-    api_key: Option<String>,
     base_url: String,
+    api_key: String,
 }
 
-impl OllamaProvider {
+impl OmlxProvider {
     pub fn new(api_key: String, base_url: String) -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(1800)) // 30 min — local models can be very slow
@@ -23,50 +22,20 @@ impl OllamaProvider {
             .expect("Failed to build HTTP client");
 
         let base_url = if base_url.is_empty() {
-            "http://localhost:11434".to_string()
+            "http://localhost:1234/v1".to_string()
         } else {
-            // Strip /v1 suffix if user configured the OpenAI-compatible URL
-            let trimmed = base_url.trim_end_matches('/');
-            trimmed.trim_end_matches("/v1").to_string()
+            base_url.trim_end_matches('/').to_string()
         };
 
-        let api_key = if api_key.is_empty() {
-            None
-        } else {
-            Some(api_key)
-        };
-
-        Self {
-            client,
-            api_key,
-            base_url,
-        }
-    }
-
-    /// Build a request with optional Bearer auth for Ollama Cloud.
-    fn request(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.client.post(url);
-        if let Some(ref key) = self.api_key {
-            req = req.bearer_auth(key);
-        }
-        req.header("Content-Type", "application/json")
-    }
-
-    /// Build a GET request with optional Bearer auth.
-    fn get_request(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.client.get(url);
-        if let Some(ref key) = self.api_key {
-            req = req.bearer_auth(key);
-        }
-        req
+        Self { client, base_url, api_key }
     }
 }
 
 #[async_trait]
-impl LlmProvider for OllamaProvider {
+impl LlmProvider for OmlxProvider {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
         let body = build_request_body(&request, false);
-        send_request(self, body).await
+        send_request(&self.client, &self.base_url, &self.api_key, body).await
     }
 
     async fn complete_with_tools(
@@ -77,49 +46,56 @@ impl LlmProvider for OllamaProvider {
             return self.complete(request).await;
         }
         let body = build_request_body(&request, true);
-        send_request(self, body).await
+        send_request(&self.client, &self.base_url, &self.api_key, body).await
     }
 
+    /// Fetch all models from oMLX using /v1/models/status.
+    /// Returns ALL model types (llm, embedding, reranker, vlm) with model_type tag.
     async fn list_models(&self) -> Result<Vec<ModelInfo>, LlmError> {
-        let url = format!("{}/api/tags", self.base_url);
+        let url = format!("{}/models/status", self.base_url);
 
-        let resp = self
-            .get_request(&url)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_connect() {
-                    LlmError::NetworkError(
-                        "Cannot connect to Ollama. Is it running?".to_string(),
-                    )
-                } else {
-                    LlmError::NetworkError(e.to_string())
-                }
-            })?;
-
-        let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
-            return Err(LlmError::AuthError("Invalid API key".to_string()));
+        let mut req = self.client.get(&url);
+        if !self.api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
-        if !status.is_success() {
+        let resp = req.send().await.map_err(|e| {
+            if e.is_connect() {
+                LlmError::NetworkError(
+                    "Cannot connect to oMLX. Is it running?".to_string(),
+                )
+            } else {
+                LlmError::NetworkError(e.to_string())
+            }
+        })?;
+
+        if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!("HTTP {status}: {text}")));
+            return Err(LlmError::ApiError(format!("Failed to list models: {text}")));
         }
 
-        let data: OllamaTagsResponse = resp
+        let data: serde_json::Value = resp
             .json()
             .await
             .map_err(|e| LlmError::ParseError(e.to_string()))?;
 
-        let mut models: Vec<ModelInfo> = data
-            .models
-            .into_iter()
-            .map(|m| ModelInfo {
-                name: m.name.clone(),
-                id: m.name,
-                model_type: None,
+        let models_arr = data
+            .get("models")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| LlmError::ParseError(
+                "oMLX /models/status response missing 'models' array".to_string(),
+            ))?;
+
+        let mut models: Vec<ModelInfo> = models_arr
+            .iter()
+            .map(|m| {
+                let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let model_type = m.get("model_type").and_then(|v| v.as_str()).unwrap_or("llm").to_string();
+                let display = format!("{} [{}]", id, model_type);
+                ModelInfo {
+                    name: display,
+                    id,
+                    model_type: Some(model_type),
+                }
             })
             .collect();
 
@@ -128,15 +104,14 @@ impl LlmProvider for OllamaProvider {
     }
 
     fn name(&self) -> &str {
-        "ollama"
+        "omlx"
     }
 }
 
 // ── Model helpers ──────────────────────────────────────────────────
 
 /// Models with built-in thinking that is enabled by default.
-/// We disable thinking via `think: false` in the native Ollama API.
-/// Full list: https://ollama.com/search?c=thinking
+/// oMLX supports `enable_thinking: false` to disable it.
 fn has_thinking(model: &str) -> bool {
     let m = model.to_lowercase();
     m.contains("qwen3")
@@ -150,7 +125,7 @@ fn has_thinking(model: &str) -> bool {
         || m.contains("nemotron")
 }
 
-// ── Native Ollama API request/response ──────────────────────────────
+// ── OpenAI-compatible request building ──────────────────────────────
 
 fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde_json::Value {
     let messages: Vec<serde_json::Value> = request
@@ -176,23 +151,21 @@ fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde
     let mut body = serde_json::json!({
         "model": request.model,
         "messages": messages,
+        "temperature": request.temperature,
         "stream": false,
-        "options": {
-            "temperature": request.temperature,
-        },
     });
 
     // Disable thinking for models that have it enabled by default.
     if has_thinking(&request.model) {
-        body["think"] = serde_json::json!(false);
+        body["enable_thinking"] = serde_json::json!(false);
     }
 
     if let Some(max_tokens) = request.max_tokens {
-        body["options"]["num_predict"] = serde_json::json!(max_tokens);
+        body["max_tokens"] = serde_json::json!(max_tokens);
     }
 
     if request.json_mode && !include_tools {
-        body["format"] = serde_json::json!("json");
+        body["response_format"] = serde_json::json!({"type": "json_object"});
     }
 
     if include_tools && !request.tools.is_empty() {
@@ -217,33 +190,38 @@ fn build_request_body(request: &CompletionRequest, include_tools: bool) -> serde
 }
 
 async fn send_request(
-    provider: &OllamaProvider,
+    client: &Client,
+    base_url: &str,
+    api_key: &str,
     body: serde_json::Value,
 ) -> Result<CompletionResponse, LlmError> {
-    let url = format!("{}/api/chat", provider.base_url);
+    let url = format!("{base_url}/chat/completions");
 
     let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("?");
     tracing::debug!(
-        "[ollama] POST {} | model={} | body_keys={:?}",
+        "[omlx] POST {} | model={} | body_keys={:?}",
         url,
         model,
         body.as_object().map(|o| o.keys().collect::<Vec<_>>()),
     );
 
-    let resp = provider
-        .request(&url)
+    let mut req = client
+        .post(&url)
+        .header("Content-Type", "application/json");
+    if !api_key.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", api_key));
+    }
+    let resp = req
         .json(&body)
         .send()
         .await
         .map_err(|e| {
-            tracing::error!("[ollama] Request failed: {e}");
+            tracing::error!("[omlx] Request failed: {e}");
             if e.is_timeout() {
-                LlmError::NetworkError(format!(
-                    "Request timed out. The model may still be loading or the document is too large for local inference: {e}"
-                ))
+                LlmError::NetworkError(format!("Request timed out: {e}"))
             } else if e.is_connect() {
                 LlmError::NetworkError(
-                    "Cannot connect to Ollama. Is it running?".to_string(),
+                    "Cannot connect to oMLX. Is it running?".to_string(),
                 )
             } else {
                 LlmError::NetworkError(e.to_string())
@@ -251,16 +229,11 @@ async fn send_request(
         })?;
 
     let status = resp.status();
-    tracing::debug!("[ollama] Response status: {status}");
+    tracing::debug!("[omlx] Response status: {status}");
 
-    if status == reqwest::StatusCode::UNAUTHORIZED
-        || status == reqwest::StatusCode::FORBIDDEN
-    {
-        return Err(LlmError::AuthError("Invalid API key".to_string()));
-    }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        tracing::error!("[ollama] Error response: {text}");
+        tracing::error!("[omlx] Error response: {text}");
         return Err(LlmError::ApiError(format!("HTTP {status}: {text}")));
     }
 
@@ -270,41 +243,53 @@ async fn send_request(
         .map_err(|e| LlmError::ParseError(format!("Failed to read response body: {e}")))?;
 
     tracing::debug!(
-        "[ollama] Raw response ({}ch): {}",
+        "[omlx] Raw response ({}ch): {}",
         raw_text.len(),
         &raw_text[..raw_text.len().min(1000)],
     );
 
-    let data: OllamaChatResponse = serde_json::from_str(&raw_text)
+    let data: OpenAiResponse = serde_json::from_str(&raw_text)
         .map_err(|e| {
-            tracing::error!("[ollama] Parse error: {e}\nBody: {}", &raw_text[..raw_text.len().min(2000)]);
+            tracing::error!("[omlx] Parse error: {e}\nBody: {}", &raw_text[..raw_text.len().min(2000)]);
             LlmError::ParseError(format!("Failed to parse response: {e}\nBody: {}", &raw_text[..raw_text.len().min(500)]))
         })?;
 
-    let content = data
-        .message
-        .content
-        .filter(|c| !c.is_empty());
+    let choice = data
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| LlmError::ParseError("No choices in response".to_string()))?;
 
-    let tool_calls: Vec<ToolCall> = data
+    let content = choice.message.content;
+
+    let tool_calls: Vec<ToolCall> = choice
         .message
         .tool_calls
         .unwrap_or_default()
         .into_iter()
         .filter_map(|tc| {
+            let args: serde_json::Value =
+                serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
             Some(ToolCall {
-                id: tc.function.name.clone(), // Ollama native API doesn't provide tool call IDs
+                id: tc.id,
                 name: tc.function.name,
-                arguments: tc.function.arguments.unwrap_or(serde_json::Value::Null),
+                arguments: args,
             })
         })
         .collect();
 
-    let prompt_tokens = data.prompt_eval_count.unwrap_or(0);
-    let completion_tokens = data.eval_count.unwrap_or(0);
+    let (prompt_tokens, completion_tokens, total_tokens) = if let Some(usage) = data.usage {
+        (
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+        )
+    } else {
+        (0, 0, 0)
+    };
 
     tracing::debug!(
-        "[ollama] Response: content={}ch, tool_calls={}, tokens={}/{}",
+        "[omlx] Response: content={}ch, tool_calls={}, tokens={}/{}",
         content.as_ref().map(|c| c.len()).unwrap_or(0),
         tool_calls.len(),
         prompt_tokens,
@@ -316,44 +301,47 @@ async fn send_request(
         tool_calls,
         prompt_tokens,
         completion_tokens,
-        total_tokens: prompt_tokens + completion_tokens,
+        total_tokens,
     })
 }
 
 // ── Response types ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
-struct OllamaChatResponse {
-    message: OllamaMessage,
-    #[serde(default)]
-    prompt_eval_count: Option<u32>,
-    #[serde(default)]
-    eval_count: Option<u32>,
+struct OpenAiResponse {
+    choices: Vec<OaiChoice>,
+    usage: Option<OaiUsage>,
 }
 
 #[derive(Deserialize)]
-struct OllamaMessage {
+struct OaiChoice {
+    message: OaiMessage,
+}
+
+#[derive(Deserialize)]
+struct OaiMessage {
     content: Option<String>,
-    tool_calls: Option<Vec<OllamaToolCall>>,
+    tool_calls: Option<Vec<OaiToolCall>>,
 }
 
 #[derive(Deserialize)]
-struct OllamaToolCall {
-    function: OllamaFunction,
+struct OaiToolCall {
+    id: String,
+    function: OaiFunction,
 }
 
 #[derive(Deserialize)]
-struct OllamaFunction {
+struct OaiFunction {
     name: String,
-    arguments: Option<serde_json::Value>,
+    arguments: String,
 }
 
 #[derive(Deserialize)]
-struct OllamaTagsResponse {
-    models: Vec<OllamaModel>,
+struct OaiUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
+    total_tokens: u32,
 }
 
-#[derive(Deserialize)]
-struct OllamaModel {
-    name: String,
-}
+// oMLX model listing uses dynamic JSON parsing from /v1/models/status
+// (no fixed response struct needed)

@@ -23,7 +23,7 @@ pub struct ReindexProgress {
     pub file_name: Option<String>,
     /// Current step: "metadata", "extracting", "indexing", "annotations"
     pub step: String,
-    /// Method being used: "kreuzberg", "direct"
+    /// Method being used: "ferrules", "parser", "direct"
     pub method: Option<String>,
     /// Status: "processing", "success", "skipped", "failed"
     pub status: String,
@@ -586,15 +586,12 @@ pub async fn reindex_entry(
 pub async fn reindex_library(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
-    enable_ocr: Option<bool>,
-    force_ocr: Option<bool>,
+    _enable_ocr: Option<bool>,
+    _force_ocr: Option<bool>,
 ) -> Result<(), String> {
     use tauri::Emitter;
 
-    let config = ExtractionConfig {
-        enable_ocr: enable_ocr.unwrap_or(true),
-        force_ocr: force_ocr.unwrap_or(false),
-    };
+    let config = ExtractionConfig;
 
     // Get all entries
     let entries: Vec<EntrySearchRow> = sqlx::query_as(
@@ -707,7 +704,7 @@ pub async fn reindex_library(
                             entry_title: entry.title.clone(),
                             file_name: Some(file_name.clone()),
                             step: "extracting".to_string(),
-                            method: Some("kreuzberg".to_string()),
+                            method: Some("ferrules".to_string()),
                             status: "processing".to_string(),
                             message: None,
                         },
@@ -722,9 +719,10 @@ pub async fn reindex_library(
                         content_source: attachment.attachment_type.clone(),
                     };
 
+                    let parser = state.get_pdf_parser().await.ok();
                     match state
                         .search_index
-                        .index_attachment_content(&attachment_data, &config)
+                        .index_attachment_content(&attachment_data, &config, parser)
                         .await
                     {
                         Ok(result) => {

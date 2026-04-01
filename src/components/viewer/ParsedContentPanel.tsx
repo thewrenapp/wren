@@ -53,7 +53,7 @@ export function ParsedContentPanel({
 
   const llmApiKey = useSettingsStore((s) => s.llmApiKey);
   const llmProvider = useSettingsStore((s) => s.llmProvider);
-  const isLocalProvider = llmProvider === "ollama" || llmProvider === "lmstudio";
+  const isLocalProvider = llmProvider === "ollama";
   const hasApiKey = isLocalProvider || llmApiKey.length > 0;
 
   // Watch for job completion to auto-refresh

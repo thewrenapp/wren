@@ -80,6 +80,7 @@ impl LlmProvider for OpenAiProvider {
             .map(|m| ModelInfo {
                 name: m.id.clone(),
                 id: m.id,
+                model_type: None,
             })
             .collect();
 

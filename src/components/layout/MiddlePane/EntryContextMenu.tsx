@@ -20,7 +20,7 @@ import {
   StickyNote,
   Sparkles,
   CircleCheck,
-  Scale,
+  Cpu,
 } from 'lucide-react';
 import { IconTagOff } from '@tabler/icons-react';
 import {
@@ -44,7 +44,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useLibraryStore, type EntrySummary } from '@/stores/libraryStore';
 import { useTabStore } from '@/stores/tabStore';
-import { useUIStore } from '@/stores/uiStore';
 import {
   showEntryInFinder,
   showEntriesInFinder,
@@ -628,15 +627,21 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
         )}
       </DropdownMenuItem>
 
-      {!isMultiSelect && (
-        <DropdownMenuItem onClick={() => {
-          useUIStore.getState().showClaimRelations(entry.id, entry.title);
-          onClose?.();
-        }}>
-          <Scale className='h-4 w-4 mr-2' />
-          View Claim Relations
-        </DropdownMenuItem>
-      )}
+      <DropdownMenuItem onClick={async () => {
+        try {
+          const { extractMetadataWithAi } = await import('@/services/tauri/commands');
+          for (const id of targetIds) {
+            await extractMetadataWithAi(id);
+          }
+          toast.info(`Metadata extraction started for ${targetIds.length} ${targetIds.length === 1 ? 'entry' : 'entries'}`);
+        } catch (err) {
+          toast.error(`Failed to start metadata extraction: ${err}`);
+        }
+        onClose?.();
+      }}>
+        <Cpu className='h-4 w-4 mr-2' />
+        {isMultiSelect ? `Extract Metadata (${targetIds.length} Entries)` : 'Extract Metadata with AI'}
+      </DropdownMenuItem>
 
       <DropdownMenuSub>
         <DropdownMenuSubTrigger>
@@ -1224,12 +1229,20 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
           )}
         </ContextMenuItem>
 
-        {!isMultiSelect && (
-          <ContextMenuItem onClick={() => useUIStore.getState().showClaimRelations(entry.id, entry.title)}>
-            <Scale className='h-4 w-4 mr-2' />
-            View Claim Relations
-          </ContextMenuItem>
-        )}
+        <ContextMenuItem onClick={async () => {
+          try {
+            const { extractMetadataWithAi } = await import('@/services/tauri/commands');
+            for (const id of targetIds) {
+              await extractMetadataWithAi(id);
+            }
+            toast.info(`Metadata extraction started for ${targetIds.length} ${targetIds.length === 1 ? 'entry' : 'entries'}`);
+          } catch (err) {
+            toast.error(`Failed to start metadata extraction: ${err}`);
+          }
+        }}>
+          <Cpu className='h-4 w-4 mr-2' />
+          {isMultiSelect ? `Extract Metadata (${targetIds.length} Entries)` : 'Extract Metadata with AI'}
+        </ContextMenuItem>
 
         <ContextMenuSub>
           <ContextMenuSubTrigger>

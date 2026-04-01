@@ -1,5 +1,6 @@
 pub mod extractor;
 pub mod indexer;
+pub mod parser;
 pub mod schema;
 pub mod searcher;
 
@@ -96,9 +97,10 @@ impl SearchIndex {
         &self,
         attachment: &indexer::AttachmentData,
         config: &extractor::ExtractionConfig,
+        pdf_parser: Option<&ferrules_core::FerrulesParser>,
     ) -> Result<indexer::IndexingResult> {
         let writer = self.writer.write().await;
-        indexer::index_attachment_content(&writer, &self.fields, attachment, config).await
+        indexer::index_attachment_content(&writer, &self.fields, attachment, config, pdf_parser).await
     }
 
     /// Index pre-extracted text content for an attachment
