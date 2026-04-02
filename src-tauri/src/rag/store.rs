@@ -109,27 +109,33 @@ impl VectorStore {
     }
 
     /// Ensure the table exists, creating it with the first batch if needed.
-    /// Uses a mutex to prevent TOCTOU races on concurrent upserts.
+    /// Uses a "try create, ignore already-exists error" pattern instead of
+    /// checking table_names() to avoid slow I/O while holding the mutex.
     async fn ensure_table(&self, reader: RecordBatchIterator<Vec<Result<RecordBatch, ArrowError>>>) -> Result<(), String> {
         let mut initialized = self.table_init.lock().await;
         if !*initialized {
-            let table_names = self
-                .db
-                .table_names()
-                .execute()
-                .await
-                .map_err(|e| e.to_string())?;
-            if !table_names.contains(&TABLE_NAME.to_string()) {
-                self.db
-                    .create_table(TABLE_NAME, reader)
-                    .execute()
-                    .await
-                    .map_err(|e| format!("Failed to create table: {}", e))?;
-                *initialized = true;
-                return Ok(());
+            // Attempt to create the table with the data. If another concurrent
+            // call already created it, the "already exists" error is expected —
+            // fall through to the append path.
+            match self.db.create_table(TABLE_NAME, reader).execute().await {
+                Ok(_) => {
+                    *initialized = true;
+                    return Ok(());
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("already exists") {
+                        *initialized = true;
+                        // Data was consumed by the failed create_table call.
+                        // The caller (upsert_chunks) must handle this by retrying.
+                        return Ok(());
+                    }
+                    return Err(format!("Failed to create table: {}", err_msg));
+                }
             }
-            *initialized = true;
         }
+        drop(initialized);
+
         // Table already exists — append
         let table = self
             .db
@@ -544,7 +550,13 @@ impl VectorStore {
             for i in 0..n {
                 let embedding = if let Some(vecs) = vectors {
                     let values = vecs.value(i);
-                    let float_arr = values.as_any().downcast_ref::<Float32Array>().unwrap();
+                    let float_arr = match values.as_any().downcast_ref::<Float32Array>() {
+                        Some(arr) => arr,
+                        None => {
+                            tracing::warn!("vector column row {} is not Float32Array, skipping", i);
+                            continue;
+                        }
+                    };
                     (0..float_arr.len()).map(|j| float_arr.value(j)).collect()
                 } else {
                     Vec::new()

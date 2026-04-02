@@ -123,7 +123,7 @@ async fn update_progress(
     total: i64,
     message: Option<String>,
 ) {
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "UPDATE jobs SET progress_current = ?, progress_total = ?, progress_message = ? WHERE id = ?",
     )
     .bind(current)
@@ -131,7 +131,10 @@ async fn update_progress(
     .bind(&message)
     .bind(job_id)
     .execute(db)
-    .await;
+    .await
+    {
+        tracing::warn!("Failed to update job progress for {}: {}", job_id, e);
+    }
 
     // Emit event
     use tauri::Emitter;
@@ -142,7 +145,9 @@ async fn update_progress(
     .fetch_one(db)
     .await
     {
-        let _ = app_handle.emit("job:updated", &job);
+        if let Err(e) = app_handle.emit("job:updated", &job) {
+            tracing::warn!("Failed to emit job:updated event for {}: {}", job_id, e);
+        }
     }
 }
 
@@ -227,7 +232,9 @@ async fn execute_reindex(
         .await;
 
         // Delete existing documents for this entry
-        let _ = search_index.delete_entry(entry.id).await;
+        if let Err(e) = search_index.delete_entry(entry.id).await {
+            tracing::warn!("Failed to delete search index for entry {}: {}", entry.id, e);
+        }
 
         // Get creators
         let creators: Vec<CreatorNamesRow> = sqlx::query_as(
@@ -280,7 +287,9 @@ async fn execute_reindex(
             item_type: entry.item_type.clone(),
         };
 
-        let _ = search_index.index_entry_metadata(&metadata).await;
+        if let Err(e) = search_index.index_entry_metadata(&metadata).await {
+            tracing::error!("Failed to index metadata for entry {}: {}", entry.id, e);
+        }
 
         // Get attachments
         let attachments: Vec<AttachmentRow> = sqlx::query_as(
@@ -298,6 +307,7 @@ async fn execute_reindex(
 
         for attachment in &attachments {
             if let Some(ref file_path) = attachment.file_path {
+                // Safety: file_path is from DB, validated at import/creation time
                 let full_path = lib_path.join(file_path);
 
                 if full_path.exists() {
@@ -327,25 +337,33 @@ async fn execute_reindex(
                                             .ok()
                                             .map(|p| p.to_string_lossy().to_string());
                                         if let Some(rel) = relative_md {
-                                            let _ = sqlx::query(
+                                            if let Err(e) = sqlx::query(
                                                 "UPDATE attachments SET markdown_path = ? WHERE id = ?",
                                             )
                                             .bind(&rel)
                                             .bind(attachment.id)
                                             .execute(db)
-                                            .await;
+                                            .await
+                                            {
+                                                tracing::warn!("Failed to update markdown_path for attachment {}: {}", attachment.id, e);
+                                            }
                                         }
                                     }
                                 }
                             } else {
                                 let stale_md = markdown_path_for(&full_path);
-                                let _ = std::fs::remove_file(&stale_md);
-                                let _ = sqlx::query(
+                                if let Err(e) = std::fs::remove_file(&stale_md) {
+                                    tracing::warn!("Failed to remove stale markdown {}: {}", stale_md.display(), e);
+                                }
+                                if let Err(e) = sqlx::query(
                                     "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
                                 )
                                 .bind(attachment.id)
                                 .execute(db)
-                                .await;
+                                .await
+                                {
+                                    tracing::warn!("Failed to clear markdown_path for attachment {}: {}", attachment.id, e);
+                                }
                             }
                         }
                         Err(e) => {
@@ -403,7 +421,9 @@ async fn execute_reindex(
                         },
                     };
 
-                    let _ = search_index.index_annotations(&annotation_data).await;
+                    if let Err(e) = search_index.index_annotations(&annotation_data).await {
+                        tracing::error!("Failed to index annotations for attachment {}: {}", attachment.id, e);
+                    }
                 }
             }
         }
@@ -427,7 +447,7 @@ async fn execute_reindex(
             let rag_job_id = uuid::Uuid::new_v4().to_string();
             let title = entry.title.as_deref().unwrap_or("entry");
             let short = if title.len() > 50 { &title[..47] } else { title };
-            let _ = sqlx::query(
+            if let Err(e) = sqlx::query(
                 r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
                    VALUES (?, 'rag_index', 'pending', ?, ?, 0)"#,
             )
@@ -436,7 +456,9 @@ async fn execute_reindex(
             .bind(serde_json::json!({ "entryId": entry.id }).to_string())
             .execute(db)
             .await
-            .ok();
+            {
+                tracing::warn!("Failed to enqueue RAG index job for entry {}: {}", entry.id, e);
+            }
         }
     }
 
@@ -516,6 +538,7 @@ async fn execute_ocr_extract(
         .file_path
         .ok_or_else(|| format!("Attachment {} has no file path", payload.attachment_id))?;
 
+    // Safety: rel_path is from DB (file_path column), validated at import/creation time
     let lib_path = library_path.read().await.clone();
     let full_path = lib_path.join(&rel_path);
 
@@ -568,26 +591,34 @@ async fn execute_ocr_extract(
                             .ok()
                             .map(|p| p.to_string_lossy().to_string());
                         if let Some(rel) = relative_md {
-                            let _ = sqlx::query(
+                            if let Err(e) = sqlx::query(
                                 "UPDATE attachments SET markdown_path = ? WHERE id = ?",
                             )
                             .bind(&rel)
                             .bind(payload.attachment_id)
                             .execute(db)
-                            .await;
+                            .await
+                            {
+                                tracing::warn!("Failed to update markdown_path for attachment {}: {}", payload.attachment_id, e);
+                            }
                         }
                     }
                 }
             } else {
                 // Clear stale markdown
                 let stale_md = markdown_path_for(&full_path);
-                let _ = std::fs::remove_file(&stale_md);
-                let _ = sqlx::query(
+                if let Err(e) = std::fs::remove_file(&stale_md) {
+                    tracing::warn!("Failed to remove stale markdown {}: {}", stale_md.display(), e);
+                }
+                if let Err(e) = sqlx::query(
                     "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
                 )
                 .bind(payload.attachment_id)
                 .execute(db)
-                .await;
+                .await
+                {
+                    tracing::warn!("Failed to clear markdown_path for attachment {}: {}", payload.attachment_id, e);
+                }
             }
 
             search_index.commit().await.map_err(|e| e.to_string())?;
@@ -618,7 +649,7 @@ async fn execute_ocr_extract(
 
                     if needs_metadata {
                         let meta_job_id = uuid::Uuid::new_v4().to_string();
-                        let _ = sqlx::query(
+                        if let Err(e) = sqlx::query(
                             r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
                                VALUES (?, 'metadata_extract', 'pending', ?, ?, 0)"#,
                         )
@@ -627,7 +658,9 @@ async fn execute_ocr_extract(
                         .bind(serde_json::json!({ "entryId": info.entry_id }).to_string())
                         .execute(db)
                         .await
-                        .ok();
+                        {
+                            tracing::warn!("Failed to enqueue metadata_extract job for entry {}: {}", info.entry_id, e);
+                        }
                     }
                 }
             }
@@ -637,7 +670,7 @@ async fn execute_ocr_extract(
                 let rag_auto = crate::commands::settings::is_setting_enabled(db, "rag_auto_index").await;
                 if rag_auto {
                     let rag_job_id = uuid::Uuid::new_v4().to_string();
-                    let _ = sqlx::query(
+                    if let Err(e) = sqlx::query(
                         r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
                            VALUES (?, 'rag_index', 'pending', ?, ?, 0)"#,
                     )
@@ -646,7 +679,9 @@ async fn execute_ocr_extract(
                     .bind(serde_json::json!({ "entryId": info.entry_id }).to_string())
                     .execute(db)
                     .await
-                    .ok();
+                    {
+                        tracing::warn!("Failed to enqueue RAG index job for entry {}: {}", info.entry_id, e);
+                    }
                 }
             }
 
@@ -672,7 +707,7 @@ async fn execute_ocr_extract(
                         "entryId": info.entry_id,
                     });
                     let parse_job_id = uuid::Uuid::new_v4().to_string();
-                    let _ = sqlx::query(
+                    if let Err(e) = sqlx::query(
                         r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
                            VALUES (?, 'llm_parse', 'pending', ?, ?, 0)"#,
                     )
@@ -680,7 +715,10 @@ async fn execute_ocr_extract(
                     .bind(format!("Parse Document #{}", payload.attachment_id))
                     .bind(parse_payload.to_string())
                     .execute(db)
-                    .await;
+                    .await
+                    {
+                        tracing::warn!("Failed to enqueue LLM parse job for attachment {}: {}", payload.attachment_id, e);
+                    }
 
                     tracing::info!(
                         "Auto-enqueued LLM parse job {} for attachment {}",
@@ -731,14 +769,20 @@ async fn execute_llm_parse(
     let base_url = get_setting_value(db, "llm_base_url")
         .await
         .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    // Default 200k tokens: enough for ~100 pages of PDF text in a single budget cycle.
+    // Configurable via Settings → AI & Search → "llm_token_budget".
     let token_budget: u32 = get_setting_value(db, "llm_token_budget")
         .await
         .and_then(|v| v.parse().ok())
         .unwrap_or(200_000);
+    // Default 3 concurrent extractions balances throughput against API rate limits.
+    // Configurable via Settings → AI & Search → "llm_concurrent_extractions".
     let concurrent: usize = get_setting_value(db, "llm_concurrent_extractions")
         .await
         .and_then(|v| v.parse().ok())
         .unwrap_or(3);
+    // 0 means "auto-detect from model name via context_windows module".
+    // Configurable via Settings → AI & Search → "llm_context_window".
     let context_window_override: usize = get_setting_value(db, "llm_context_window")
         .await
         .and_then(|v| v.parse().ok())
@@ -764,6 +808,7 @@ async fn execute_llm_parse(
     let markdown_path = markdown_path
         .ok_or_else(|| "No extracted text found. Run text extraction first.".to_string())?;
 
+    // Safety: markdown_path is from DB (attachments table), validated at import/creation time
     let lib_path = library_path.read().await.clone();
     let full_md_path = lib_path.join(&markdown_path);
 
@@ -899,7 +944,12 @@ async fn execute_llm_parse(
             let jid = self.job_id.clone();
             let msg = message.to_string();
             tokio::spawn(async move {
-                update_progress(&app, &db, &jid, current as i64, total as i64, Some(msg)).await;
+                let result = std::panic::AssertUnwindSafe(
+                    update_progress(&app, &db, &jid, current as i64, total as i64, Some(msg))
+                );
+                if futures::FutureExt::catch_unwind(result).await.is_err() {
+                    tracing::error!("Background task panicked: update_progress for job");
+                }
             });
         }
     }
@@ -990,13 +1040,15 @@ async fn execute_llm_parse(
 
             // Save structured markdown alongside the original .pdf.md
             let structured_md_path = full_md_path.with_extension("structured.md");
-            let _ = tokio::fs::write(&structured_md_path, &parsed.structured_markdown).await;
+            if let Err(e) = tokio::fs::write(&structured_md_path, &parsed.structured_markdown).await {
+                tracing::warn!("Failed to write structured markdown to {}: {}", structured_md_path.display(), e);
+            }
 
             // Auto-index into RAG if enabled — enqueue as separate job
             let rag_auto = crate::commands::settings::is_setting_enabled(db, "rag_auto_index").await;
             if rag_auto {
                 let rag_job_id = uuid::Uuid::new_v4().to_string();
-                let _ = sqlx::query(
+                if let Err(e) = sqlx::query(
                     r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
                        VALUES (?, 'rag_index', 'pending', ?, ?, 0)"#,
                 )
@@ -1005,7 +1057,9 @@ async fn execute_llm_parse(
                 .bind(serde_json::json!({ "entryId": payload.entry_id }).to_string())
                 .execute(db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to enqueue RAG index job for entry {}: {}", payload.entry_id, e);
+                }
             }
 
             update_progress(app_handle, db, job_id, 1, 1, Some("Done".to_string())).await;
@@ -1026,36 +1080,42 @@ async fn execute_llm_parse(
             Err("Pipeline paused".to_string())
         }
         Err(pipeline::PipelineError::TooShort) => {
-            sqlx::query(
+            if let Err(e) = sqlx::query(
                 "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
             )
             .bind(payload.attachment_id)
             .execute(db)
             .await
-            .ok();
+            {
+                tracing::warn!("Failed to update parsed_content status for attachment {}: {}", payload.attachment_id, e);
+            }
             Err("Document too short to parse (< 500 characters)".to_string())
         }
         Err(pipeline::PipelineError::BudgetExceeded(cp)) => {
             // Save checkpoint for resume
             let cp_json = serde_json::to_string(&cp).unwrap_or_default();
-            sqlx::query(
+            if let Err(e) = sqlx::query(
                 "UPDATE parsed_content SET status = 'partial', checkpoint_json = ? WHERE attachment_id = ?",
             )
             .bind(&cp_json)
             .bind(payload.attachment_id)
             .execute(db)
             .await
-            .ok();
+            {
+                tracing::warn!("Failed to save partial checkpoint for attachment {}: {}", payload.attachment_id, e);
+            }
             Err("Token budget exceeded. Partial results saved — you can resume later.".to_string())
         }
         Err(e) => {
-            sqlx::query(
+            if let Err(db_err) = sqlx::query(
                 "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
             )
             .bind(payload.attachment_id)
             .execute(db)
             .await
-            .ok();
+            {
+                tracing::warn!("Failed to update parsed_content status for attachment {}: {}", payload.attachment_id, db_err);
+            }
             Err(format!("LLM parsing failed: {e}"))
         }
     }
@@ -1095,6 +1155,7 @@ async fn auto_extract_metadata(
     .map_err(|e| e.to_string())?
     .flatten();
 
+    // Safety: md_path is from DB (attachments table), validated at import/creation time
     let md_path = md_path.ok_or_else(|| "No extracted text".to_string())?;
     let text = tokio::fs::read_to_string(lib_path.join(&md_path))
         .await
@@ -1113,20 +1174,29 @@ async fn auto_extract_metadata(
     // Update title
     if let Some(ref title) = metadata.title {
         if !title.is_empty() {
-            let _ = sqlx::query("UPDATE entries SET title = ?, date_modified = datetime('now') WHERE id = ?")
-                .bind(title).bind(entry_id).execute(db).await;
+            if let Err(e) = sqlx::query("UPDATE entries SET title = ?, date_modified = datetime('now') WHERE id = ?")
+                .bind(title).bind(entry_id).execute(db).await
+            {
+                tracing::warn!("Failed to update title for entry {}: {}", entry_id, e);
+            }
         }
     }
     // Update creators
     if !metadata.authors.is_empty() {
-        let _ = sqlx::query("DELETE FROM entry_creators WHERE entry_id = ?")
-            .bind(entry_id).execute(db).await;
+        if let Err(e) = sqlx::query("DELETE FROM entry_creators WHERE entry_id = ?")
+            .bind(entry_id).execute(db).await
+        {
+            tracing::warn!("Failed to delete existing creators for entry {}: {}", entry_id, e);
+        }
         for (i, author) in metadata.authors.iter().enumerate() {
             let parts: Vec<&str> = author.rsplitn(2, ' ').collect();
             let (first, last) = if parts.len() == 2 { (Some(parts[1]), parts[0]) } else { (None, author.as_str()) };
-            let _ = sqlx::query(
+            if let Err(e) = sqlx::query(
                 "INSERT INTO entry_creators (entry_id, creator_type_id, first_name, last_name, name, sort_order) VALUES (?, 1, ?, ?, ?, ?)",
-            ).bind(entry_id).bind(first).bind(last).bind(author).bind(i as i32).execute(db).await;
+            ).bind(entry_id).bind(first).bind(last).bind(author).bind(i as i32).execute(db).await
+            {
+                tracing::warn!("Failed to insert creator '{}' for entry {}: {}", author, entry_id, e);
+            }
         }
     }
 
@@ -1177,14 +1247,17 @@ async fn upsert_entry_field(db: &SqlitePool, entry_id: i64, field_name: &str, va
         None => return, // Field type doesn't exist in schema, skip
     };
 
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO entry_fields (entry_id, field_id, value) VALUES (?, ?, ?) ON CONFLICT(entry_id, field_id) DO UPDATE SET value = excluded.value",
     )
     .bind(entry_id)
     .bind(field_id)
     .bind(value)
     .execute(db)
-    .await;
+    .await
+    {
+        tracing::warn!("Failed to upsert field {} for entry {}: {}", field_name, entry_id, e);
+    }
 }
 
 /// Execute AI metadata extraction as a background job.

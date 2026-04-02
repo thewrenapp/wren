@@ -154,7 +154,14 @@ pub async fn delete_collection(state: State<'_, AppState>, id: i64) -> Result<()
         let library_path = state.library_path.clone();
         let collection_id = id;
         tokio::spawn(async move {
-            cleanup_collection_raptor(&db, &library_path, collection_id).await;
+            tracing::debug!("Background task started: cleanup_collection_raptor for collection {}", collection_id);
+            let result = std::panic::AssertUnwindSafe(
+                cleanup_collection_raptor(&db, &library_path, collection_id)
+            );
+            match futures::FutureExt::catch_unwind(result).await {
+                Ok(()) => tracing::debug!("Background task completed: cleanup_collection_raptor for collection {}", collection_id),
+                Err(_) => tracing::error!("Background task panicked: cleanup_collection_raptor for collection {}", collection_id),
+            }
         });
     }
 
@@ -319,7 +326,14 @@ pub async fn delete_collection_with_entries(
     let db = state.db.clone();
     let library_path = state.library_path.clone();
     tokio::spawn(async move {
-        cleanup_collection_raptor(&db, &library_path, id).await;
+        tracing::debug!("Background task started: cleanup_collection_raptor for collection {} (bulk delete)", id);
+        let result = std::panic::AssertUnwindSafe(
+            cleanup_collection_raptor(&db, &library_path, id)
+        );
+        match futures::FutureExt::catch_unwind(result).await {
+            Ok(()) => tracing::debug!("Background task completed: cleanup_collection_raptor for collection {} (bulk delete)", id),
+            Err(_) => tracing::error!("Background task panicked: cleanup_collection_raptor for collection {} (bulk delete)", id),
+        }
     });
 
     Ok(deleted_entries)
@@ -362,8 +376,12 @@ async fn cleanup_collection_raptor(
         ).unwrap_or(1536);
         if let Ok(store) = crate::rag::store::VectorStore::new(&lance_path, dim).await {
             let scope_id = format!("collection_{}", collection_id);
-            let _ = store.delete_document(&scope_id).await;
-            let _ = store.delete_document("__corpus__").await;
+            if let Err(e) = store.delete_document(&scope_id).await {
+                tracing::warn!("Failed to delete RAG vectors for collection {}: {}", collection_id, e);
+            }
+            if let Err(e) = store.delete_document("__corpus__").await {
+                tracing::warn!("Failed to delete corpus RAG vectors for collection {}: {}", collection_id, e);
+            }
             tracing::info!("Cleaned up cross-doc RAPTOR for collection {}", collection_id);
         }
     }

@@ -21,7 +21,7 @@ impl OpenAiProvider {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
-            .expect("Failed to build HTTP client");
+            .expect("failed to build OpenAI HTTP client: TLS backend unavailable");
 
         Self {
             client,

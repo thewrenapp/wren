@@ -17,16 +17,16 @@ pub struct SearchFields {
 impl SearchFields {
     pub fn new(schema: &Schema) -> Self {
         Self {
-            entry_id: schema.get_field("entry_id").unwrap(),
-            entry_key: schema.get_field("entry_key").unwrap(),
-            attachment_id: schema.get_field("attachment_id").unwrap(),
-            title: schema.get_field("title").unwrap(),
-            creators: schema.get_field("creators").unwrap(),
-            abstract_text: schema.get_field("abstract_text").unwrap(),
-            content: schema.get_field("content").unwrap(),
-            item_type: schema.get_field("item_type").unwrap(),
-            file_path: schema.get_field("file_path").unwrap(),
-            content_source: schema.get_field("content_source").unwrap(),
+            entry_id: schema.get_field("entry_id").expect("field 'entry_id' must exist in schema"),
+            entry_key: schema.get_field("entry_key").expect("field 'entry_key' must exist in schema"),
+            attachment_id: schema.get_field("attachment_id").expect("field 'attachment_id' must exist in schema"),
+            title: schema.get_field("title").expect("field 'title' must exist in schema"),
+            creators: schema.get_field("creators").expect("field 'creators' must exist in schema"),
+            abstract_text: schema.get_field("abstract_text").expect("field 'abstract_text' must exist in schema"),
+            content: schema.get_field("content").expect("field 'content' must exist in schema"),
+            item_type: schema.get_field("item_type").expect("field 'item_type' must exist in schema"),
+            file_path: schema.get_field("file_path").expect("field 'file_path' must exist in schema"),
+            content_source: schema.get_field("content_source").expect("field 'content_source' must exist in schema"),
         }
     }
 }

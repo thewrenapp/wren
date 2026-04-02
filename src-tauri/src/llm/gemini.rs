@@ -19,7 +19,7 @@ impl GeminiProvider {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
-            .expect("Failed to build HTTP client");
+            .expect("failed to build Gemini HTTP client: TLS backend unavailable");
 
         let base_url = if base_url.is_empty() {
             "https://generativelanguage.googleapis.com/v1beta".to_string()

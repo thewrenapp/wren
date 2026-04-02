@@ -13,6 +13,8 @@ pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
         .busy_timeout(std::time::Duration::from_secs(30));
 
+    // SQLite uses a single-writer model, so many concurrent connections provide
+    // little benefit. 5 allows parallel reads while keeping resource usage low.
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)

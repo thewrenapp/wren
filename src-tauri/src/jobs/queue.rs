@@ -128,12 +128,15 @@ impl JobQueue {
                     };
 
                     // Mark as running
-                    let _ = sqlx::query(
+                    if let Err(e) = sqlx::query(
                         "UPDATE jobs SET status = 'running', started_at = datetime('now') WHERE id = ?",
                     )
                     .bind(&job_id)
                     .execute(&queue.db)
-                    .await;
+                    .await
+                    {
+                        tracing::warn!("Failed to mark job {} as running: {}", job_id, e);
+                    }
 
                     // Create cancel flag
                     let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -196,13 +199,16 @@ impl JobQueue {
                         // Update final status
                         match result {
                             Ok(result_json) => {
-                                let _ = sqlx::query(
+                                if let Err(e) = sqlx::query(
                                     "UPDATE jobs SET status = 'completed', result_json = ?, completed_at = datetime('now'), progress_message = 'Done' WHERE id = ?",
                                 )
                                 .bind(&result_json)
                                 .bind(&jid)
                                 .execute(&q.db)
-                                .await;
+                                .await
+                                {
+                                    tracing::warn!("Failed to mark job {} as completed: {}", jid, e);
+                                }
                             }
                             Err(err) => {
                                 if cancel_flag.load(Ordering::Relaxed) {
@@ -217,32 +223,41 @@ impl JobQueue {
                                         if job_type_str == "llm_parse" {
                                             if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&payload_json) {
                                                 let att_id = payload.attachment_id;
-                                                let _ = sqlx::query(
+                                                if let Err(e) = sqlx::query(
                                                     "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
                                                 )
                                                 .bind(att_id)
                                                 .execute(&q.db)
-                                                .await;
+                                                .await
+                                                {
+                                                    tracing::warn!("Failed to clear checkpoint for attachment {}: {}", att_id, e);
+                                                }
                                             }
                                         }
                                     }
 
                                     let msg = if was_force { "Cancelled" } else { "Paused" };
-                                    let _ = sqlx::query(
+                                    if let Err(e) = sqlx::query(
                                         "UPDATE jobs SET status = 'cancelled', completed_at = datetime('now'), progress_message = ? WHERE id = ?",
                                     )
                                     .bind(msg)
                                     .bind(&jid)
                                     .execute(&q.db)
-                                    .await;
+                                    .await
+                                    {
+                                        tracing::warn!("Failed to mark job {} as cancelled: {}", jid, e);
+                                    }
                                 } else {
-                                    let _ = sqlx::query(
+                                    if let Err(e) = sqlx::query(
                                         "UPDATE jobs SET status = 'failed', error_message = ?, completed_at = datetime('now') WHERE id = ?",
                                     )
                                     .bind(&err)
                                     .bind(&jid)
                                     .execute(&q.db)
-                                    .await;
+                                    .await
+                                    {
+                                        tracing::warn!("Failed to mark job {} as failed: {}", jid, e);
+                                    }
                                 }
                             }
                         }
@@ -275,18 +290,32 @@ impl JobQueue {
             fids.insert(job_id.to_string());
         }
 
-        // Check if running — set cancel flag
+        // Hold the cancel_flags lock for the entire read-check-update to prevent
+        // another thread from modifying the flag between our check and DB update.
         let flags = self.cancel_flags.read().await;
-        if let Some(flag) = flags.get(job_id) {
+        let is_running = if let Some(flag) = flags.get(job_id) {
             flag.store(true, Ordering::Relaxed);
-            drop(flags);
+            true
+        } else {
+            false
+        };
+        // Drop the read lock before doing async DB work
+        drop(flags);
+
+        if is_running {
+            // Use a transaction so the progress update and checkpoint clear are atomic
+            let mut tx = self.db.begin().await.map_err(|e| e.to_string())?;
+
             // Update progress message immediately so frontend shows feedback
-            let _ = sqlx::query(
+            if let Err(e) = sqlx::query(
                 "UPDATE jobs SET progress_message = 'Cancelling...' WHERE id = ?",
             )
             .bind(job_id)
-            .execute(&self.db)
-            .await;
+            .execute(&mut *tx)
+            .await
+            {
+                tracing::warn!("Failed to update cancelling message for job {}: {}", job_id, e);
+            }
 
             // Force cancel on a running job: clear checkpoint immediately so a new
             // job on a different concurrency slot can't read stale resume data.
@@ -294,23 +323,26 @@ impl JobQueue {
                 if let Ok(job) = self.get_job(job_id).await {
                     if job.job_type == "llm_parse" {
                         if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&job.payload_json) {
-                            let att_id = payload.attachment_id; {
-                                let _ = sqlx::query(
-                                    "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
-                                )
-                                .bind(att_id)
-                                .execute(&self.db)
-                                .await;
+                            let att_id = payload.attachment_id;
+                            if let Err(e) = sqlx::query(
+                                "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
+                            )
+                            .bind(att_id)
+                            .execute(&mut *tx)
+                            .await
+                            {
+                                tracing::warn!("Failed to clear checkpoint for attachment {} on cancel: {}", att_id, e);
                             }
                         }
                     }
                 }
             }
 
+            tx.commit().await.map_err(|e| e.to_string())?;
+
             self.emit_job_update(job_id).await;
             return Ok(());
         }
-        drop(flags);
 
         // Not running — cancel pending job directly
         sqlx::query(
@@ -321,28 +353,38 @@ impl JobQueue {
         .await
         .map_err(|e| e.to_string())?;
 
-        // Force-cancel a paused job: clear checkpoint so it can't be resumed
+        // Force-cancel a paused job: clear checkpoint so it can't be resumed.
+        // Use a transaction so the job read + checkpoint clear + message clear
+        // are atomic and cannot interleave with other operations.
         if force {
-            // Get the job to find its payload (need attachment_id for checkpoint cleanup)
             if let Ok(job) = self.get_job(job_id).await {
                 if job.status == "cancelled" && job.job_type == "llm_parse" {
+                    let mut tx = self.db.begin().await.map_err(|e| e.to_string())?;
                     if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&job.payload_json) {
-                        let att_id = payload.attachment_id; {
-                            let _ = sqlx::query(
-                                "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
-                            )
-                            .bind(att_id)
-                            .execute(&self.db)
-                            .await;
+                        let att_id = payload.attachment_id;
+                        if let Err(e) = sqlx::query(
+                            "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
+                        )
+                        .bind(att_id)
+                        .execute(&mut *tx)
+                        .await
+                        {
+                            tracing::warn!("Failed to clear checkpoint for attachment {} on force-cancel: {}", att_id, e);
                         }
                     }
                     // Clear the "Paused" message
-                    let _ = sqlx::query(
+                    if let Err(e) = sqlx::query(
                         "UPDATE jobs SET progress_message = NULL WHERE id = ?",
                     )
                     .bind(job_id)
-                    .execute(&self.db)
-                    .await;
+                    .execute(&mut *tx)
+                    .await
+                    {
+                        tracing::warn!("Failed to clear paused message for job {}: {}", job_id, e);
+                    }
+                    if let Err(e) = tx.commit().await {
+                        tracing::warn!("Failed to commit force-cancel transaction for job {}: {}", job_id, e);
+                    }
                 }
             }
         }
@@ -403,7 +445,7 @@ impl JobQueue {
         total: i64,
         message: Option<String>,
     ) {
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "UPDATE jobs SET progress_current = ?, progress_total = ?, progress_message = ? WHERE id = ?",
         )
         .bind(current)
@@ -411,7 +453,10 @@ impl JobQueue {
         .bind(&message)
         .bind(job_id)
         .execute(&self.db)
-        .await;
+        .await
+        {
+            tracing::warn!("Failed to update progress for job {}: {}", job_id, e);
+        }
 
         self.emit_job_update(job_id).await;
     }
@@ -497,12 +542,15 @@ impl JobQueue {
                 .map_or(false, |jt| jt.is_restartable());
 
             if !is_restartable {
-                let _ = sqlx::query(
+                if let Err(e) = sqlx::query(
                     "UPDATE jobs SET status = 'failed', error_message = 'App shutdown', completed_at = datetime('now') WHERE id = ?",
                 )
                 .bind(job_id)
                 .execute(&self.db)
-                .await;
+                .await
+                {
+                    tracing::warn!("Failed to mark non-restartable job {} as failed during shutdown: {}", job_id, e);
+                }
             }
             // Restartable jobs: left as 'running' → recover_interrupted_jobs()
             // will reset them to 'pending' on next startup
@@ -515,7 +563,9 @@ impl JobQueue {
     async fn emit_job_update(&self, job_id: &str) {
         use tauri::Emitter;
         if let Ok(job) = self.get_job(job_id).await {
-            let _ = self.app_handle.emit("job:updated", &job);
+            if let Err(e) = self.app_handle.emit("job:updated", &job) {
+                tracing::warn!("Failed to emit job:updated event for {}: {}", job_id, e);
+            }
         }
     }
 }

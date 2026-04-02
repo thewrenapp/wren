@@ -59,6 +59,8 @@ impl ExtractionMethod {
 }
 
 /// Extract text content from a file using ferrules (PDF) or format-specific parsers.
+/// Safety: `path` is constructed from DB values (file_path column) that were validated
+/// at import/creation time. Callers are responsible for ensuring path integrity.
 pub async fn extract_text(
     path: &Path,
     _config: &ExtractionConfig,

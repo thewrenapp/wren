@@ -76,6 +76,11 @@ pub fn show_main_window(app_handle: &tauri::AppHandle) {
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
 fn restore_dock_icon() {
+    // SAFETY: All Objective-C calls here target well-known AppKit/Foundation classes
+    // (NSData, NSImage, NSApplication) with correct selectors and argument types.
+    // `icon_bytes` is a valid PNG embedded at compile time via `include_bytes!`.
+    // `sharedApplication` always returns the singleton app instance on the main thread.
+    // This function is only called from the main thread during dock visibility restoration.
     unsafe {
         use cocoa::base::id;
         use objc::*;

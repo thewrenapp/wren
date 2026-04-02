@@ -20,7 +20,7 @@ impl OllamaProvider {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(1800)) // 30 min — local models can be very slow
             .build()
-            .expect("Failed to build HTTP client");
+            .expect("failed to build Ollama HTTP client: TLS backend unavailable");
 
         let base_url = if base_url.is_empty() {
             "http://localhost:11434".to_string()

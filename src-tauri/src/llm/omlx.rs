@@ -19,7 +19,7 @@ impl OmlxProvider {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(1800)) // 30 min — local models can be very slow
             .build()
-            .expect("Failed to build HTTP client");
+            .expect("failed to build oMLX HTTP client: TLS backend unavailable");
 
         let base_url = if base_url.is_empty() {
             "http://localhost:1234/v1".to_string()

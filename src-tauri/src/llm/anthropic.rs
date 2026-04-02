@@ -19,7 +19,7 @@ impl AnthropicProvider {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
-            .expect("Failed to build HTTP client");
+            .expect("failed to build Anthropic HTTP client: TLS backend unavailable");
 
         let base_url = if base_url.is_empty() {
             "https://api.anthropic.com/v1".to_string()

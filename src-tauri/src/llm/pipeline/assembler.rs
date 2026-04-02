@@ -56,13 +56,14 @@ fn insert_into_tree(tree: &mut Vec<ExtractedSection>, node: ExtractedSection) {
         return;
     }
 
-    let last = tree.last().unwrap();
+    // SAFETY: guarded by `tree.is_empty()` check above, so last() is always Some.
+    let last = tree.last().expect("tree must be non-empty after is_empty guard");
     if node.level <= last.level {
         // Same or higher level — sibling at root
         tree.push(node);
     } else {
         // Lower level — try to nest under the last section
-        let last = tree.last_mut().unwrap();
+        let last = tree.last_mut().expect("tree must be non-empty after is_empty guard");
         insert_into_subtree(last, node);
     }
 }
@@ -75,13 +76,14 @@ fn insert_into_subtree(parent: &mut ExtractedSection, node: ExtractedSection) {
         return;
     }
 
-    let last_sub = parent.subsections.last().unwrap();
+    // SAFETY: guarded by `subsections.is_empty()` check above, so last() is always Some.
+    let last_sub = parent.subsections.last().expect("subsections must be non-empty after is_empty guard");
     if node.level <= last_sub.level {
         // Same or higher level as last subsection — sibling
         parent.subsections.push(node);
     } else {
         // Deeper nesting
-        let last_sub = parent.subsections.last_mut().unwrap();
+        let last_sub = parent.subsections.last_mut().expect("subsections must be non-empty after is_empty guard");
         insert_into_subtree(last_sub, node);
     }
 }

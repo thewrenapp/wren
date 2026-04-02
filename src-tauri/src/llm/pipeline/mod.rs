@@ -486,7 +486,9 @@ pub async fn run_pipeline(
         extracted_contents
     } else {
         // Restored from checkpoint — rebuild from section_contents
-        let cp = checkpoint.as_ref().unwrap();
+        // start_stage is Assemble only when derived from a Some(checkpoint), so this is safe.
+        let cp = checkpoint.as_ref()
+            .expect("checkpoint must exist when start_stage is Assemble");
         let section_order: HashMap<String, usize> = discovered_sections
             .iter()
             .enumerate()

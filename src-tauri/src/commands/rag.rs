@@ -315,7 +315,8 @@ pub async fn rag_status(state: State<'_, AppState>) -> Result<RagStatus, String>
     .await
     .unwrap_or(0);
 
-    // TODO: query actual chunk count from vector store
+    // Chunk count is not tracked in SQLite; the vector store does not expose a count API.
+    // Report 0 until a metadata table or vector-store query is available.
     let total_chunks = 0i64;
 
     Ok(RagStatus {
@@ -526,35 +527,43 @@ pub fn spawn_collection_raptor_rebuild(
 ) {
     // Check if RAPTOR is enabled before enqueuing — avoid spawning unnecessary jobs
     tokio::spawn(async move {
-        let enabled = crate::commands::settings::is_setting_enabled(&db, "raptor_enabled").await;
-        if !enabled {
-            return;
-        }
+        tracing::debug!("Background task started: spawn_collection_raptor_rebuild for collection {}", collection_id);
+        let result: Result<(), String> = async {
+            let enabled = crate::commands::settings::is_setting_enabled(&db, "raptor_enabled").await;
+            if !enabled {
+                return Ok(());
+            }
 
-        // Get collection name for job title
-        let name: String = sqlx::query_scalar("SELECT name FROM collections WHERE id = ?")
-            .bind(collection_id)
-            .fetch_optional(&db)
+            // Get collection name for job title
+            let name: String = sqlx::query_scalar("SELECT name FROM collections WHERE id = ?")
+                .bind(collection_id)
+                .fetch_optional(&db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| format!("Collection {}", collection_id));
+
+            let payload = serde_json::json!({ "collectionId": collection_id });
+
+            // We don't have access to JobQueue here, so insert directly into DB
+            let job_id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
+                   VALUES (?, 'rag_collection_raptor', 'pending', ?, ?, 0)"#,
+            )
+            .bind(&job_id)
+            .bind(format!("Cross-doc RAPTOR: {}", name))
+            .bind(payload.to_string())
+            .execute(&db)
             .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| format!("Collection {}", collection_id));
+            .map_err(|e| format!("Failed to enqueue RAPTOR job: {}", e))?;
 
-        let payload = serde_json::json!({ "collectionId": collection_id });
-
-        // We don't have access to JobQueue here, so insert directly into DB
-        let job_id = uuid::Uuid::new_v4().to_string();
-        let _ = sqlx::query(
-            r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
-               VALUES (?, 'rag_collection_raptor', 'pending', ?, ?, 0)"#,
-        )
-        .bind(&job_id)
-        .bind(format!("Cross-doc RAPTOR: {}", name))
-        .bind(payload.to_string())
-        .execute(&db)
-        .await;
-
-        tracing::info!("Enqueued cross-doc RAPTOR job {} for collection {}", job_id, collection_id);
+            tracing::info!("Enqueued cross-doc RAPTOR job {} for collection {}", job_id, collection_id);
+            Ok(())
+        }.await;
+        if let Err(e) = result {
+            tracing::error!("Background task failed (spawn_collection_raptor_rebuild for collection {}): {}", collection_id, e);
+        }
     });
 }
 

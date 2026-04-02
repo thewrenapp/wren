@@ -222,17 +222,20 @@ impl AppState {
                 if needs_markdown_path_fix {
                     if let Ok(relative) = full_path.strip_prefix(library_path) {
                         let rel_str = relative.to_string_lossy().to_string();
-                        let _ = sqlx::query(
+                        if let Err(e) = sqlx::query(
                             "UPDATE attachments SET markdown_path = ? WHERE id = ?",
                         )
                         .bind(&rel_str)
                         .bind(note.id)
                         .execute(pool)
-                        .await;
+                        .await
+                        {
+                            tracing::error!("Failed to update markdown_path for attachment {}: {}", note.id, e);
+                        }
                     }
                 }
 
-                let _ = sqlx::query(
+                if let Err(e) = sqlx::query(
                     r#"INSERT INTO parsed_content (attachment_id, entry_id, structured_markdown, model_used, provider, status, date_started, date_completed)
                        VALUES (?, ?, ?, 'user', 'manual', 'success', datetime('now'), datetime('now'))"#,
                 )
@@ -240,7 +243,10 @@ impl AppState {
                 .bind(note.entry_id)
                 .bind(&content)
                 .execute(pool)
-                .await;
+                .await
+                {
+                    tracing::error!("Failed to backfill parsed_content for note {}: {}", note.id, e);
+                }
             }
         }
     }

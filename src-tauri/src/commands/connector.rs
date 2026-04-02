@@ -38,19 +38,28 @@ pub async fn start_connector_server(
     let port_str = crate::commands::settings::get_setting_value(&state.db, "connector_port")
         .await
         .unwrap_or_else(|| "1289".to_string());
-    let port: u16 = port_str.parse().unwrap_or(1289);
+    let port: u16 = port_str.parse().unwrap_or_else(|_| {
+        tracing::warn!(
+            "Failed to parse connector_port setting '{}', falling back to default port 1289",
+            port_str
+        );
+        1289
+    });
 
     // Get or generate token
     let token = match crate::commands::settings::get_setting_value(&state.db, "connector_token").await {
         Some(t) if !t.is_empty() => t,
         _ => {
             let new_token = Uuid::new_v4().to_string();
-            let _ = sqlx::query(
+            if let Err(e) = sqlx::query(
                 "INSERT INTO settings (key, value, value_type) VALUES ('connector_token', ?, 'string') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
             )
             .bind(&new_token)
             .execute(&state.db)
-            .await;
+            .await
+            {
+                tracing::error!("Failed to persist connector token: {}", e);
+            }
             new_token
         }
     };
@@ -70,11 +79,14 @@ pub async fn start_connector_server(
     *server = Some(new_server);
 
     // Persist enabled state
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO settings (key, value, value_type) VALUES ('connector_enabled', 'true', 'boolean') ON CONFLICT(key) DO UPDATE SET value = 'true'"
     )
     .execute(&state.db)
-    .await;
+    .await
+    {
+        tracing::error!("Failed to persist connector enabled state: {}", e);
+    }
 
     Ok(())
 }
@@ -89,11 +101,14 @@ pub async fn stop_connector_server(
     }
 
     // Persist disabled state
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO settings (key, value, value_type) VALUES ('connector_enabled', 'false', 'boolean') ON CONFLICT(key) DO UPDATE SET value = 'false'"
     )
     .execute(&state.db)
-    .await;
+    .await
+    {
+        tracing::error!("Failed to persist connector disabled state: {}", e);
+    }
 
     Ok(())
 }

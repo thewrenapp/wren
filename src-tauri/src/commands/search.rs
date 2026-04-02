@@ -5,6 +5,7 @@ use tauri::State;
 use crate::search::extractor::markdown_path_for;
 use crate::search::searcher::FullSearchResult;
 use crate::state::AppState;
+use crate::utils::validate_library_path;
 
 // =====================================================
 // PROGRESS EVENT TYPES
@@ -125,9 +126,12 @@ pub async fn get_markdown_content(
     // Try markdown_path first (relative to library)
     if let Some(ref md_path) = row.markdown_path {
         let full_path = library_path.join(md_path);
-        if full_path.exists() {
-            let content = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
-            return Ok(Some(content));
+        // Validate path stays within library (markdown_path is a DB value from user imports)
+        if let Ok(validated) = validate_library_path(&library_path, &full_path) {
+            if validated.exists() {
+                let content = std::fs::read_to_string(&validated).map_err(|e| e.to_string())?;
+                return Ok(Some(content));
+            }
         }
     }
 
@@ -140,9 +144,12 @@ pub async fn get_markdown_content(
             } else {
                 library_path.join(fp)
             };
-            if full_path.exists() {
-                let content = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
-                return Ok(Some(content));
+            // Validate path stays within library (file_path is a DB value from user imports)
+            if let Ok(validated) = validate_library_path(&library_path, &full_path) {
+                if validated.exists() {
+                    let content = std::fs::read_to_string(&validated).map_err(|e| e.to_string())?;
+                    return Ok(Some(content));
+                }
             }
         }
     }
@@ -200,10 +207,13 @@ pub async fn save_markdown_content(
         if let Some(ref existing_md) = attachment.markdown_path {
             // Existing note — overwrite it
             let full_md = library_path.join(existing_md);
+            // Validate path stays within library (markdown_path is a DB value from user imports)
+            validate_library_path(&library_path, &full_md)?;
             std::fs::write(&full_md, &content).map_err(|e| e.to_string())?;
             existing_md.clone()
         } else {
             // New note with no file — create in entry's files directory
+            // Safety: entry_key and attachment_key are server-generated UUIDs, not user input
             let dir = library_path.join("files").join(&attachment.entry_key);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let md_path = dir.join(format!("note-{}.md", &attachment.attachment_key));
@@ -217,6 +227,8 @@ pub async fn save_markdown_content(
     } else if let Some(ref file_path) = attachment.file_path {
         // Non-note attachment with a file on disk (PDF, EPUB, etc.) — save markdown alongside it
         let full_path = library_path.join(file_path);
+        // Validate path stays within library (file_path is a DB value from user imports)
+        validate_library_path(&library_path, &full_path)?;
         let md_path = markdown_path_for(&full_path);
         std::fs::write(&md_path, &content).map_err(|e| e.to_string())?;
         md_path
@@ -255,7 +267,7 @@ pub async fn save_markdown_content(
     // This serves as both a DB backup and the source of truth for RAG/AI features
     if is_note {
         let expanded = expand_inline_tables(&state.db, &content).await;
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             r#"INSERT INTO parsed_content (attachment_id, entry_id, structured_markdown, model_used, provider, status, date_started, date_completed)
                VALUES (?, ?, ?, 'user', 'manual', 'success', datetime('now'), datetime('now'))
                ON CONFLICT(attachment_id) DO UPDATE SET
@@ -267,7 +279,10 @@ pub async fn save_markdown_content(
         .bind(attachment.entry_id)
         .bind(&expanded)
         .execute(&state.db)
-        .await;
+        .await
+        {
+            tracing::error!("Failed to upsert parsed_content for attachment {}: {}", attachment_id, e);
+        }
     }
 
     Ok(())
@@ -314,7 +329,9 @@ pub async fn reindex_attachment(
         // Notes: read markdown, expand inline tables, index inline (fast, no OCR).
         let library_path = state.library_path.read().await;
         let full_path = if let Some(ref fp) = attachment.file_path {
-            library_path.join(fp)
+            let joined = library_path.join(fp);
+            // Validate path stays within library (file_path is a DB value from user imports)
+            validate_library_path(&library_path, &joined)?
         } else {
             let md_row: Option<MarkdownPathRow> = sqlx::query_as(
                 "SELECT markdown_path FROM attachments WHERE id = ?",
@@ -325,7 +342,11 @@ pub async fn reindex_attachment(
             .map_err(|e| e.to_string())?;
 
             match md_row.and_then(|r| r.markdown_path) {
-                Some(md_path) => library_path.join(&md_path),
+                Some(md_path) => {
+                    let joined = library_path.join(&md_path);
+                    // Validate path stays within library (markdown_path from DB)
+                    validate_library_path(&library_path, &joined)?
+                }
                 None => return Err("Attachment has no file path".to_string()),
             }
         };
