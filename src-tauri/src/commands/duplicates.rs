@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Row};
+use sqlx::{FromRow, Row, Sqlite, QueryBuilder};
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,50 +50,52 @@ pub async fn find_duplicates(
     let mut groups: Vec<DuplicateGroup> = Vec::new();
     let mut processed_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
-    // Find duplicates by DOI
-    let doi_duplicates: Vec<(String,)> = sqlx::query_as(
+    // Find all entries with duplicate DOIs in a single query
+    let doi_entries: Vec<EntryWithDoi> = sqlx::query_as::<_, EntryWithDoi>(
         r#"
-        SELECT ef.value as doi
-        FROM entry_fields ef
+        SELECT
+            e.id, e.key, e.title, it.name as item_type, e.date, e.date_added,
+            ef.value as doi,
+            (SELECT COUNT(*) FROM attachments WHERE entry_id = e.id) as attachment_count
+        FROM entries e
+        JOIN item_types it ON e.item_type_id = it.id
+        JOIN entry_fields ef ON ef.entry_id = e.id
         JOIN fields f ON ef.field_id = f.id
-        JOIN entries e ON ef.entry_id = e.id
         WHERE f.name = 'DOI' AND ef.value != '' AND e.is_deleted = 0
-        GROUP BY LOWER(ef.value)
-        HAVING COUNT(*) > 1
+        AND LOWER(ef.value) IN (
+            SELECT LOWER(ef2.value)
+            FROM entry_fields ef2
+            JOIN fields f2 ON ef2.field_id = f2.id
+            JOIN entries e2 ON ef2.entry_id = e2.id
+            WHERE f2.name = 'DOI' AND ef2.value != '' AND e2.is_deleted = 0
+            GROUP BY LOWER(ef2.value)
+            HAVING COUNT(*) > 1
+        )
+        ORDER BY LOWER(ef.value), e.date_added DESC
         "#
     )
     .fetch_all(&state.db)
     .await
     .map_err(|e| e.to_string())?;
 
-    for (doi,) in doi_duplicates {
-        let entries: Vec<EntryWithDoi> = sqlx::query_as::<_, EntryWithDoi>(
-            r#"
-            SELECT
-                e.id, e.key, e.title, it.name as item_type, e.date, e.date_added,
-                ef.value as doi,
-                (SELECT COUNT(*) FROM attachments WHERE entry_id = e.id) as attachment_count
-            FROM entries e
-            JOIN item_types it ON e.item_type_id = it.id
-            JOIN entry_fields ef ON ef.entry_id = e.id
-            JOIN fields f ON ef.field_id = f.id
-            WHERE f.name = 'DOI' AND LOWER(ef.value) = LOWER(?) AND e.is_deleted = 0
-            ORDER BY e.date_added DESC
-            "#
-        )
-        .bind(&doi)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Group by lowercase DOI
+    let mut doi_groups: std::collections::HashMap<String, Vec<&EntryWithDoi>> = std::collections::HashMap::new();
+    for entry in &doi_entries {
+        let key = entry.doi.as_ref().map(|d| d.to_lowercase()).unwrap_or_default();
+        doi_groups.entry(key).or_default().push(entry);
+    }
 
+    // Batch fetch creators for all DOI-duplicate entries
+    let all_doi_entry_ids: Vec<i64> = doi_entries.iter().map(|e| e.id).collect();
+    let doi_creators = fetch_creators_display(&state, &all_doi_entry_ids).await?;
+
+    for (doi_lower, entries) in &doi_groups {
         if entries.len() > 1 {
-            let entry_ids: Vec<i64> = entries.iter().map(|e| e.id).collect();
-            for id in &entry_ids {
-                processed_ids.insert(*id);
+            for e in entries {
+                processed_ids.insert(e.id);
             }
 
-            let creators = fetch_creators_display(&state, &entry_ids).await?;
-
+            let display_doi = entries[0].doi.as_deref().unwrap_or(doi_lower);
             groups.push(DuplicateGroup {
                 entries: entries.iter().map(|e| DuplicateEntry {
                     id: e.id,
@@ -103,60 +105,60 @@ pub async fn find_duplicates(
                     date: e.date.clone(),
                     date_added: e.date_added.clone(),
                     doi: e.doi.clone(),
-                    creators_display: creators.get(&e.id).cloned(),
+                    creators_display: doi_creators.get(&e.id).cloned(),
                     attachment_count: e.attachment_count,
                 }).collect(),
-                match_reason: format!("Same DOI: {}", doi),
+                match_reason: format!("Same DOI: {}", display_doi),
             });
         }
     }
 
-    // Find duplicates by exact title (case-insensitive)
-    let title_duplicates: Vec<(String,)> = sqlx::query_as(
+    // Find all entries with duplicate titles in a single query
+    let title_entries: Vec<EntryWithDoi> = sqlx::query_as::<_, EntryWithDoi>(
         r#"
-        SELECT LOWER(title) as ltitle
-        FROM entries
-        WHERE is_deleted = 0
-        GROUP BY LOWER(title)
-        HAVING COUNT(*) > 1
+        SELECT
+            e.id, e.key, e.title, it.name as item_type, e.date, e.date_added,
+            (SELECT ef.value FROM entry_fields ef JOIN fields f ON ef.field_id = f.id
+             WHERE ef.entry_id = e.id AND f.name = 'DOI' LIMIT 1) as doi,
+            (SELECT COUNT(*) FROM attachments WHERE entry_id = e.id) as attachment_count
+        FROM entries e
+        JOIN item_types it ON e.item_type_id = it.id
+        WHERE e.is_deleted = 0
+        AND LOWER(e.title) IN (
+            SELECT LOWER(title)
+            FROM entries
+            WHERE is_deleted = 0
+            GROUP BY LOWER(title)
+            HAVING COUNT(*) > 1
+        )
+        ORDER BY LOWER(e.title), e.date_added DESC
         "#
     )
     .fetch_all(&state.db)
     .await
     .map_err(|e| e.to_string())?;
 
-    for (ltitle,) in title_duplicates {
-        let entries: Vec<EntryWithDoi> = sqlx::query_as::<_, EntryWithDoi>(
-            r#"
-            SELECT
-                e.id, e.key, e.title, it.name as item_type, e.date, e.date_added,
-                (SELECT ef.value FROM entry_fields ef JOIN fields f ON ef.field_id = f.id
-                 WHERE ef.entry_id = e.id AND f.name = 'DOI' LIMIT 1) as doi,
-                (SELECT COUNT(*) FROM attachments WHERE entry_id = e.id) as attachment_count
-            FROM entries e
-            JOIN item_types it ON e.item_type_id = it.id
-            WHERE LOWER(e.title) = ? AND e.is_deleted = 0
-            ORDER BY e.date_added DESC
-            "#
-        )
-        .bind(&ltitle)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Group by lowercase title
+    let mut title_groups_map: std::collections::HashMap<String, Vec<&EntryWithDoi>> = std::collections::HashMap::new();
+    for entry in &title_entries {
+        let key = entry.title.to_lowercase();
+        title_groups_map.entry(key).or_default().push(entry);
+    }
 
+    // Batch fetch creators for all title-duplicate entries
+    let all_title_entry_ids: Vec<i64> = title_entries.iter().map(|e| e.id).collect();
+    let title_creators = fetch_creators_display(&state, &all_title_entry_ids).await?;
+
+    for (_ltitle, entries) in &title_groups_map {
         // Skip if all entries in this group were already processed (by DOI)
-        let unprocessed: Vec<&EntryWithDoi> = entries.iter()
+        let unprocessed: Vec<&&EntryWithDoi> = entries.iter()
             .filter(|e| !processed_ids.contains(&e.id))
             .collect();
 
         if unprocessed.len() > 1 || (unprocessed.len() == 1 && entries.len() > 1) {
-            // Only create a new group if there are entries not yet in a DOI group
-            let entry_ids: Vec<i64> = entries.iter().map(|e| e.id).collect();
-            for id in &entry_ids {
-                processed_ids.insert(*id);
+            for e in entries {
+                processed_ids.insert(e.id);
             }
-
-            let creators = fetch_creators_display(&state, &entry_ids).await?;
 
             groups.push(DuplicateGroup {
                 entries: entries.iter().map(|e| DuplicateEntry {
@@ -167,7 +169,7 @@ pub async fn find_duplicates(
                     date: e.date.clone(),
                     date_added: e.date_added.clone(),
                     doi: e.doi.clone(),
-                    creators_display: creators.get(&e.id).cloned(),
+                    creators_display: title_creators.get(&e.id).cloned(),
                     attachment_count: e.attachment_count,
                 }).collect(),
                 match_reason: "Same title".to_string(),
@@ -417,19 +419,17 @@ pub async fn discard_duplicates(
         return Ok(());
     }
 
-    // Soft-delete the discard entries (move to trash)
-    let placeholders: Vec<String> = discard_ids.iter().map(|_| "?".to_string()).collect();
-    let query = format!(
-        "UPDATE entries SET is_deleted = 1, date_modified = datetime('now') WHERE id IN ({})",
-        placeholders.join(", ")
+    // Soft-delete the discard entries (move to trash) using QueryBuilder
+    let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "UPDATE entries SET is_deleted = 1, date_modified = datetime('now') WHERE id IN ("
     );
-
-    let mut query_builder = sqlx::query(&query);
+    let mut separated = builder.separated(", ");
     for id in &discard_ids {
-        query_builder = query_builder.bind(id);
+        separated.push_bind(*id);
     }
+    separated.push_unseparated(")");
 
-    query_builder
+    builder.build()
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;

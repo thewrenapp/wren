@@ -10,6 +10,7 @@ pub mod rag;
 pub mod search;
 pub mod state;
 pub mod tray;
+pub mod utils;
 
 use state::AppState;
 use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -181,6 +182,7 @@ pub fn run() {
             commands::entries::delete_entry,
             commands::entries::get_entry_attachments,
             commands::entries::get_entries_attachments,
+            commands::entries::get_entries_primary_attachment_type,
             commands::entries::get_attachment,
             commands::entries::create_attachment,
             commands::entries::delete_attachment,
@@ -199,6 +201,13 @@ pub fn run() {
             commands::entries::add_file_attachment,
             commands::entries::duplicate_entry,
             commands::entries::repair_entry_attachments,
+            // Batch operations
+            commands::entries::bulk_move_to_trash,
+            commands::entries::bulk_restore_from_trash,
+            commands::entries::bulk_permanent_delete,
+            commands::entries::bulk_add_to_collection,
+            commands::entries::bulk_remove_from_collection,
+            commands::entries::bulk_remove_tags,
             // Schema introspection
             commands::schema::get_all_item_types,
             commands::schema::get_all_creator_types,
@@ -331,7 +340,7 @@ pub fn run() {
             commands::connector::regenerate_connector_token,
         ])
         .build(tauri::generate_context!())
-        .expect("error building tauri application")
+        .expect("failed to build Tauri application: check tauri.conf.json and plugin setup")
         .run(|app_handle, event| {
             if let RunEvent::Exit = event {
                 let state = app_handle.state::<AppState>();

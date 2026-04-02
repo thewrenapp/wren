@@ -240,6 +240,9 @@ fn apply_entry_filters(
         let scope = search_scope.unwrap_or("title_creator_year");
         let pattern = format!("%{}%", search);
 
+        let needs_fields_tags = scope == "fields_tags";
+        // Each push_bind() takes ownership, so we must clone for all but the
+        // final use of `pattern`. The number of binds depends on the scope.
         qb.push(" AND (e.title LIKE ");
         qb.push_bind(pattern.clone());
         qb.push(" OR COALESCE(e.creators_sort, '') LIKE ");
@@ -249,10 +252,10 @@ fn apply_entry_filters(
         qb.push(
             " OR EXISTS(SELECT 1 FROM entry_fields ef JOIN fields f ON ef.field_id = f.id WHERE ef.entry_id = e.id AND f.name = 'publicationTitle' AND ef.value LIKE ",
         );
-        qb.push_bind(pattern.clone());
-        qb.push(")");
 
-        if scope == "fields_tags" {
+        if needs_fields_tags {
+            qb.push_bind(pattern.clone());
+            qb.push(")");
             // Search all fields including abstractNote
             qb.push(
                 " OR EXISTS(SELECT 1 FROM entry_fields ef WHERE ef.entry_id = e.id AND ef.value LIKE ",
@@ -262,6 +265,10 @@ fn apply_entry_filters(
             qb.push(
                 " OR EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON et.tag_id = t.id WHERE et.entry_id = e.id AND t.name LIKE ",
             );
+            qb.push_bind(pattern);
+            qb.push(")");
+        } else {
+            // Last use of pattern — no clone needed
             qb.push_bind(pattern);
             qb.push(")");
         }
@@ -2157,9 +2164,16 @@ pub async fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), Str
     .unwrap_or_default();
 
     tokio::spawn(async move {
-        crate::commands::collections::cleanup_entry_vectors(&db, &lp, id).await;
-        for cid in affected_collections {
-            crate::commands::rag::spawn_collection_raptor_rebuild(db.clone(), lp.clone(), cid);
+        tracing::debug!("Background task started: cleanup_entry_vectors + RAPTOR rebuild for entry {}", id);
+        let result = std::panic::AssertUnwindSafe(async {
+            crate::commands::collections::cleanup_entry_vectors(&db, &lp, id).await;
+            for cid in &affected_collections {
+                crate::commands::rag::spawn_collection_raptor_rebuild(db.clone(), lp.clone(), *cid);
+            }
+        });
+        match futures::FutureExt::catch_unwind(result).await {
+            Ok(()) => tracing::debug!("Background task completed: cleanup_entry_vectors + RAPTOR rebuild for entry {}", id),
+            Err(_) => tracing::error!("Background task panicked: cleanup_entry_vectors + RAPTOR rebuild for entry {}", id),
         }
     });
 
@@ -2389,12 +2403,17 @@ pub async fn permanent_delete_entry(state: State<'_, AppState>, id: i64) -> Resu
     // Clean up RAG vectors before CASCADE deletes attachments
     crate::commands::collections::cleanup_entry_vectors(&state.db, &state.library_path, id).await;
 
+    // Wrap DB deletion in a transaction
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
     // Delete entry from DB (CASCADE will delete fields, creators, attachments, etc.)
     sqlx::query("DELETE FROM entries WHERE id = ?")
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
 
     // Delete individual files from disk
     for path in file_paths.into_iter().flatten() {
@@ -2404,6 +2423,7 @@ pub async fn permanent_delete_entry(state: State<'_, AppState>, id: i64) -> Resu
     }
 
     // Delete entry folder
+    // Safety: entry_key is a server-generated UUID, not user input — no path traversal risk
     let library_path = state.library_path.read().await;
     let entry_folder = library_path.join("files").join(&entry_key);
     if entry_folder.exists() {
@@ -2429,8 +2449,11 @@ pub async fn empty_trash(state: State<'_, AppState>) -> Result<i64, String> {
 
     let count = trashed.len() as i64;
 
-    for (id, entry_key) in trashed {
-        // Get file paths for this entry
+    // Collect all file paths and clean up vectors before the transaction
+    let mut all_file_paths: Vec<String> = Vec::new();
+    let mut entry_keys: Vec<String> = Vec::new();
+
+    for (id, entry_key) in &trashed {
         let file_paths: Vec<Option<String>> =
             sqlx::query_scalar("SELECT file_path FROM attachments WHERE entry_id = ?")
                 .bind(id)
@@ -2438,23 +2461,42 @@ pub async fn empty_trash(state: State<'_, AppState>) -> Result<i64, String> {
                 .await
                 .map_err(|e| e.to_string())?;
 
-        // Delete entry from DB
-        sqlx::query("DELETE FROM entries WHERE id = ?")
-            .bind(id)
-            .execute(&state.db)
+        all_file_paths.extend(file_paths.into_iter().flatten());
+        entry_keys.push(entry_key.clone());
+    }
+
+    // Delete all trashed entries in a single transaction
+    if !trashed.is_empty() {
+        let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
+        let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+            "DELETE FROM entries WHERE id IN ("
+        );
+        let mut separated = builder.separated(", ");
+        for (id, _) in &trashed {
+            separated.push_bind(*id);
+        }
+        separated.push_unseparated(")");
+
+        builder.build()
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
 
-        // Delete files
-        for path in file_paths.into_iter().flatten() {
-            if let Err(e) = fs::remove_file(&path) {
-                tracing::warn!("Failed to delete file {}: {}", path, e);
-            }
-        }
+        tx.commit().await.map_err(|e| e.to_string())?;
+    }
 
-        // Delete entry folder
-        let library_path = state.library_path.read().await;
-        let entry_folder = library_path.join("files").join(&entry_key);
+    // Delete files from disk (outside transaction)
+    for path in all_file_paths {
+        if let Err(e) = fs::remove_file(&path) {
+            tracing::warn!("Failed to delete file {}: {}", path, e);
+        }
+    }
+
+    // Delete entry folders
+    let library_path = state.library_path.read().await;
+    for key in entry_keys {
+        let entry_folder = library_path.join("files").join(&key);
         if entry_folder.exists() {
             if let Err(e) = fs::remove_dir_all(&entry_folder) {
                 tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
@@ -4171,6 +4213,74 @@ pub async fn get_entries_attachments(
     Ok(result)
 }
 
+/// Batch fetch only the primary attachment type name for each entry.
+/// Returns a map of entry_id -> type name (e.g. "pdf", "epub", "snapshot").
+/// The "primary" attachment is the first matching type in priority order:
+/// pdf > epub > snapshot > image, then any attachment with a file_path.
+#[tauri::command]
+pub async fn get_entries_primary_attachment_type(
+    state: State<'_, AppState>,
+    entry_ids: Vec<i64>,
+) -> Result<HashMap<i64, String>, String> {
+    if entry_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let placeholders: Vec<String> = entry_ids.iter().map(|_| "?".to_string()).collect();
+    let query = format!(
+        r#"
+        SELECT a.entry_id, at.name as attachment_type, a.file_path
+        FROM attachments a
+        JOIN attachment_types at ON a.attachment_type_id = at.id
+        WHERE a.entry_id IN ({})
+        ORDER BY a.entry_id, a.date_added ASC
+        "#,
+        placeholders.join(", ")
+    );
+
+    let mut query_builder = sqlx::query(&query);
+    for id in &entry_ids {
+        query_builder = query_builder.bind(id);
+    }
+
+    let rows = query_builder
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Group attachment types by entry_id, then pick primary
+    let priority = ["pdf", "epub", "snapshot", "image"];
+    let mut grouped: HashMap<i64, Vec<(String, Option<String>)>> = HashMap::new();
+    for row in &rows {
+        let entry_id: i64 = row.get("entry_id");
+        let att_type: String = row.get("attachment_type");
+        let file_path: Option<String> = row.get("file_path");
+        grouped.entry(entry_id).or_default().push((att_type, file_path));
+    }
+
+    let mut result: HashMap<i64, String> = HashMap::new();
+    for (entry_id, attachments) in grouped {
+        let mut chosen: Option<&str> = None;
+        for p in &priority {
+            if attachments.iter().any(|(t, _)| t == p) {
+                chosen = Some(p);
+                break;
+            }
+        }
+        if chosen.is_none() {
+            // Fall back to the first attachment that has a file_path
+            if let Some((t, _)) = attachments.iter().find(|(_, fp)| fp.is_some()) {
+                chosen = Some(t.as_str());
+            }
+        }
+        if let Some(t) = chosen {
+            result.insert(entry_id, t.to_string());
+        }
+    }
+
+    Ok(result)
+}
+
 // =====================================================
 // DUPLICATE ENTRY
 // =====================================================
@@ -4293,4 +4403,368 @@ pub async fn duplicate_entry(state: State<'_, AppState>, id: i64) -> Result<Entr
 
     // Return the new entry
     get_entry(state, new_id, None).await
+}
+
+// =====================================================
+// BATCH OPERATIONS
+// =====================================================
+
+/// Bulk move entries to trash (soft-delete) in a single transaction
+#[tauri::command]
+pub async fn bulk_move_to_trash(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<i64, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
+    // Batch soft-delete with QueryBuilder
+    let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "UPDATE entries SET is_deleted = 1, date_modified = datetime('now') WHERE id IN ("
+    );
+    let mut separated = builder.separated(", ");
+    for id in &ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+
+    let _result = builder.build()
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Remove from search index (outside transaction since it's a separate system)
+    for id in &ids {
+        if let Err(e) = state.search_index.delete_entry(*id).await {
+            tracing::warn!("Failed to delete entry {} from search index: {}", id, e);
+        }
+    }
+    if let Err(e) = state.search_index.commit().await {
+        tracing::error!("Failed to commit search index: {}", e);
+    }
+
+    // Clean up RAG vectors in background
+    let db = state.db.clone();
+    let lp = state.library_path.clone();
+    let ids_clone = ids.clone();
+    tokio::spawn(async move {
+        for id in ids_clone {
+            let affected_collections: Vec<i64> = sqlx::query_scalar(
+                "SELECT collection_id FROM collection_entries WHERE entry_id = ?",
+            )
+            .bind(id)
+            .fetch_all(&db)
+            .await
+            .unwrap_or_default();
+
+            crate::commands::collections::cleanup_entry_vectors(&db, &lp, id).await;
+            for cid in affected_collections {
+                crate::commands::rag::spawn_collection_raptor_rebuild(db.clone(), lp.clone(), cid);
+            }
+        }
+    });
+
+    let trash_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entries WHERE is_deleted = 1")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(trash_count)
+}
+
+/// Bulk restore entries from trash in a single transaction, re-indexes entries
+#[tauri::command]
+pub async fn bulk_restore_from_trash(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
+    let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "UPDATE entries SET is_deleted = 0, date_modified = datetime('now') WHERE id IN ("
+    );
+    let mut separated = builder.separated(", ");
+    for id in &ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+
+    builder.build()
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Re-index restored entries
+    #[derive(FromRow)]
+    struct RestoreRow {
+        #[allow(dead_code)]
+        id: i64,
+        key: String,
+        title: Option<String>,
+        item_type: String,
+        creators_sort: Option<String>,
+    }
+
+    for id in &ids {
+        if let Ok(entry_row) = sqlx::query_as::<_, RestoreRow>(
+            r#"
+            SELECT e.id, e.key, e.title, it.name as item_type, e.creators_sort
+            FROM entries e
+            JOIN item_types it ON e.item_type_id = it.id
+            WHERE e.id = ?
+            "#
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        {
+            let abstract_text: Option<String> = sqlx::query_scalar(
+                r#"
+                SELECT ef.value FROM entry_fields ef
+                JOIN fields f ON ef.field_id = f.id
+                WHERE ef.entry_id = ? AND f.name = 'abstractNote'
+                "#
+            )
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+            let entry_metadata = EntryMetadata {
+                entry_id: *id,
+                entry_key: entry_row.key,
+                title: entry_row.title,
+                creators: entry_row.creators_sort,
+                abstract_text,
+                item_type: entry_row.item_type,
+            };
+
+            if let Err(e) = state.search_index.index_entry_metadata(&entry_metadata).await {
+                tracing::warn!("Failed to re-index entry metadata for {}: {}", id, e);
+            }
+        }
+    }
+
+    if let Err(e) = state.search_index.commit().await {
+        tracing::error!("Failed to commit search index: {}", e);
+    }
+
+    Ok(())
+}
+
+/// Bulk permanently delete entries in a single transaction, cleaning up files and vectors
+#[tauri::command]
+pub async fn bulk_permanent_delete(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<(), String> {
+    use std::fs;
+
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    // Collect entry keys and file paths before deletion
+    let mut entry_keys: Vec<String> = Vec::new();
+    let mut all_file_paths: Vec<String> = Vec::new();
+
+    for id in &ids {
+        let entry_key: Option<String> = sqlx::query_scalar("SELECT key FROM entries WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if let Some(key) = entry_key {
+            entry_keys.push(key);
+        }
+
+        let file_paths: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT file_path FROM attachments WHERE entry_id = ?")
+                .bind(id)
+                .fetch_all(&state.db)
+                .await
+                .map_err(|e| e.to_string())?;
+
+        all_file_paths.extend(file_paths.into_iter().flatten());
+
+        // Clean up RAG vectors before CASCADE deletes attachments
+        crate::commands::collections::cleanup_entry_vectors(&state.db, &state.library_path, *id).await;
+    }
+
+    // Delete all entries in a single transaction
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
+    let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "DELETE FROM entries WHERE id IN ("
+    );
+    let mut separated = builder.separated(", ");
+    for id in &ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+
+    builder.build()
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Clean up files from disk (outside transaction)
+    for path in all_file_paths {
+        if let Err(e) = fs::remove_file(&path) {
+            tracing::warn!("Failed to delete file {}: {}", path, e);
+        }
+    }
+
+    // Delete entry folders
+    let library_path = state.library_path.read().await;
+    for key in entry_keys {
+        let entry_folder = library_path.join("files").join(&key);
+        if entry_folder.exists() {
+            if let Err(e) = fs::remove_dir_all(&entry_folder) {
+                tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Bulk add entries to a collection in a single transaction
+#[tauri::command]
+pub async fn bulk_add_to_collection(
+    state: State<'_, AppState>,
+    entry_ids: Vec<i64>,
+    collection_id: i64,
+) -> Result<(), String> {
+    if entry_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
+    // Get current max order_index for this collection
+    let max_order: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(order_index) FROM collection_entries WHERE collection_id = ?"
+    )
+    .bind(collection_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .flatten();
+
+    let mut next_order = max_order.unwrap_or(0) + 1;
+
+    for entry_id in &entry_ids {
+        sqlx::query(
+            "INSERT OR IGNORE INTO collection_entries (entry_id, collection_id, order_index) VALUES (?, ?, ?)"
+        )
+        .bind(entry_id)
+        .bind(collection_id)
+        .bind(next_order)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        next_order += 1;
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Rebuild cross-doc RAPTOR for this collection in background
+    crate::commands::rag::spawn_collection_raptor_rebuild(
+        state.db.clone(), state.library_path.clone(), collection_id,
+    );
+
+    Ok(())
+}
+
+/// Bulk remove entries from a collection in a single transaction
+#[tauri::command]
+pub async fn bulk_remove_from_collection(
+    state: State<'_, AppState>,
+    entry_ids: Vec<i64>,
+    collection_id: i64,
+) -> Result<(), String> {
+    if entry_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
+    let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "DELETE FROM collection_entries WHERE collection_id = "
+    );
+    builder.push_bind(collection_id);
+    builder.push(" AND entry_id IN (");
+    let mut separated = builder.separated(", ");
+    for id in &entry_ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+
+    builder.build()
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Rebuild cross-doc RAPTOR for this collection in background
+    crate::commands::rag::spawn_collection_raptor_rebuild(
+        state.db.clone(), state.library_path.clone(), collection_id,
+    );
+
+    Ok(())
+}
+
+/// Bulk remove tags from entries in a single transaction
+#[tauri::command]
+pub async fn bulk_remove_tags(
+    state: State<'_, AppState>,
+    entry_ids: Vec<i64>,
+    tag_ids: Vec<i64>,
+) -> Result<(), String> {
+    if entry_ids.is_empty() || tag_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
+    let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "DELETE FROM entry_tags WHERE entry_id IN ("
+    );
+    let mut separated = builder.separated(", ");
+    for id in &entry_ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(") AND tag_id IN (");
+    let mut separated = builder.separated(", ");
+    for id in &tag_ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+
+    builder.build()
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    Ok(())
 }

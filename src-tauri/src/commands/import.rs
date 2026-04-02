@@ -344,6 +344,9 @@ async fn import_single_pdf_with_handle(
     .await
     .map_err(|e| e.to_string())?;
 
+    // Wrap entry + creators + fields + attachment inserts in a transaction
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+
     // Insert entry
     let entry_result = sqlx::query(
         r#"
@@ -355,7 +358,7 @@ async fn import_single_pdf_with_handle(
     .bind(&entry_key)
     .bind(item_type_id)
     .bind(&title)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| format!("Failed to insert entry: {}", e))?;
 
@@ -384,12 +387,9 @@ async fn import_single_pdf_with_handle(
         .bind(&last_name)
         .bind(&name)
         .bind(sort_order as i32)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to insert creator: {}", e))?;
-    }
-    if let Err(e) = crate::commands::entries::refresh_entry_creators_sort(&state.db, entry_id).await {
-        tracing::warn!("Failed to refresh creators_sort for entry {}: {}", entry_id, e);
     }
 
     // Insert abstract into entry_fields if present
@@ -398,7 +398,7 @@ async fn import_single_pdf_with_handle(
         let abstract_field_id: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM fields WHERE name = 'abstractNote'"
         )
-        .fetch_optional(&state.db)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -412,14 +412,10 @@ async fn import_single_pdf_with_handle(
             .bind(entry_id)
             .bind(field_id)
             .bind(abstract_text)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await
             .map_err(|e| format!("Failed to insert abstract: {}", e))?;
         }
-    }
-
-    if let Err(e) = crate::commands::entries::refresh_entry_fts(&state.db, entry_id).await {
-        tracing::warn!("Failed to refresh entries_fts for entry {}: {}", entry_id, e);
     }
 
     // Auto-rename file if setting is enabled
@@ -508,11 +504,22 @@ async fn import_single_pdf_with_handle(
     .bind(&file_hash)
     .bind(file_size)
     .bind(metadata.page_count)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| format!("Failed to insert attachment: {}", e))?;
 
     let attachment_id: i64 = attachment_result.get("id");
+
+    // Commit the transaction (entry + creators + fields + attachment all inserted)
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Post-commit: refresh denormalized columns (these read from committed data)
+    if let Err(e) = crate::commands::entries::refresh_entry_creators_sort(&state.db, entry_id).await {
+        tracing::warn!("Failed to refresh creators_sort for entry {}: {}", entry_id, e);
+    }
+    if let Err(e) = crate::commands::entries::refresh_entry_fts(&state.db, entry_id).await {
+        tracing::warn!("Failed to refresh entries_fts for entry {}: {}", entry_id, e);
+    }
 
     tracing::info!("Imported PDF: {} (entry: {}, attachment: {})", final_title, entry_key, attachment_key);
 
@@ -1382,7 +1389,8 @@ pub async fn preview_biblatex_import(
 
         match bib_files.len() {
             0 => return Err("No .bib file found in the selected folder".to_string()),
-            1 => bib_files.into_iter().next().unwrap(),
+            1 => bib_files.into_iter().next()
+                .ok_or_else(|| "Expected exactly one .bib file but got none".to_string())?,
             _ => {
                 let folder_name = input_path.file_name()
                     .and_then(|n| n.to_str())
@@ -1480,9 +1488,16 @@ pub async fn preview_biblatex_import(
             for (file_title, file_path, mimetype) in parsed_files {
                 let attachment_type = get_attachment_type_from_mimetype(&mimetype, &file_path);
 
-                // Check if file exists
+                // Check if file exists (validate path stays within base_path;
+                // file_path is parsed from BibTeX file content and could contain traversal)
                 let full_path = base_path.join(&file_path);
-                let exists = full_path.exists();
+                let exists = full_path.canonicalize()
+                    .ok()
+                    .and_then(|canonical| {
+                        base_path.canonicalize().ok().map(|base| canonical.starts_with(&base))
+                    })
+                    .unwrap_or(false)
+                    && full_path.exists();
 
                 files.push(BiblatexPreviewFile {
                     title: file_title,
@@ -1629,7 +1644,8 @@ pub async fn import_biblatex_with_files(
 
         match bib_files.len() {
             0 => return Err("No .bib file found in the selected folder".to_string()),
-            1 => bib_files.into_iter().next().unwrap(),
+            1 => bib_files.into_iter().next()
+                .ok_or_else(|| "Expected exactly one .bib file but got none".to_string())?,
             _ => {
                 // If multiple .bib files, prefer one named "export.bib" or the one matching folder name
                 let folder_name = input_path.file_name()
@@ -2010,9 +2026,29 @@ pub async fn import_biblatex_with_files(
                     }
                 }
                 // Resolve file path relative to base path
+                // Validate path stays within base_path (file_path is parsed from BibTeX
+                // file content and could contain path traversal sequences)
                 let source_file = base_path.join(&file_path);
+                let validated_source = match source_file.canonicalize() {
+                    Ok(canonical) => {
+                        let canonical_base = base_path.canonicalize()
+                            .map_err(|e| format!("Base path error: {}", e))?;
+                        if !canonical.starts_with(&canonical_base) {
+                            errors.push(format!(
+                                "File path escapes base directory: {} (for entry '{}')",
+                                file_path, title
+                            ));
+                            continue;
+                        }
+                        canonical
+                    }
+                    Err(_) => {
+                        errors.push(format!("File not found: {} (for entry '{}')", file_path, title));
+                        continue;
+                    }
+                };
 
-                if !source_file.exists() {
+                if !validated_source.exists() {
                     errors.push(format!("File not found: {} (for entry '{}')", file_path, title));
                     continue;
                 }
@@ -2041,14 +2077,14 @@ pub async fn import_biblatex_with_files(
                 }
 
                 // Get original filename
-                let original_file_name = source_file.file_name()
+                let original_file_name = validated_source.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("attachment_{}", Uuid::new_v4()));
 
                 let dest_path = dest_dir.join(&original_file_name);
 
                 // Copy file
-                if let Err(e) = fs::copy(&source_file, &dest_path) {
+                if let Err(e) = fs::copy(&validated_source, &dest_path) {
                     errors.push(format!("Failed to copy file {}: {}", file_path, e));
                     continue;
                 }
@@ -2076,7 +2112,7 @@ pub async fn import_biblatex_with_files(
 
                 // Auto-rename file if setting is enabled
                 let final_dest_path = if auto_rename {
-                    let extension = source_file
+                    let extension = validated_source
                         .extension()
                         .map(|e| e.to_string_lossy().to_string())
                         .unwrap_or_else(|| "pdf".to_string());
