@@ -2,7 +2,7 @@ use serde::Serialize;
 use sqlx::FromRow;
 use tauri::State;
 
-use crate::search::extractor::{is_worth_saving, markdown_path_for, save_markdown, ExtractionConfig};
+use crate::search::extractor::markdown_path_for;
 use crate::search::searcher::FullSearchResult;
 use crate::state::AppState;
 
@@ -37,7 +37,6 @@ pub struct ReindexProgress {
 
 #[derive(Debug, FromRow)]
 struct EntrySearchRow {
-    id: i64,
     key: String,
     item_type: String,
     title: Option<String>,
@@ -416,7 +415,7 @@ pub async fn reindex_entry(
     // Get entry from database
     let entry: Option<EntrySearchRow> = sqlx::query_as(
         r#"
-        SELECT e.id, e.key, it.name as item_type, e.title
+        SELECT e.key, it.name as item_type, e.title
         FROM entries e
         JOIN item_types it ON e.item_type_id = it.id
         WHERE e.id = ? AND e.is_deleted = 0
@@ -581,289 +580,56 @@ pub async fn reindex_entry(
     Ok(())
 }
 
-/// Reindex all entries in the library (background task)
+/// Reindex all entries in the library by enqueuing individual extraction jobs.
 #[tauri::command]
 pub async fn reindex_library(
     state: State<'_, AppState>,
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     _enable_ocr: Option<bool>,
     _force_ocr: Option<bool>,
 ) -> Result<(), String> {
-    use tauri::Emitter;
+    // Get all attachments that have files
+    #[derive(Debug, FromRow)]
+    struct AttachmentJobRow {
+        id: i64,
+        file_path: Option<String>,
+    }
 
-    let config = ExtractionConfig;
-
-    // Get all entries
-    let entries: Vec<EntrySearchRow> = sqlx::query_as(
+    let attachments: Vec<AttachmentJobRow> = sqlx::query_as(
         r#"
-        SELECT e.id, e.key, it.name as item_type, e.title
-        FROM entries e
-        JOIN item_types it ON e.item_type_id = it.id
+        SELECT a.id, a.file_path
+        FROM attachments a
+        JOIN attachment_types at ON a.attachment_type_id = at.id
+        JOIN entries e ON a.entry_id = e.id
         WHERE e.is_deleted = 0
+          AND a.file_path IS NOT NULL
+          AND at.name IN ('pdf', 'epub')
         "#,
     )
     .fetch_all(&state.db)
     .await
     .map_err(|e| e.to_string())?;
 
-    let total = entries.len();
-    let _ = app_handle.emit("reindex:start", total);
+    let mut enqueued = 0;
+    for att in &attachments {
+        let file_name = att.file_path.as_deref()
+            .and_then(|p| std::path::Path::new(p).file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
 
-    let library_path = state.library_path.read().await.clone();
-
-    for (i, entry) in entries.iter().enumerate() {
-        // Emit progress
-        let _ = app_handle.emit("reindex:progress", (i, total));
-
-        // Delete existing documents for this entry
-        let _ = state.search_index.delete_entry(entry.id).await;
-
-        // Get creators
-        let creators: Vec<CreatorNamesRow> = sqlx::query_as(
-            r#"
-        SELECT COALESCE(
-            NULLIF(TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')), ''),
-            name
-        ) as full_name
-        FROM entry_creators WHERE entry_id = ? ORDER BY sort_order
-        "#,
-        )
-        .bind(entry.id)
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
-
-        let creators_str = creators
-            .into_iter()
-            .filter_map(|c| c.full_name)
-            .collect::<Vec<_>>()
-            .join("; ");
-
-        // Get abstract
-        let abstract_row: Option<AbstractRow> = sqlx::query_as(
-            r#"
-        SELECT ef.value FROM entry_fields ef
-        JOIN fields f ON ef.field_id = f.id
-        WHERE ef.entry_id = ? AND f.name = 'abstractNote'
-        "#,
-        )
-        .bind(entry.id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-
-        let abstract_text = abstract_row.and_then(|r| r.value);
-
-        // Index metadata
-        let metadata = crate::search::indexer::EntryMetadata {
-            entry_id: entry.id,
-            entry_key: entry.key.clone(),
-            title: entry.title.clone(),
-            creators: if creators_str.is_empty() {
-                None
-            } else {
-                Some(creators_str)
-            },
-            abstract_text,
-            item_type: entry.item_type.clone(),
-        };
-
-        let _ = state.search_index.index_entry_metadata(&metadata).await;
-
-        // Get attachments
-        let attachments: Vec<AttachmentRow> = sqlx::query_as(
-            r#"
-        SELECT a.id, a.file_path, at.name as attachment_type
-        FROM attachments a
-        JOIN attachment_types at ON a.attachment_type_id = at.id
-        WHERE a.entry_id = ? AND a.file_path IS NOT NULL
-        "#,
-        )
-        .bind(entry.id)
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
-
-        for attachment in attachments {
-            if let Some(file_path) = attachment.file_path {
-                let full_path = library_path.join(&file_path);
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                if full_path.exists() {
-                    // Emit progress: extracting
-                    let _ = app_handle.emit(
-                        "reindex:detail",
-                        ReindexProgress {
-                            current: i,
-                            total,
-                            entry_title: entry.title.clone(),
-                            file_name: Some(file_name.clone()),
-                            step: "extracting".to_string(),
-                            method: Some("ferrules".to_string()),
-                            status: "processing".to_string(),
-                            message: None,
-                        },
-                    );
-
-                    let attachment_data = crate::search::indexer::AttachmentData {
-                        entry_id: entry.id,
-                        entry_key: entry.key.clone(),
-                        attachment_id: attachment.id,
-                        title: entry.title.clone(),
-                        file_path: full_path.to_string_lossy().to_string(),
-                        content_source: attachment.attachment_type.clone(),
-                    };
-
-                    let parser = state.get_pdf_parser().await.ok();
-                    match state
-                        .search_index
-                        .index_attachment_content(&attachment_data, &config, parser)
-                        .await
-                    {
-                        Ok(result) => {
-                            // Save markdown alongside original if extraction is substantial
-                            let worth_saving = result.extracted_text.as_ref().map_or(false, |t| is_worth_saving(t));
-                            if worth_saving {
-                                if let Some(ref text) = result.extracted_text {
-                                    if let Ok(md_path) = save_markdown(&full_path, text) {
-                                        let relative_md = md_path
-                                            .strip_prefix(&library_path)
-                                            .ok()
-                                            .map(|p| p.to_string_lossy().to_string());
-                                        if let Some(rel) = relative_md {
-                                            let _ = sqlx::query(
-                                                "UPDATE attachments SET markdown_path = ? WHERE id = ?",
-                                            )
-                                            .bind(&rel)
-                                            .bind(attachment.id)
-                                            .execute(&state.db)
-                                            .await;
-                                        }
-                                    }
-                                }
-                            } else {
-                                // Clear stale markdown_path and remove old .md file
-                                let stale_md = markdown_path_for(&full_path);
-                                let _ = std::fs::remove_file(&stale_md);
-                                let _ = sqlx::query(
-                                    "UPDATE attachments SET markdown_path = NULL WHERE id = ?",
-                                )
-                                .bind(attachment.id)
-                                .execute(&state.db)
-                                .await;
-                            }
-
-                            let _ = app_handle.emit(
-                                "reindex:detail",
-                                ReindexProgress {
-                                    current: i,
-                                    total,
-                                    entry_title: entry.title.clone(),
-                                    file_name: Some(file_name.clone()),
-                                    step: "indexing".to_string(),
-                                    method: Some(result.method.as_str().to_string()),
-                                    status: if result.indexed {
-                                        "success"
-                                    } else {
-                                        "skipped"
-                                    }
-                                    .to_string(),
-                                    message: result.message,
-                                },
-                            );
-                        }
-                        Err(e) => {
-                            let _ = app_handle.emit(
-                                "reindex:detail",
-                                ReindexProgress {
-                                    current: i,
-                                    total,
-                                    entry_title: entry.title.clone(),
-                                    file_name: Some(file_name.clone()),
-                                    step: "indexing".to_string(),
-                                    method: None,
-                                    status: "failed".to_string(),
-                                    message: Some(e.to_string()),
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Index annotations for this attachment
-            let annotations: Vec<AnnotationRow> = sqlx::query_as(
-                r#"
-                SELECT selected_text, comment
-                FROM attachment_annotations
-                WHERE attachment_id = ?
-                "#,
-            )
-            .bind(attachment.id)
-            .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
-
-            if !annotations.is_empty() {
-                let selected_texts: Vec<String> = annotations
-                    .iter()
-                    .filter_map(|a| a.selected_text.clone())
-                    .filter(|t| !t.trim().is_empty())
-                    .collect();
-                let comments: Vec<String> = annotations
-                    .iter()
-                    .filter_map(|a| a.comment.clone())
-                    .filter(|c| !c.trim().is_empty())
-                    .collect();
-
-                if !selected_texts.is_empty() || !comments.is_empty() {
-                    let annotation_data = crate::search::indexer::AnnotationData {
-                        entry_id: entry.id,
-                        entry_key: entry.key.clone(),
-                        attachment_id: attachment.id,
-                        title: entry.title.clone(),
-                        selected_text: if selected_texts.is_empty() {
-                            None
-                        } else {
-                            Some(selected_texts.join("\n"))
-                        },
-                        comment: if comments.is_empty() {
-                            None
-                        } else {
-                            Some(comments.join("\n"))
-                        },
-                    };
-
-                    let _ = state
-                        .search_index
-                        .index_annotations(&annotation_data)
-                        .await;
-                }
-            }
-        }
-
-        // Commit every 100 entries
-        if (i + 1) % 100 == 0 {
-            if let Err(e) = state.search_index.commit().await {
-                tracing::error!("Failed to commit search index at batch {}: {}", i + 1, e);
-            }
+        if let Err(e) = state.job_queue.enqueue(
+            crate::jobs::types::JobType::OcrExtract,
+            Some(format!("Extract: {}", file_name)),
+            serde_json::json!({ "attachmentId": att.id }),
+            0,
+        ).await {
+            tracing::warn!("Failed to enqueue reindex job for attachment {}: {}", att.id, e);
+        } else {
+            enqueued += 1;
         }
     }
 
-    // Final commit
-    state
-        .search_index
-        .commit()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let _ = app_handle.emit("reindex:complete", total);
-
+    tracing::info!("Reindex library: enqueued {} extraction jobs", enqueued);
     Ok(())
 }
 

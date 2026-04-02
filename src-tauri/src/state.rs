@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{OnceCell, RwLock};
 
+use crate::connector::ConnectorServer;
 use crate::db;
 use crate::jobs::queue::JobQueue;
 use crate::search::SearchIndex;
@@ -17,6 +18,8 @@ pub struct AppState {
     pub job_queue: Arc<JobQueue>,
     /// Ferrules PDF parser (lazy-initialized on first PDF upload).
     pdf_parser: Arc<OnceCell<FerrulesParser>>,
+    /// Connector HTTP server for browser extension
+    pub connector_server: Arc<RwLock<Option<ConnectorServer>>>,
 }
 
 impl AppState {
@@ -70,12 +73,60 @@ impl AppState {
         job_queue.start_scheduler();
         tracing::info!("Job queue initialized");
 
+        // Start connector server if enabled
+        let connector_server = Arc::new(RwLock::new(None));
+        {
+            let connector_enabled = crate::commands::settings::is_setting_enabled(&db, "connector_enabled").await;
+            if connector_enabled {
+                let port_str = crate::commands::settings::get_setting_value(&db, "connector_port")
+                    .await
+                    .unwrap_or_else(|| "1289".to_string());
+                let port: u16 = port_str.parse().unwrap_or(1289);
+
+                // Get or generate token
+                let token = match crate::commands::settings::get_setting_value(&db, "connector_token").await {
+                    Some(t) if !t.is_empty() => t,
+                    _ => {
+                        let new_token = uuid::Uuid::new_v4().to_string();
+                        let _ = sqlx::query(
+                            "INSERT INTO settings (key, value, value_type) VALUES ('connector_token', ?, 'string') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                        )
+                        .bind(&new_token)
+                        .execute(&db)
+                        .await;
+                        new_token
+                    }
+                };
+
+                match ConnectorServer::start(
+                    port,
+                    token,
+                    db.clone(),
+                    library_path.clone(),
+                    search_index.clone(),
+                    job_queue.clone(),
+                    app_handle.clone(),
+                )
+                .await
+                {
+                    Ok(server) => {
+                        *connector_server.write().await = Some(server);
+                        tracing::info!("Connector server started on port {}", port);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to start connector server: {}", e);
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             db,
             library_path,
             search_index,
             job_queue,
             pdf_parser,
+            connector_server,
         })
     }
 

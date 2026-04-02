@@ -422,12 +422,21 @@ async fn execute_reindex(
     // Also rebuild semantic (RAG vector) index
     let rag_auto = crate::commands::settings::is_setting_enabled(db, "rag_auto_index").await;
     if rag_auto {
-        update_progress(app_handle, db, job_id, total, total, Some("Building semantic index...".to_string())).await;
         for entry in &entries {
             if cancel_flag.load(Ordering::Relaxed) { break; }
-            if let Err(e) = auto_rag_index(db, entry.id, library_path).await {
-                tracing::warn!("RAG index failed for entry {} during reindex: {}", entry.id, e);
-            }
+            let rag_job_id = uuid::Uuid::new_v4().to_string();
+            let title = entry.title.as_deref().unwrap_or("entry");
+            let short = if title.len() > 50 { &title[..47] } else { title };
+            let _ = sqlx::query(
+                r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
+                   VALUES (?, 'rag_index', 'pending', ?, ?, 0)"#,
+            )
+            .bind(&rag_job_id)
+            .bind(format!("Semantic Index: {}...", short))
+            .bind(serde_json::json!({ "entryId": entry.id }).to_string())
+            .execute(db)
+            .await
+            .ok();
         }
     }
 
@@ -584,7 +593,6 @@ async fn execute_ocr_extract(
             search_index.commit().await.map_err(|e| e.to_string())?;
 
             // Auto-extract metadata with AI if enabled and entry has no real title
-            // (i.e. title looks like a filename — no spaces, or matches the attachment filename)
             if worth_saving {
                 let auto_metadata = crate::commands::settings::is_setting_enabled(db, "ai_auto_metadata").await;
                 if auto_metadata {
@@ -597,7 +605,6 @@ async fn execute_ocr_extract(
                     .ok()
                     .flatten();
 
-                    // Only extract if title looks like a filename (no spaces, or very short)
                     let needs_metadata = current_title
                         .as_ref()
                         .map(|t| {
@@ -610,20 +617,36 @@ async fn execute_ocr_extract(
                         .unwrap_or(true);
 
                     if needs_metadata {
-                        if let Err(e) = auto_extract_metadata(db, info.entry_id, library_path).await {
-                            tracing::warn!("Auto AI metadata failed for entry {}: {}", info.entry_id, e);
-                        }
+                        let meta_job_id = uuid::Uuid::new_v4().to_string();
+                        let _ = sqlx::query(
+                            r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
+                               VALUES (?, 'metadata_extract', 'pending', ?, ?, 0)"#,
+                        )
+                        .bind(&meta_job_id)
+                        .bind(format!("AI Metadata: entry {}", info.entry_id))
+                        .bind(serde_json::json!({ "entryId": info.entry_id }).to_string())
+                        .execute(db)
+                        .await
+                        .ok();
                     }
                 }
             }
 
-            // Auto-index into RAG if enabled
+            // Auto-index into RAG if enabled — enqueue as separate job
             if worth_saving {
                 let rag_auto = crate::commands::settings::is_setting_enabled(db, "rag_auto_index").await;
                 if rag_auto {
-                    if let Err(e) = auto_rag_index(db, info.entry_id, library_path).await {
-                        tracing::warn!("Auto RAG index failed for entry {}: {}", info.entry_id, e);
-                    }
+                    let rag_job_id = uuid::Uuid::new_v4().to_string();
+                    let _ = sqlx::query(
+                        r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
+                           VALUES (?, 'rag_index', 'pending', ?, ?, 0)"#,
+                    )
+                    .bind(&rag_job_id)
+                    .bind(format!("Semantic Index: entry {}", info.entry_id))
+                    .bind(serde_json::json!({ "entryId": info.entry_id }).to_string())
+                    .execute(db)
+                    .await
+                    .ok();
                 }
             }
 
@@ -969,12 +992,20 @@ async fn execute_llm_parse(
             let structured_md_path = full_md_path.with_extension("structured.md");
             let _ = tokio::fs::write(&structured_md_path, &parsed.structured_markdown).await;
 
-            // Auto-index into RAG if enabled
+            // Auto-index into RAG if enabled — enqueue as separate job
             let rag_auto = crate::commands::settings::is_setting_enabled(db, "rag_auto_index").await;
             if rag_auto {
-                if let Err(e) = auto_rag_index(db, payload.entry_id, library_path).await {
-                    tracing::warn!("Auto RAG index failed for entry {}: {}", payload.entry_id, e);
-                }
+                let rag_job_id = uuid::Uuid::new_v4().to_string();
+                let _ = sqlx::query(
+                    r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
+                       VALUES (?, 'rag_index', 'pending', ?, ?, 0)"#,
+                )
+                .bind(&rag_job_id)
+                .bind(format!("Semantic Index: entry {}", payload.entry_id))
+                .bind(serde_json::json!({ "entryId": payload.entry_id }).to_string())
+                .execute(db)
+                .await
+                .ok();
             }
 
             update_progress(app_handle, db, job_id, 1, 1, Some("Done".to_string())).await;
@@ -1028,70 +1059,6 @@ async fn execute_llm_parse(
             Err(format!("LLM parsing failed: {e}"))
         }
     }
-}
-
-/// Inline RAG indexing: resolve embedding config → open store → index entry.
-/// Called after OCR extraction and LLM parse when auto-index is enabled.
-async fn auto_rag_index(
-    db: &SqlitePool,
-    entry_id: i64,
-    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
-) -> Result<(), String> {
-    let embed_config = crate::rag::embeddings::resolve_embedding_config(db).await?;
-
-    let dimension = match crate::rag::embeddings::probe_dimension(&embed_config).await {
-        Ok(d) => d,
-        Err(_) => crate::rag::embeddings::known_dimension(
-            &embed_config.provider_type,
-            &embed_config.model,
-        )
-        .ok_or_else(|| "Cannot determine embedding dimension".to_string())?,
-    };
-
-    let lib_path = library_path.read().await;
-    let lance_path = lib_path.join(".wren").join("rag_vectors");
-    let store = crate::rag::store::VectorStore::new(&lance_path, dimension).await?;
-
-    // Build RAPTOR config if enabled
-    let raptor = {
-        let enabled = crate::commands::settings::is_setting_enabled(db, "raptor_enabled").await;
-        if enabled {
-            let provider = crate::commands::settings::get_setting_value(db, "llm_provider").await.unwrap_or_default();
-            let api_key = crate::commands::settings::get_setting_value(db, &format!("llm_api_key_{}", provider)).await.unwrap_or_default();
-            let base_url = crate::commands::settings::get_setting_value(db, "llm_base_url").await;
-            let model = crate::commands::settings::get_setting_value(db, "rag_gen_model").await
-                .filter(|m| !m.is_empty())
-                .or_else(|| {
-                    // Sync fallback - can't await here but we already have the value
-                    None
-                });
-            // Need the model - try llm_model
-            let model = match model {
-                Some(m) => m,
-                None => crate::commands::settings::get_setting_value(db, "llm_model").await.unwrap_or_default(),
-            };
-            if !model.is_empty() {
-                Some(crate::rag::indexer::RaptorIndexConfig {
-                    enabled: true,
-                    gen_config: crate::rag::retrieval::RagGenModelConfig {
-                        provider_type: provider,
-                        api_key,
-                        base_url,
-                        model,
-                    },
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    };
-
-    let count = crate::rag::indexer::index_entry(db, &store, &embed_config, entry_id, &lib_path, raptor.as_ref()).await?;
-    tracing::info!("Auto RAG indexed entry {} — {} chunks", entry_id, count);
-
-    Ok(())
 }
 
 /// Auto-extract metadata with AI after PDF text extraction.

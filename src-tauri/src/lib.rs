@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod connector;
 pub mod db;
 pub mod filename;
 pub mod graph;
@@ -323,15 +324,25 @@ pub fn run() {
             commands::rag::rag_get_collection_summaries,
             commands::rag::rag_build_collection_raptor,
             commands::rag::rag_rebuild,
+            // Connector
+            commands::connector::get_connector_status,
+            commands::connector::start_connector_server,
+            commands::connector::stop_connector_server,
+            commands::connector::regenerate_connector_token,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")
         .run(|app_handle, event| {
             if let RunEvent::Exit = event {
-                // Graceful shutdown: cancel running jobs and let restartable
-                // ones be recovered on next startup
                 let state = app_handle.state::<AppState>();
-                tauri::async_runtime::block_on(state.job_queue.shutdown());
+                tauri::async_runtime::block_on(async {
+                    // Graceful shutdown: stop connector server
+                    if let Some(server) = state.connector_server.write().await.take() {
+                        server.stop().await;
+                    }
+                    // Cancel running jobs and let restartable ones be recovered on next startup
+                    state.job_queue.shutdown().await;
+                });
             }
         });
 }

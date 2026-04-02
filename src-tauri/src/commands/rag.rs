@@ -161,25 +161,6 @@ async fn resolve_raptor_retrieval_config(
     })
 }
 
-async fn build_raptor_config(
-    db: &sqlx::SqlitePool,
-) -> Option<crate::rag::indexer::RaptorIndexConfig> {
-    let enabled = get_setting(db, "raptor_enabled").await
-        .map(|v| v == "true")
-        .unwrap_or(false);
-
-    if !enabled {
-        return None;
-    }
-
-    let gen_config = resolve_rag_gen_config(db).await?;
-
-    Some(crate::rag::indexer::RaptorIndexConfig {
-        enabled: true,
-        gen_config,
-    })
-}
-
 async fn open_vector_store(
     library_path: &std::path::Path,
     dimension: usize,
@@ -344,26 +325,37 @@ pub async fn rag_status(state: State<'_, AppState>) -> Result<RagStatus, String>
     })
 }
 
-/// Index a single entry into the RAG vector store.
+/// Index a single entry into the RAG vector store (via job queue).
 #[tauri::command]
 pub async fn rag_index_entry(
     state: State<'_, AppState>,
     entry_id: i64,
 ) -> Result<String, String> {
-    let db = &state.db;
-    let embed_config = resolve_embed_config(db).await?;
-    let dimension = resolve_dimension(&embed_config).await?;
+    let title: String = sqlx::query_scalar("SELECT title FROM entries WHERE id = ?")
+        .bind(entry_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| format!("Entry {}", entry_id));
 
-    let lib_path = state.library_path.read().await;
-    let store = open_vector_store(&lib_path, dimension).await?;
+    let short_title = if title.len() > 50 {
+        format!("{}...", &title[..47])
+    } else {
+        title.clone()
+    };
 
-    let raptor = build_raptor_config(db).await;
-    let count = crate::rag::indexer::index_entry(
-        db, &store, &embed_config, entry_id, &lib_path, raptor.as_ref(),
-    )
-    .await?;
+    state
+        .job_queue
+        .enqueue(
+            crate::jobs::types::JobType::RagIndex,
+            Some(format!("Semantic Index: {}", short_title)),
+            serde_json::json!({ "entryId": entry_id }),
+            0,
+        )
+        .await
+        .map_err(|e| format!("Failed to enqueue RAG index job: {}", e))?;
 
-    Ok(format!("Indexed {} chunks for entry {}", count, entry_id))
+    Ok(format!("Queued semantic indexing for {}", title))
 }
 
 /// Enqueue one RAG index job per unindexed entry.

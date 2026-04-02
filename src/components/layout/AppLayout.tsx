@@ -19,6 +19,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from '@/stores/toastStore';
 import { useJobStore } from '@/stores/jobStore';
+import { useLibraryStore } from '@/stores/libraryStore';
 import { cn } from '@/lib/utils';
 import {
   DndContext,
@@ -136,6 +137,24 @@ export function AppLayout() {
       }
     });
 
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for connector:item-saved events from the browser extension
+  useEffect(() => {
+    const unlisten = listen<{ id: number; key: string; title: string; itemType: string }>(
+      'connector:item-saved',
+      (event) => {
+        const { title } = event.payload;
+        const shortTitle = title.length > 50 ? title.slice(0, 47) + '...' : title;
+        toast.success(`Saved from browser: ${shortTitle}`);
+        // Refresh the full library (entry list, sidebar counts, detail panel)
+        useLibraryStore.getState().invalidateEntry();
+        useLibraryStore.getState().refreshLibrary();
+      }
+    );
     return () => {
       unlisten.then((fn) => fn());
     };

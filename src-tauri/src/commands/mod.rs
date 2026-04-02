@@ -1,5 +1,6 @@
 pub mod annotations;
 pub mod collections;
+pub mod connector;
 pub mod duplicates;
 pub mod entries;
 pub mod entry_links;

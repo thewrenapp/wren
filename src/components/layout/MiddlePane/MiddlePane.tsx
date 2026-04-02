@@ -184,6 +184,7 @@ export function MiddlePane() {
       await emptyTrash();
       setTrashedEntries([]);
       setTrashCount(0);
+      await refresh();
     } catch (err) {
       console.error('Failed to empty trash:', err);
     }
@@ -201,6 +202,7 @@ export function MiddlePane() {
     await loadTrashedEntries();
     const count = await getTrashCount();
     setTrashCount(count);
+    await refresh();
   };
 
   // Clear attachment cache when version changes (e.g., after adding an attachment)

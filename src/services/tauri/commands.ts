@@ -567,6 +567,32 @@ export async function getLibraryPath(): Promise<string> {
 }
 
 // =====================================================
+// Connector (Browser Extension)
+// =====================================================
+
+export interface ConnectorStatus {
+  running: boolean;
+  port: number | null;
+  token: string | null;
+}
+
+export async function getConnectorStatus(): Promise<ConnectorStatus> {
+  return invoke('get_connector_status');
+}
+
+export async function startConnectorServer(): Promise<void> {
+  return invoke('start_connector_server');
+}
+
+export async function stopConnectorServer(): Promise<void> {
+  return invoke('stop_connector_server');
+}
+
+export async function regenerateConnectorToken(): Promise<string> {
+  return invoke('regenerate_connector_token');
+}
+
+// =====================================================
 // Entry/Attachment Types
 // =====================================================
 
