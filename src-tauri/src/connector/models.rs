@@ -90,6 +90,14 @@ pub struct ConnectorItem {
     pub tags: Vec<ConnectorTag>,
     #[serde(default)]
     pub attachments: Vec<ConnectorAttachment>,
+    #[serde(default)]
+    pub notes: Vec<ConnectorNote>,
+}
+
+/// A note from the Zotero translator format
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectorNote {
+    pub note: Option<String>,
 }
 
 /// Request body for POST /connector/saveItems

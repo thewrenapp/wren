@@ -15,11 +15,16 @@ use crate::search::indexer::EntryMetadata;
 /// Zotero-compatible version string so the connector framework recognizes us
 const COMPAT_VERSION: &str = "7.0.0";
 
+/// Pre-parsed header value for COMPAT_VERSION, avoiding repeated `.parse().unwrap()`.
+fn compat_header_value() -> axum::http::HeaderValue {
+    axum::http::HeaderValue::from_static(COMPAT_VERSION)
+}
+
 /// GET /connector/ping — health check, no auth required.
 /// Returns X-Zotero-Version header and prefs for connector framework compatibility.
 pub async fn ping() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    headers.insert("X-Zotero-Version", compat_header_value());
     (
         headers,
         Json(serde_json::json!({
@@ -105,7 +110,7 @@ pub async fn save_items(
     }
 
     let mut headers = HeaderMap::new();
-    headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    headers.insert("X-Zotero-Version", compat_header_value());
     (headers, Json(SaveItemsResponse { items: saved }))
 }
 
@@ -349,6 +354,52 @@ async fn save_single_item(
         tracing::warn!("Failed to index entry metadata for {}: {}", entry_key, e);
     }
 
+    // Save notes as note attachments (e.g. arXiv comments)
+    if !item.notes.is_empty() {
+        let library_path = state.library_path.read().await;
+        let entry_dir = library_path.join("files").join(&entry_key);
+        std::fs::create_dir_all(&entry_dir).ok();
+
+        let note_type_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM attachment_types WHERE name = 'note'"
+        )
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(2);
+
+        for (i, note) in item.notes.iter().enumerate() {
+            if let Some(note_text) = &note.note {
+                let note_text = note_text.trim();
+                if note_text.is_empty() {
+                    continue;
+                }
+                let note_key = uuid::Uuid::new_v4().to_string();
+                let note_filename = if i == 0 { "Note.md".to_string() } else { format!("Note_{}.md", i + 1) };
+                let note_path = entry_dir.join(&note_filename);
+                let _ = std::fs::write(&note_path, note_text);
+                let rel_md = note_path.strip_prefix(&*library_path)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let abs_path = note_path.to_string_lossy().to_string();
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO attachments (key, entry_id, attachment_type_id, title, file_path, markdown_path)
+                       VALUES (?, ?, ?, ?, ?, ?)"#,
+                )
+                .bind(&note_key)
+                .bind(entry_id)
+                .bind(note_type_id)
+                .bind(note_text.chars().take(100).collect::<String>())
+                .bind(&abs_path)
+                .bind(&rel_md)
+                .execute(&state.db)
+                .await;
+            }
+        }
+    }
+
     Ok(SavedEntry {
         id: entry_id,
         key: entry_key,
@@ -363,7 +414,7 @@ pub async fn update_session(
     Json(request): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    headers.insert("X-Zotero-Version", compat_header_value());
 
     let session_id = request.get("sessionID").and_then(|v| v.as_str()).unwrap_or("");
     let target = request.get("target").and_then(|v| v.as_str()).unwrap_or("");
@@ -459,7 +510,7 @@ pub async fn update_session(
 /// POST /connector/delaySync — stub, we don't sync externally
 pub async fn delay_sync() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    headers.insert("X-Zotero-Version", compat_header_value());
     (headers, Json(serde_json::json!({})))
 }
 
@@ -471,7 +522,7 @@ pub async fn save_attachment(
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     let mut resp_headers = HeaderMap::new();
-    resp_headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    resp_headers.insert("X-Zotero-Version", compat_header_value());
 
     let session_id = params.get("sessionID").cloned().unwrap_or_default();
 
@@ -657,20 +708,115 @@ pub async fn save_attachment(
 /// POST /connector/hasAttachmentResolvers — we don't have OA resolvers
 pub async fn has_attachment_resolvers() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    headers.insert("X-Zotero-Version", compat_header_value());
     (headers, Json(serde_json::json!(false)))
 }
 
 pub async fn save_snapshot() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    headers.insert("X-Zotero-Version", compat_header_value());
+    (headers, Json(serde_json::json!({"result": "ok"})))
+}
+
+/// POST /connector/saveSingleFile — save an HTML snapshot captured by SingleFile
+pub async fn save_single_file(
+    State(state): State<Arc<ConnectorState>>,
+    Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Zotero-Version", compat_header_value());
+
+    let session_id = request.get("sessionID").and_then(|v| v.as_str()).unwrap_or("");
+    let snapshot_content = request.get("snapshotContent").and_then(|v| v.as_str()).unwrap_or("");
+    let url = request.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let title = request.get("title").and_then(|v| v.as_str()).unwrap_or("Snapshot");
+
+    if snapshot_content.is_empty() {
+        return (headers, Json(serde_json::json!({"error": "empty snapshot"})));
+    }
+
+    // Find entry for this session
+    let entry_ids = {
+        let sessions = state.sessions.lock().await;
+        sessions.get(session_id).cloned().unwrap_or_default()
+    };
+
+    let entry_id = match entry_ids.first() {
+        Some(id) => *id,
+        None => {
+            tracing::warn!("saveSingleFile: no entry for session {}", session_id);
+            return (headers, Json(serde_json::json!({"error": "no entry for session"})));
+        }
+    };
+
+    let entry_key: String = match sqlx::query_scalar("SELECT key FROM entries WHERE id = ?")
+        .bind(entry_id)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(k) => k,
+        Err(_) => return (headers, Json(serde_json::json!({"error": "entry not found"}))),
+    };
+
+    let library_path = state.library_path.read().await;
+    let entry_dir = library_path.join("files").join(&entry_key);
+    std::fs::create_dir_all(&entry_dir).ok();
+
+    let file_path = entry_dir.join("Snapshot.html");
+    if let Err(e) = std::fs::write(&file_path, snapshot_content.as_bytes()) {
+        return (headers, Json(serde_json::json!({"error": e.to_string()})));
+    }
+
+    use sha2::{Digest, Sha256};
+    let hash = hex::encode(Sha256::digest(snapshot_content.as_bytes()));
+    let att_key = uuid::Uuid::new_v4().to_string();
+    let abs_path = file_path.to_string_lossy().to_string();
+
+    let att_type_id: i64 = sqlx::query_scalar("SELECT id FROM attachment_types WHERE name = 'snapshot'")
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(3);
+
+    let attachment_id: i64 = match sqlx::query_scalar(
+        r#"INSERT INTO attachments (key, entry_id, attachment_type_id, title, file_path, file_hash, file_size)
+           VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"#,
+    )
+    .bind(&att_key)
+    .bind(entry_id)
+    .bind(att_type_id)
+    .bind(title)
+    .bind(&abs_path)
+    .bind(&hash)
+    .bind(snapshot_content.len() as i64)
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("Failed to insert snapshot attachment: {}", e);
+            return (headers, Json(serde_json::json!({"error": e.to_string()})));
+        }
+    };
+
+    tracing::info!("Saved snapshot for entry {}: {} ({} bytes)", entry_key, url, snapshot_content.len());
+
+    // Enqueue extraction for the snapshot
+    let _ = state.job_queue.enqueue(
+        crate::jobs::types::JobType::OcrExtract,
+        Some(format!("Extract: Snapshot.html")),
+        serde_json::json!({ "attachmentId": attachment_id }),
+        0,
+    ).await;
+
     (headers, Json(serde_json::json!({"result": "ok"})))
 }
 
 /// POST /connector/sessionProgress — returns done so the extension completes its save flow
 pub async fn session_progress() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    headers.insert("X-Zotero-Version", compat_header_value());
     (
         headers,
         Json(serde_json::json!({
@@ -685,7 +831,7 @@ pub async fn get_selected_collection(
     State(state): State<Arc<ConnectorState>>,
 ) -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert("X-Zotero-Version", COMPAT_VERSION.parse().unwrap());
+    headers.insert("X-Zotero-Version", compat_header_value());
 
     // Fetch collections for the target picker
     let collections: Vec<serde_json::Value> = sqlx::query(

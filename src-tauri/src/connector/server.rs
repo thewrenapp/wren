@@ -21,6 +21,7 @@ pub async fn start_server(
         .route("/connector/ping", get(handlers::ping).post(handlers::ping))
         .route("/connector/saveItems", post(handlers::save_items))
         .route("/connector/saveSnapshot", post(handlers::save_snapshot))
+        .route("/connector/saveSingleFile", post(handlers::save_single_file))
         .route("/connector/getSelectedCollection", post(handlers::get_selected_collection))
         .route("/connector/saveAttachment", post(handlers::save_attachment))
         .route("/connector/hasAttachmentResolvers", post(handlers::has_attachment_resolvers))
