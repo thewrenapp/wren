@@ -52,10 +52,10 @@ import {
   getEntryAttachments,
   getEntriesAttachments,
   getTrashedEntries,
-  restoreEntry,
   emptyTrash,
   getTrashCount,
-  permanentDeleteEntry,
+  bulkRestoreFromTrash,
+  bulkPermanentDelete,
   previewBiblatexImport,
   importBiblatexWithFiles,
   openFileWithDefaultApp,
@@ -117,12 +117,18 @@ export function MiddlePane() {
 
   const viewMode = viewModeByFilter[activeFilter];
 
-  const activeTags = activeTagIds.length > 0
-    ? tags.filter((tag) => activeTagIds.includes(tag.id))
-    : [];
-  const activeCollection = activeCollectionId
-    ? collections.find((collection) => collection.id === activeCollectionId)
-    : null;
+  const activeTags = useMemo(() =>
+    activeTagIds.length > 0
+      ? tags.filter((tag) => activeTagIds.includes(tag.id))
+      : [],
+    [tags, activeTagIds]
+  );
+  const activeCollection = useMemo(() =>
+    activeCollectionId
+      ? collections.find((collection) => collection.id === activeCollectionId)
+      : null,
+    [collections, activeCollectionId]
+  );
   const isTagView = libraryFilter.type === 'tag';
   const isEmptyTagMode = isTagView && activeTagIds.length === 0;
   const isCollectionView = Boolean(activeCollectionId);
@@ -164,12 +170,10 @@ export function MiddlePane() {
 
   // Trash actions
   const handleRestoreSelected = async () => {
-    for (const id of selectedEntryIds) {
-      try {
-        await restoreEntry(id);
-      } catch (err) {
-        console.error(`Failed to restore entry ${id}:`, err);
-      }
+    try {
+      await bulkRestoreFromTrash(selectedEntryIds);
+    } catch (err) {
+      console.error('Failed to restore entries:', err);
     }
     clearSelection();
     await loadTrashedEntries();
@@ -191,12 +195,10 @@ export function MiddlePane() {
   };
 
   const handleDeleteSelectedPermanently = async () => {
-    for (const id of selectedEntryIds) {
-      try {
-        await permanentDeleteEntry(id);
-      } catch (err) {
-        console.error(`Failed to permanently delete entry ${id}:`, err);
-      }
+    try {
+      await bulkPermanentDelete(selectedEntryIds);
+    } catch (err) {
+      console.error('Failed to permanently delete entries:', err);
     }
     clearSelection();
     await loadTrashedEntries();

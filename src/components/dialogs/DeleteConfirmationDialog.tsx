@@ -7,14 +7,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIStore, getDeleteConfirmCallback } from "@/stores/uiStore";
 import { Trash2 } from "lucide-react";
 
 export function DeleteConfirmationDialog() {
   const { deleteConfirmation, hideDeleteConfirmation } = useUIStore();
-  const { open, entryIds, onConfirm } = deleteConfirmation;
+  const { open, entryIds } = deleteConfirmation;
 
   const handleConfirm = () => {
+    const onConfirm = getDeleteConfirmCallback();
     if (onConfirm) {
       onConfirm();
     }

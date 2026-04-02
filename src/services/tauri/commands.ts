@@ -302,6 +302,30 @@ export async function emptyTrash(): Promise<number> {
   return invoke('empty_trash');
 }
 
+export async function bulkMoveToTrash(ids: number[]): Promise<number> {
+  return invoke('bulk_move_to_trash', { ids });
+}
+
+export async function bulkRestoreFromTrash(ids: number[]): Promise<void> {
+  return invoke('bulk_restore_from_trash', { ids });
+}
+
+export async function bulkPermanentDelete(ids: number[]): Promise<void> {
+  return invoke('bulk_permanent_delete', { ids });
+}
+
+export async function bulkAddToCollection(entryIds: number[], collectionId: number): Promise<void> {
+  return invoke('bulk_add_to_collection', { entryIds, collectionId });
+}
+
+export async function bulkRemoveFromCollection(entryIds: number[], collectionId: number): Promise<void> {
+  return invoke('bulk_remove_from_collection', { entryIds, collectionId });
+}
+
+export async function bulkRemoveTags(entryIds: number[], tagIds: number[]): Promise<void> {
+  return invoke('bulk_remove_tags', { entryIds, tagIds });
+}
+
 // =====================================================
 // Attachment Commands
 // =====================================================
@@ -318,6 +342,16 @@ export async function getEntriesAttachments(
   entryIds: number[],
 ): Promise<Record<number, Attachment[]>> {
   return invoke('get_entries_attachments', { entryIds });
+}
+
+/**
+ * Batch fetch only the primary attachment type name for each entry.
+ * Returns a map of entryId -> type name (e.g. "pdf", "epub", "snapshot").
+ */
+export async function getEntriesPrimaryAttachmentType(
+  entryIds: number[],
+): Promise<Record<number, string>> {
+  return invoke('get_entries_primary_attachment_type', { entryIds });
 }
 
 export async function getAttachment(id: number): Promise<Attachment> {

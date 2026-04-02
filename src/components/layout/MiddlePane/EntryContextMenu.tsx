@@ -47,21 +47,20 @@ import { useTabStore } from '@/stores/tabStore';
 import {
   showEntryInFinder,
   showEntriesInFinder,
-  addEntryToCollection,
-  removeEntryFromCollection,
-  deleteEntry,
   addPdfAttachment,
   addFileAttachment,
   createAttachment,
-  getTrashCount,
   exportToCslJson,
   exportToBibtex,
   exportToBiblatexWithFiles,
   getCollections,
   getTags,
   addTagToEntries,
-  removeEntryTag,
   reindexEntry,
+  bulkAddToCollection,
+  bulkRemoveFromCollection,
+  bulkRemoveTags,
+  bulkMoveToTrash,
   type ExportOptions,
 } from '@/services/tauri';
 import { parseEntries } from '@/services/tauri/commands';
@@ -90,7 +89,6 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
     entries,
     removeEntry,
     invalidateAttachments,
-    setTrashCount,
     setCollections,
     setTags,
     invalidateEntry,
@@ -154,10 +152,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
 
   const handleAddToCollection = async (collectionId: number) => {
     try {
-      // Add all selected entries to collection
-      for (const id of targetIds) {
-        await addEntryToCollection(id, collectionId);
-      }
+      await bulkAddToCollection(targetIds, collectionId);
       // Refresh collections to update item count
       const allCollections = await getCollections();
       setCollections(allCollections);
@@ -173,10 +168,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
 
   const handleRemoveFromCollection = async (collectionId: number) => {
     try {
-      // Remove all selected entries from the collection
-      for (const id of targetIds) {
-        await removeEntryFromCollection(id, collectionId);
-      }
+      await bulkRemoveFromCollection(targetIds, collectionId);
       // Refresh collections to update item count
       const allCollections = await getCollections();
       setCollections(allCollections);
@@ -212,12 +204,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
 
   const handleRemoveActiveTag = async () => {
     try {
-      // Remove all active tags from all selected entries
-      for (const id of targetIds) {
-        for (const tagId of activeTagIds) {
-          await removeEntryTag(id, tagId);
-        }
-      }
+      await bulkRemoveTags(targetIds, activeTagIds);
       // Refresh tags to update item count
       const allTags = await getTags();
       setTags(allTags);
@@ -340,21 +327,16 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
 
   const handleDelete = async () => {
     try {
-      // Delete all selected entries
+      // Optimistic UI: remove entries and close tabs
       for (const id of targetIds) {
-        await deleteEntry(id);
         removeEntry(id);
-        // Close any open tabs for this entry
         const entryTabs = tabs.filter((t) => t.type === 'entry' && t.entryId === String(id));
         entryTabs.forEach((t) => closeTab(t.id));
       }
-      const count = await getTrashCount();
-      setTrashCount(count);
-      // Refresh collections and tags to update item counts
-      const allCollections = await getCollections();
-      setCollections(allCollections);
-      const allTags = await getTags();
-      setTags(allTags);
+      // Batch move to trash
+      await bulkMoveToTrash(targetIds);
+      // Full refresh to update entries, counts, collections, tags, and trash count
+      await refreshLibrary();
       toast.success(isMultiSelect ? `${targetIds.length} entries moved to Trash` : 'Moved to Trash');
     } catch (err) {
       console.error('Failed to delete entry:', err);
@@ -683,7 +665,6 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
     entries,
     removeEntry,
     invalidateAttachments,
-    setTrashCount,
     setCollections,
     setTags,
     invalidateEntry,
@@ -747,10 +728,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
 
   const handleAddToCollection = async (collectionId: number) => {
     try {
-      // Add all selected entries to collection
-      for (const id of targetIds) {
-        await addEntryToCollection(id, collectionId);
-      }
+      await bulkAddToCollection(targetIds, collectionId);
       // Refresh collections to update item count
       const allCollections = await getCollections();
       setCollections(allCollections);
@@ -765,10 +743,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
 
   const handleRemoveFromCollection = async (collectionId: number) => {
     try {
-      // Remove all selected entries from the collection
-      for (const id of targetIds) {
-        await removeEntryFromCollection(id, collectionId);
-      }
+      await bulkRemoveFromCollection(targetIds, collectionId);
       // Refresh collections to update item count
       const allCollections = await getCollections();
       setCollections(allCollections);
@@ -802,12 +777,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
 
   const handleRemoveActiveTag = async () => {
     try {
-      // Remove all active tags from all selected entries
-      for (const id of targetIds) {
-        for (const tagId of activeTagIds) {
-          await removeEntryTag(id, tagId);
-        }
-      }
+      await bulkRemoveTags(targetIds, activeTagIds);
       // Refresh tags to update item count
       const allTags = await getTags();
       setTags(allTags);
@@ -924,21 +894,16 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
 
   const handleDelete = async () => {
     try {
-      // Delete all selected entries
+      // Optimistic UI: remove entries and close tabs
       for (const id of targetIds) {
-        await deleteEntry(id);
         removeEntry(id);
-        // Close any open tabs for this entry
         const entryTabs = tabs.filter((t) => t.type === 'entry' && t.entryId === String(id));
         entryTabs.forEach((t) => closeTab(t.id));
       }
-      const count = await getTrashCount();
-      setTrashCount(count);
-      // Refresh collections and tags to update item counts
-      const allCollections = await getCollections();
-      setCollections(allCollections);
-      const allTags = await getTags();
-      setTags(allTags);
+      // Batch move to trash
+      await bulkMoveToTrash(targetIds);
+      // Full refresh to update entries, counts, collections, tags, and trash count
+      await refreshLibrary();
       toast.success(isMultiSelect ? `${targetIds.length} entries moved to Trash` : 'Moved to Trash');
     } catch (err) {
       console.error('Failed to delete entry:', err);

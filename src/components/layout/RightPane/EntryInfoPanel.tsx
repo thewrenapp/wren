@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/stores/toastStore";
 import {
   Info,
@@ -79,6 +79,12 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Backlinks state
   const [backlinks, setBacklinks] = useState<BacklinkInfo[]>([]);
 
+  // Track the current entry ID so async handlers can detect staleness
+  const currentEntryIdRef = useRef(entry.id);
+  useEffect(() => {
+    currentEntryIdRef.current = entry.id;
+  }, [entry.id]);
+
   // Load schema on mount
   useEffect(() => {
     if (!isLoaded) {
@@ -89,26 +95,32 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Fetch full entry details (also refetch when entryVersion changes)
   // Pass includeDeleted=true when viewing trash items
   useEffect(() => {
+    let cancelled = false;
     getEntry(entry.id, isTrashView)
       .then((data) => {
-        setFullEntry(data);
+        if (!cancelled) setFullEntry(data);
       })
-      .catch(console.error);
+      .catch((err) => { if (!cancelled) console.error(err); });
+    return () => { cancelled = true; };
   }, [entry.id, entryVersion, isTrashView]);
 
   // Fetch backlinks
   useEffect(() => {
+    let cancelled = false;
     getEntryBacklinks(entry.id)
-      .then(setBacklinks)
-      .catch(() => setBacklinks([]));
+      .then((data) => { if (!cancelled) setBacklinks(data); })
+      .catch(() => { if (!cancelled) setBacklinks([]); });
+    return () => { cancelled = true; };
   }, [entry.id, entryVersion]);
 
   // Fetch item type info when entry changes or edited item type changes
   useEffect(() => {
+    let cancelled = false;
     const typeToFetch = isEditing ? editedItemType : entry.itemType;
     if (typeToFetch) {
-      getItemTypeInfo(typeToFetch).then(setItemTypeInfo);
+      getItemTypeInfo(typeToFetch).then((info) => { if (!cancelled) setItemTypeInfo(info); });
     }
+    return () => { cancelled = true; };
   }, [entry.itemType, editedItemType, isEditing, getItemTypeInfo]);
 
   // Initialize edit state when entering edit mode
@@ -249,13 +261,17 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Add tag
   const handleAddTag = async () => {
     if (!fullEntry || !newTagName.trim()) return;
+    const entryId = fullEntry.id;
     try {
-      await addEntryTag(fullEntry.id, newTagName.trim());
+      await addEntryTag(entryId, newTagName.trim());
+      if (currentEntryIdRef.current !== entryId) return;
       // Refresh entry to get updated tags
-      const updated = await getEntry(fullEntry.id, isTrashView);
+      const updated = await getEntry(entryId, isTrashView);
+      if (currentEntryIdRef.current !== entryId) return;
       setFullEntry(updated);
       // Refresh global tags list for sidebar
       const allTags = await getTags();
+      if (currentEntryIdRef.current !== entryId) return;
       setTags(allTags);
       // Refresh entries list to update tag dots
       await refreshLibrary();
@@ -269,12 +285,16 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Remove tag
   const handleRemoveTag = async (tagId: number) => {
     if (!fullEntry) return;
+    const entryId = fullEntry.id;
     try {
-      await removeEntryTag(fullEntry.id, tagId);
-      const updated = await getEntry(fullEntry.id, isTrashView);
+      await removeEntryTag(entryId, tagId);
+      if (currentEntryIdRef.current !== entryId) return;
+      const updated = await getEntry(entryId, isTrashView);
+      if (currentEntryIdRef.current !== entryId) return;
       setFullEntry(updated);
       // Refresh global tags for sidebar count
       const allTags = await getTags();
+      if (currentEntryIdRef.current !== entryId) return;
       setTags(allTags);
       // Refresh entries list to update tag dots
       await refreshLibrary();
@@ -286,12 +306,16 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Add to collection
   const handleAddToCollection = async (collectionId: number) => {
     if (!fullEntry) return;
+    const entryId = fullEntry.id;
     try {
-      await addEntryToCollection(fullEntry.id, collectionId);
-      const updated = await getEntry(fullEntry.id, isTrashView);
+      await addEntryToCollection(entryId, collectionId);
+      if (currentEntryIdRef.current !== entryId) return;
+      const updated = await getEntry(entryId, isTrashView);
+      if (currentEntryIdRef.current !== entryId) return;
       setFullEntry(updated);
       // Refresh collections to update sidebar counts
       const allCollections = await getCollections();
+      if (currentEntryIdRef.current !== entryId) return;
       setCollections(allCollections);
       setIsAddingCollection(false);
     } catch (err) {
@@ -302,12 +326,16 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
   // Remove from collection
   const handleRemoveFromCollection = async (collectionId: number) => {
     if (!fullEntry) return;
+    const entryId = fullEntry.id;
     try {
-      await removeEntryFromCollection(fullEntry.id, collectionId);
-      const updated = await getEntry(fullEntry.id, isTrashView);
+      await removeEntryFromCollection(entryId, collectionId);
+      if (currentEntryIdRef.current !== entryId) return;
+      const updated = await getEntry(entryId, isTrashView);
+      if (currentEntryIdRef.current !== entryId) return;
       setFullEntry(updated);
       // Refresh collections to update sidebar counts
       const allCollections = await getCollections();
+      if (currentEntryIdRef.current !== entryId) return;
       setCollections(allCollections);
     } catch (err) {
       console.error("Failed to remove from collection:", err);
@@ -831,7 +859,7 @@ interface MetadataFieldProps {
   inputType?: "text" | "date" | "url";
 }
 
-function MetadataField({
+const MetadataField = React.memo(function MetadataField({
   label,
   value,
   isEditing,
@@ -893,7 +921,7 @@ function MetadataField({
       </div>
     </div>
   );
-}
+});
 
 
 function formatRelativeDate(dateStr: string): string {

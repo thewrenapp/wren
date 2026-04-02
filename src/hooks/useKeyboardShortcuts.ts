@@ -4,7 +4,6 @@ import { useUIStore } from "@/stores/uiStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import {
-  deleteEntry,
   duplicateEntry,
   exportToBibtex,
   showEntryInFinder,
@@ -12,6 +11,7 @@ import {
   addPdfAttachment,
   restoreEntry,
   getTrashCount,
+  bulkMoveToTrash,
 } from "@/services/tauri";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "@/stores/toastStore";
@@ -37,17 +37,14 @@ export function useKeyboardShortcuts() {
   const performDelete = useCallback(async () => {
     if (selectedEntryIds.length === 0) return;
 
-    // Delete all selected entries (soft delete - moves to trash)
-    for (const id of selectedEntryIds) {
-      try {
-        await deleteEntry(id);
-      } catch (err) {
-        console.error(`Failed to delete entry ${id}:`, err);
-      }
+    try {
+      await bulkMoveToTrash(selectedEntryIds);
+    } catch (err) {
+      console.error('Failed to move entries to trash:', err);
     }
 
     clearSelection();
-    refreshLibrary();
+    await refreshLibrary();
   }, [selectedEntryIds, clearSelection, refreshLibrary]);
 
   // Handle delete for selected entries (with confirmation for bulk)

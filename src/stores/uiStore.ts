@@ -112,7 +112,6 @@ interface UIState {
   deleteConfirmation: {
     open: boolean;
     entryIds: number[];
-    onConfirm: (() => void) | null;
   };
 
   // Actions
@@ -173,6 +172,11 @@ interface UIState {
   hideDeleteConfirmation: () => void;
 }
 
+// Module-level ref for delete confirmation callback to avoid storing functions in state
+let _deleteConfirmCallback: (() => void) | null = null;
+
+export const getDeleteConfirmCallback = () => _deleteConfirmCallback;
+
 export const useUIStore = create<UIState>()(
   persist(
     (set, get) => ({
@@ -220,7 +224,6 @@ export const useUIStore = create<UIState>()(
       deleteConfirmation: {
         open: false,
         entryIds: [],
-        onConfirm: null,
       },
 
       // Actions
@@ -370,23 +373,25 @@ export const useUIStore = create<UIState>()(
           },
         }),
 
-      showDeleteConfirmation: (entryIds, onConfirm) =>
+      showDeleteConfirmation: (entryIds, onConfirm) => {
+        _deleteConfirmCallback = onConfirm;
         set({
           deleteConfirmation: {
             open: true,
             entryIds,
-            onConfirm,
           },
-        }),
+        });
+      },
 
-      hideDeleteConfirmation: () =>
+      hideDeleteConfirmation: () => {
+        _deleteConfirmCallback = null;
         set({
           deleteConfirmation: {
             open: false,
             entryIds: [],
-            onConfirm: null,
           },
-        }),
+        });
+      },
     }),
     {
       name: 'wren-ui',

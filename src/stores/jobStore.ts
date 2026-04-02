@@ -129,13 +129,19 @@ export const useJobStore = create<JobState>()((set, get) => ({
   startListening: async () => {
     await get().loadJobs();
     const unlisten = await listen<Job>("job:updated", (event) => {
+      // Check if the store is still listening (not yet stopped)
+      if (!get()._unlisten) return;
       get()._upsertJob(event.payload);
       // Refresh library when metadata extraction or OCR extraction completes
       const job = event.payload;
       if (job.status === "completed" && (job.jobType === "metadata_extract" || job.jobType === "ocr_extract")) {
         // Dynamic import to avoid circular dependency
         import("@/stores/libraryStore").then(({ useLibraryStore }) => {
+          // Re-check subscription is still active after async import
+          if (!get()._unlisten) return;
           useLibraryStore.getState().refreshLibrary();
+        }).catch((err) => {
+          console.error("Failed to refresh library after job completion:", err);
         });
       }
     });

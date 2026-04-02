@@ -91,7 +91,7 @@ import {
   importBiblatexWithFiles,
   previewBiblatexImport,
   getEntriesPaged,
-  deleteEntry,
+  bulkMoveToTrash,
   duplicateEntry,
   getEntry,
   addEntryToCollection,
@@ -122,6 +122,7 @@ import {
   reindexEntry,
   importAnnotationsFromPdf,
   getEntryAttachments,
+  getEntriesPrimaryAttachmentType,
   fullTextSearch,
   parseEntries,
   ragSearch,
@@ -265,36 +266,40 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
   const activeTab = useMemo(() => tabs.find(t => t.id === activeTabId), [tabs, activeTabId]);
 
   // Resolve descriptive labels for entry tabs (e.g. "PDF", "EPUB", "Notes")
+  // Uses a single batch call instead of per-tab getEntryAttachments (N+1).
   const [tabTypeLabels, setTabTypeLabels] = useState<Record<string, string>>({});
   useEffect(() => {
     const entryTabs = tabs.filter(t => t.type === "entry" && t.entryId);
     if (entryTabs.length === 0) return;
-    const labelMap: Record<string, string> = {};
-    Promise.all(entryTabs.map(async (tab) => {
-      try {
-        const attachments = await getEntryAttachments(Number(tab.entryId));
-        let target = tab.attachmentId
-          ? attachments.find(a => String(a.id) === tab.attachmentId)
-          : undefined;
-        if (!target) {
-          for (const type of ["pdf", "epub", "snapshot", "image"]) {
-            target = attachments.find(a => a.attachmentType === type);
-            if (target) break;
-          }
+    let cancelled = false;
+    const typeDisplayMap: Record<string, string> = {
+      pdf: "PDF", epub: "EPUB", snapshot: "Web Snapshot", image: "Image",
+      note: "Notes", weblink: "Weblink",
+    };
+    const entryIds = entryTabs.map(t => Number(t.entryId));
+    getEntriesPrimaryAttachmentType(entryIds)
+      .then((typeMap) => {
+        if (cancelled) return;
+        const labelMap: Record<string, string> = {};
+        for (const tab of entryTabs) {
+          const typeName = typeMap[Number(tab.entryId)];
+          labelMap[tab.id] = typeName ? (typeDisplayMap[typeName] || "Entry") : "Entry";
         }
-        if (!target) target = attachments.find(a => a.filePath);
-        const typeDisplayMap: Record<string, string> = {
-          pdf: "PDF", epub: "EPUB", snapshot: "Web Snapshot", image: "Image",
-          note: "Notes", weblink: "Weblink",
-        };
-        labelMap[tab.id] = target ? (typeDisplayMap[target.attachmentType] || "Entry") : "Entry";
-      } catch {
-        labelMap[tab.id] = "Entry";
-      }
-    })).then(() => setTabTypeLabels(labelMap));
+        setTabTypeLabels(labelMap);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const labelMap: Record<string, string> = {};
+        for (const tab of entryTabs) {
+          labelMap[tab.id] = "Entry";
+        }
+        setTabTypeLabels(labelMap);
+      });
+    return () => { cancelled = true; };
   }, [tabs]);
 
   useEffect(() => {
+    let cancelled = false;
     if (!activeTab) {
       setViewerContext("library");
       setContextAttachmentId(null);
@@ -307,18 +312,20 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       // For markdown tabs, resolve the attachment ID
       if (activeTab.entryId) {
         getEntryAttachments(Number(activeTab.entryId)).then(attachments => {
+          if (cancelled) return;
           const target = activeTab.attachmentId
             ? attachments.find(a => String(a.id) === activeTab.attachmentId)
             : attachments.find(a => a.filePath);
           setContextAttachmentId(target?.id ?? null);
-        }).catch(() => setContextAttachmentId(null));
+        }).catch(() => { if (!cancelled) setContextAttachmentId(null); });
       }
-      return;
+      return () => { cancelled = true; };
     }
     if (activeTab.type !== "entry" || !activeTab.entryId) { setViewerContext("none"); setContextAttachmentId(null); return; }
 
     // Resolve attachment type for entry tab
     getEntryAttachments(Number(activeTab.entryId)).then(attachments => {
+      if (cancelled) return;
       let target = activeTab.attachmentId
         ? attachments.find(a => String(a.id) === activeTab.attachmentId)
         : undefined;
@@ -336,7 +343,8 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       };
       setViewerContext(target ? (typeMap[target.attachmentType] || "none") : "none");
       setContextAttachmentId(target?.id ?? null);
-    }).catch(() => { setViewerContext("none"); setContextAttachmentId(null); });
+    }).catch(() => { if (!cancelled) { setViewerContext("none"); setContextAttachmentId(null); } });
+    return () => { cancelled = true; };
   }, [activeTab?.id, activeTab?.type, activeTab?.entryId, activeTab?.attachmentId]);
 
   const [searchResults, setSearchResults] = useState<EntrySummary[]>([]);
@@ -810,9 +818,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
   // Actual delete operation
   const performDelete = async () => {
     try {
-      for (const id of selectedEntryIds) {
-        await deleteEntry(id);
-      }
+      await bulkMoveToTrash(selectedEntryIds);
       toast.success(`Moved ${selectedEntryIds.length} entries to trash`);
       clearSelection();
       await refreshLibrary();

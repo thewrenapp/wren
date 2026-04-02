@@ -47,8 +47,54 @@ export function useLibrarySync() {
 
   const isMounted = useRef(false);
   const pageSize = 20;
+  const loadLibraryAbortRef = useRef<AbortController | null>(null);
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
+
+  // Shared helper to build query params from current filter/search state
+  const buildQueryParams = useCallback(() => {
+    let advancedSearch: { matchMode: 'all' | 'any'; criteria: Array<{ field: string; operator: string; value: string | null }> } | undefined;
+    let savedSearchCollectionId: number | undefined;
+
+    if (activeSavedSearchId) {
+      const savedSearch = savedSearches.find((s) => s.id === activeSavedSearchId);
+      if (savedSearch) {
+        advancedSearch = {
+          matchMode: savedSearch.matchMode,
+          criteria: savedSearch.criteria.map((c) => ({
+            field: c.field,
+            operator: c.operator,
+            value: c.value,
+          })),
+        };
+        if (savedSearch.scope === 'collection' && savedSearch.collectionId) {
+          savedSearchCollectionId = savedSearch.collectionId;
+        }
+      }
+    }
+
+    const filterParams = {
+      collectionId: savedSearchCollectionId || (activeCollectionId ? Number(activeCollectionId) : undefined),
+      tagIds: !activeSavedSearchId && activeTagIds.length > 0 ? activeTagIds : undefined,
+      tagMode: !activeSavedSearchId && activeTagIds.length > 1 ? tagFilterMode : undefined,
+      searchQuery: !activeSavedSearchId ? (searchQuery || undefined) : undefined,
+      searchScope: !activeSavedSearchId ? searchScope : undefined,
+      filterType: !activeSavedSearchId ? (uiFilter || undefined) : undefined,
+      advancedSearch,
+      sortField,
+      sortDirection,
+      secondarySortField: secondarySortField || undefined,
+      secondarySortDirection: secondarySortDirection || undefined,
+    };
+
+    return { advancedSearch, savedSearchCollectionId, filterParams };
+  }, [activeSavedSearchId, savedSearches, activeCollectionId, activeTagIds, tagFilterMode, searchQuery, searchScope, uiFilter, sortField, sortDirection, secondarySortField, secondarySortDirection]);
 
   const loadLibrary = useCallback(async () => {
+    // Cancel any in-flight loadLibrary request
+    loadLibraryAbortRef.current?.abort();
+    const abortController = new AbortController();
+    loadLibraryAbortRef.current = abortController;
+
     setLoading(true);
     setError(null);
 
@@ -56,26 +102,7 @@ export function useLibrarySync() {
       // Check if we're in tag mode with no tags selected - show empty
       const isEmptyTagMode = activeFilter.type === 'tag' && activeTagIds.length === 0;
 
-      // Build advanced search params if a saved search is active
-      let advancedSearch: { matchMode: 'all' | 'any'; criteria: Array<{ field: string; operator: string; value: string | null }> } | undefined;
-      let savedSearchCollectionId: number | undefined;
-
-      if (activeSavedSearchId) {
-        const savedSearch = savedSearches.find((s) => s.id === activeSavedSearchId);
-        if (savedSearch) {
-          advancedSearch = {
-            matchMode: savedSearch.matchMode,
-            criteria: savedSearch.criteria.map((c) => ({
-              field: c.field,
-              operator: c.operator,
-              value: c.value,
-            })),
-          };
-          if (savedSearch.scope === 'collection' && savedSearch.collectionId) {
-            savedSearchCollectionId = savedSearch.collectionId;
-          }
-        }
-      }
+      const { filterParams } = buildQueryParams();
 
       resetPaging();
       // Load entries (first page), counts, collections, tags, and trash count in parallel
@@ -83,17 +110,7 @@ export function useLibrarySync() {
         isEmptyTagMode
           ? Promise.resolve({ entries: [], total: 0 }) // Empty entries for tag mode with no selection
           : tauri.getEntriesPaged({
-              collectionId: savedSearchCollectionId || (activeCollectionId ? Number(activeCollectionId) : undefined),
-              tagIds: !activeSavedSearchId && activeTagIds.length > 0 ? activeTagIds : undefined,
-              tagMode: !activeSavedSearchId && activeTagIds.length > 1 ? tagFilterMode : undefined,
-              searchQuery: !activeSavedSearchId ? (searchQuery || undefined) : undefined,
-              searchScope: !activeSavedSearchId ? searchScope : undefined,
-              filterType: !activeSavedSearchId ? (uiFilter || undefined) : undefined,
-              advancedSearch,
-              sortField,
-              sortDirection,
-              secondarySortField: secondarySortField || undefined,
-              secondarySortDirection: secondarySortDirection || undefined,
+              ...filterParams,
               limit: pageSize,
               offset: 0,
             }),
@@ -102,6 +119,9 @@ export function useLibrarySync() {
         tauri.getTags(),
         tauri.getTrashCount(),
       ]);
+
+      // If this request was superseded by a newer one, discard results
+      if (abortController.signal.aborted) return;
 
       // Set data directly - no ID conversion needed (using numbers now)
       setEntries(page.entries);
@@ -113,12 +133,15 @@ export function useLibrarySync() {
       setTags(tags);
       setTrashCount(trashCount);
     } catch (err) {
+      if (abortController.signal.aborted) return;
       console.error('Failed to load library:', err);
       const message = err instanceof Error ? err.message : 'Failed to load library';
       setError(message);
       toast.error(message);
     } finally {
-      setLoading(false);
+      if (!abortController.signal.aborted) {
+        setLoading(false);
+      }
     }
   }, [
     setEntries,
@@ -132,20 +155,10 @@ export function useLibrarySync() {
     setHasMore,
     setPageOffset,
     resetPaging,
-    activeCollectionId,
     activeTagIds,
-    tagFilterMode,
     activeFilter,
-    searchQuery,
-    searchScope,
     pageSize,
-    uiFilter,
-    sortField,
-    sortDirection,
-    secondarySortField,
-    secondarySortDirection,
-    activeSavedSearchId,
-    savedSearches,
+    buildQueryParams,
   ]);
 
   const loadMoreInFlight = useRef(false);
@@ -153,65 +166,39 @@ export function useLibrarySync() {
   const loadMore = useCallback(async () => {
     if (loadMoreInFlight.current || isLoadingMore || !hasMore) return;
     loadMoreInFlight.current = true;
+
+    // Cancel any in-flight loadMore request
+    loadMoreAbortRef.current?.abort();
+    const abortController = new AbortController();
+    loadMoreAbortRef.current = abortController;
+
     setLoadingMore(true);
     try {
-      // Build advanced search params if a saved search is active
-      let advancedSearch: { matchMode: 'all' | 'any'; criteria: Array<{ field: string; operator: string; value: string | null }> } | undefined;
-      let savedSearchCollectionId: number | undefined;
-
-      if (activeSavedSearchId) {
-        const savedSearch = savedSearches.find((s) => s.id === activeSavedSearchId);
-        if (savedSearch) {
-          advancedSearch = {
-            matchMode: savedSearch.matchMode,
-            criteria: savedSearch.criteria.map((c) => ({
-              field: c.field,
-              operator: c.operator,
-              value: c.value,
-            })),
-          };
-          if (savedSearch.scope === 'collection' && savedSearch.collectionId) {
-            savedSearchCollectionId = savedSearch.collectionId;
-          }
-        }
-      }
+      const { filterParams } = buildQueryParams();
 
       const page = await tauri.getEntriesPaged({
-        collectionId: savedSearchCollectionId || (activeCollectionId ? Number(activeCollectionId) : undefined),
-        tagIds: !activeSavedSearchId && activeTagIds.length > 0 ? activeTagIds : undefined,
-        tagMode: !activeSavedSearchId && activeTagIds.length > 1 ? tagFilterMode : undefined,
-        searchQuery: !activeSavedSearchId ? (searchQuery || undefined) : undefined,
-        searchScope: !activeSavedSearchId ? searchScope : undefined,
-        filterType: !activeSavedSearchId ? (uiFilter || undefined) : undefined,
-        advancedSearch,
-        sortField,
-        sortDirection,
-        secondarySortField: secondarySortField || undefined,
-        secondarySortDirection: secondarySortDirection || undefined,
+        ...filterParams,
         limit: pageSize,
         offset: pageOffset,
       });
+
+      // If this request was superseded by a newer one, discard results
+      if (abortController.signal.aborted) return;
+
       appendEntries(page.entries);
       setCurrentTotal(page.total);
       setHasMore(pageOffset + page.entries.length < page.total);
       setPageOffset(pageOffset + page.entries.length);
     } catch (err) {
+      if (abortController.signal.aborted) return;
       console.error('Failed to load more entries:', err);
     } finally {
-      setLoadingMore(false);
+      if (!abortController.signal.aborted) {
+        setLoadingMore(false);
+      }
       loadMoreInFlight.current = false;
     }
   }, [
-    activeCollectionId,
-    activeTagIds,
-    tagFilterMode,
-    searchQuery,
-    searchScope,
-    uiFilter,
-    sortField,
-    sortDirection,
-    secondarySortField,
-    secondarySortDirection,
     pageSize,
     pageOffset,
     hasMore,
@@ -221,8 +208,7 @@ export function useLibrarySync() {
     setHasMore,
     setPageOffset,
     setLoadingMore,
-    activeSavedSearchId,
-    savedSearches,
+    buildQueryParams,
   ]);
 
   // Store refresh function in Zustand store (replaces global mutable state)

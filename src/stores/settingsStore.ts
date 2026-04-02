@@ -339,39 +339,41 @@ export const useSettingsStore = create<SettingsState>()(
       loadFromBackend: async () => {
         try {
           const settings = await getSettings();
-          const autoRename = settings.find(s => s.key === "auto_rename_files");
-          if (autoRename) {
-            set({ autoRenameFiles: autoRename.value === "true" });
+          const settingsMap = new Map(settings.map(s => [s.key, s.value]));
+
+          const autoRename = settingsMap.get("auto_rename_files");
+          if (autoRename !== undefined) {
+            set({ autoRenameFiles: autoRename === "true" });
           }
-          const embeddingModel = settings.find(s => s.key === "embedding_model");
-          if (embeddingModel) set({ embeddingModel: embeddingModel.value });
-          const embeddingSource = settings.find(s => s.key === "embedding_source");
-          if (embeddingSource && (embeddingSource.value === "local" || embeddingSource.value === "cloud")) {
-            set({ embeddingSource: embeddingSource.value });
+          const embeddingModel = settingsMap.get("embedding_model");
+          if (embeddingModel !== undefined) set({ embeddingModel });
+          const embeddingSource = settingsMap.get("embedding_source");
+          if (embeddingSource !== undefined && (embeddingSource === "local" || embeddingSource === "cloud")) {
+            set({ embeddingSource });
           }
-          const cloudEmbeddingModel = settings.find(s => s.key === "cloud_embedding_model");
-          if (cloudEmbeddingModel) set({ cloudEmbeddingModel: cloudEmbeddingModel.value });
-          const enableOcr = settings.find(s => s.key === "enable_ocr");
-          if (enableOcr) {
-            set({ enableOcr: enableOcr.value === "true" });
+          const cloudEmbeddingModel = settingsMap.get("cloud_embedding_model");
+          if (cloudEmbeddingModel !== undefined) set({ cloudEmbeddingModel });
+          const enableOcr = settingsMap.get("enable_ocr");
+          if (enableOcr !== undefined) {
+            set({ enableOcr: enableOcr === "true" });
           }
-          const forceOcr = settings.find(s => s.key === "force_ocr");
-          if (forceOcr) {
-            set({ forceOcr: forceOcr.value === "true" });
+          const forceOcr = settingsMap.get("force_ocr");
+          if (forceOcr !== undefined) {
+            set({ forceOcr: forceOcr === "true" });
           }
           // LLM settings
-          const llmProvider = settings.find(s => s.key === "llm_provider");
+          const llmProviderVal = settingsMap.get("llm_provider");
           let resolvedProvider = get().llmProvider;
-          if (llmProvider) {
+          if (llmProviderVal !== undefined) {
             // Migrate legacy "lmstudio" → "omlx" (persist to backend so Rust sees it too)
-            if (llmProvider.value === "lmstudio") {
+            if (llmProviderVal === "lmstudio") {
               resolvedProvider = "omlx";
               set({ llmProvider: "omlx" });
               // Persist migration to backend DB
               updateSetting("llm_provider", "omlx").catch(() => {});
             } else {
-              resolvedProvider = llmProvider.value;
-              set({ llmProvider: llmProvider.value });
+              resolvedProvider = llmProviderVal;
+              set({ llmProvider: llmProviderVal });
             }
           }
 
@@ -379,41 +381,41 @@ export const useSettingsStore = create<SettingsState>()(
           const providerNames = ["openai", "anthropic", "gemini", "ollama", "ollama_cloud", "omlx"];
           const keys: Record<string, string> = { ...get().llmApiKeys };
           for (const p of providerNames) {
-            const k = settings.find(s => s.key === `llm_api_key_${p}`);
-            if (k) keys[p] = k.value;
+            const k = settingsMap.get(`llm_api_key_${p}`);
+            if (k !== undefined) keys[p] = k;
           }
           set({ llmApiKeys: keys, llmApiKey: keys[resolvedProvider] || "" });
 
-          const llmModel = settings.find(s => s.key === "llm_model");
-          if (llmModel) set({ llmModel: llmModel.value });
-          const llmBaseUrl = settings.find(s => s.key === "llm_base_url");
-          if (llmBaseUrl) set({ llmBaseUrl: llmBaseUrl.value });
-          const llmAutoParse = settings.find(s => s.key === "llm_auto_parse");
-          if (llmAutoParse) set({ llmAutoParseOnImport: llmAutoParse.value === "true" });
-          const llmTokenBudget = settings.find(s => s.key === "llm_token_budget");
-          if (llmTokenBudget) set({ llmTokenBudget: parseInt(llmTokenBudget.value, 10) || 200000 });
-          const llmContextWindow = settings.find(s => s.key === "llm_context_window");
-          if (llmContextWindow) set({ llmContextWindow: parseInt(llmContextWindow.value, 10) || 0 });
-          const aiAutoMeta = settings.find(s => s.key === "ai_auto_metadata");
-          if (aiAutoMeta) set({ aiAutoMetadata: aiAutoMeta.value === "true" });
-          const ragAutoIndex = settings.find(s => s.key === "rag_auto_index");
-          if (ragAutoIndex) set({ ragAutoIndex: ragAutoIndex.value !== "false" });
+          const llmModel = settingsMap.get("llm_model");
+          if (llmModel !== undefined) set({ llmModel });
+          const llmBaseUrl = settingsMap.get("llm_base_url");
+          if (llmBaseUrl !== undefined) set({ llmBaseUrl });
+          const llmAutoParse = settingsMap.get("llm_auto_parse");
+          if (llmAutoParse !== undefined) set({ llmAutoParseOnImport: llmAutoParse === "true" });
+          const llmTokenBudget = settingsMap.get("llm_token_budget");
+          if (llmTokenBudget !== undefined) set({ llmTokenBudget: parseInt(llmTokenBudget, 10) || 200000 });
+          const llmContextWindow = settingsMap.get("llm_context_window");
+          if (llmContextWindow !== undefined) set({ llmContextWindow: parseInt(llmContextWindow, 10) || 0 });
+          const aiAutoMeta = settingsMap.get("ai_auto_metadata");
+          if (aiAutoMeta !== undefined) set({ aiAutoMetadata: aiAutoMeta === "true" });
+          const ragAutoIndex = settingsMap.get("rag_auto_index");
+          if (ragAutoIndex !== undefined) set({ ragAutoIndex: ragAutoIndex !== "false" });
 
           // RAG advanced settings
-          const ragGenModel = settings.find(s => s.key === "rag_gen_model");
-          if (ragGenModel) set({ ragGenModel: ragGenModel.value });
-          const cragEnabled = settings.find(s => s.key === "crag_enabled");
-          if (cragEnabled) set({ cragEnabled: cragEnabled.value === "true" });
-          const cragUpper = settings.find(s => s.key === "crag_upper_threshold");
-          if (cragUpper) set({ cragUpperThreshold: parseInt(cragUpper.value, 10) || 60 });
-          const cragLower = settings.find(s => s.key === "crag_lower_threshold");
-          if (cragLower) set({ cragLowerThreshold: parseInt(cragLower.value, 10) || 25 });
-          const raptorEnabled = settings.find(s => s.key === "raptor_enabled");
-          if (raptorEnabled) set({ raptorEnabled: raptorEnabled.value === "true" });
-          const raptorBudget = settings.find(s => s.key === "raptor_token_budget");
-          if (raptorBudget) set({ raptorTokenBudget: parseInt(raptorBudget.value, 10) || 2000 });
-          const raptorMode = settings.find(s => s.key === "raptor_retrieval_mode");
-          if (raptorMode) set({ raptorRetrievalMode: raptorMode.value });
+          const ragGenModel = settingsMap.get("rag_gen_model");
+          if (ragGenModel !== undefined) set({ ragGenModel });
+          const cragEnabled = settingsMap.get("crag_enabled");
+          if (cragEnabled !== undefined) set({ cragEnabled: cragEnabled === "true" });
+          const cragUpper = settingsMap.get("crag_upper_threshold");
+          if (cragUpper !== undefined) set({ cragUpperThreshold: parseInt(cragUpper, 10) || 60 });
+          const cragLower = settingsMap.get("crag_lower_threshold");
+          if (cragLower !== undefined) set({ cragLowerThreshold: parseInt(cragLower, 10) || 25 });
+          const raptorEnabled = settingsMap.get("raptor_enabled");
+          if (raptorEnabled !== undefined) set({ raptorEnabled: raptorEnabled === "true" });
+          const raptorBudget = settingsMap.get("raptor_token_budget");
+          if (raptorBudget !== undefined) set({ raptorTokenBudget: parseInt(raptorBudget, 10) || 2000 });
+          const raptorMode = settingsMap.get("raptor_retrieval_mode");
+          if (raptorMode !== undefined) set({ raptorRetrievalMode: raptorMode });
         } catch (err) {
           console.error("Failed to load settings from backend:", err);
         }
