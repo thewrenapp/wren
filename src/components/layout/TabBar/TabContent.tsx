@@ -1,9 +1,10 @@
+import { useCallback } from "react";
 import { useTabStore, getTabsForPane, type Tab } from "@/stores/tabStore";
 import { WelcomeTab } from "./WelcomeTab";
 import { EntryTab } from "./EntryTab";
 import { LibraryTab } from "./LibraryTab";
 
-function renderTab(tab: Tab) {
+function RenderTab({ tab, onViewStateChange }: { tab: Tab; onViewStateChange?: (state: Record<string, unknown>) => void }) {
   switch (tab.type) {
     case "library":
       return <LibraryTab />;
@@ -19,7 +20,15 @@ function renderTab(tab: Tab) {
           </div>
         );
       }
-      return <EntryTab entryId={tab.entryId} attachmentId={tab.attachmentId} />;
+      return (
+        <EntryTab
+          entryId={tab.entryId}
+          attachmentId={tab.attachmentId}
+          initialPdfPage={tab.data?.pdfPage as number | undefined}
+          initialHtmlScale={tab.data?.htmlScale as number | undefined}
+          onViewStateChange={onViewStateChange}
+        />
+      );
 
     case "markdown":
       if (!tab.entryId || !tab.attachmentId) {
@@ -73,36 +82,37 @@ function renderTab(tab: Tab) {
 }
 
 export function TabContent({ pane = "left" }: { pane?: "left" | "right" }) {
-  const { tabs: allTabs, activeTabId, activeRightTabId } = useTabStore();
+  const { tabs: allTabs, activeTabId, activeRightTabId, updateTab } = useTabStore();
 
   // Filter tabs for this pane
   const tabs = getTabsForPane(allTabs, pane);
   const currentActiveId = pane === "left" ? activeTabId : activeRightTabId;
 
-  if (tabs.length === 0) {
+  const activeTab = tabs.find((t) => t.id === currentActiveId);
+
+  // Save view state (page, scale) into tab.data when a viewer unmounts
+  const handleViewStateChange = useCallback(
+    (state: Record<string, unknown>) => {
+      if (currentActiveId) {
+        updateTab(currentActiveId, {
+          data: { ...activeTab?.data, ...state },
+        });
+      }
+    },
+    [currentActiveId, activeTab?.data, updateTab]
+  );
+
+  if (!activeTab) {
     return null;
   }
 
-  // Render ALL tabs for this pane but only show the active one.
-  // Each tab stays mounted with its own component tree, so state
-  // (scroll position, page number, zoom) is preserved across tab switches.
-  // Duplicate tabs get independent instances via unique keys (tab.id).
-  // Active tab uses flex-1 to fill the parent flex container.
-  // (display:contents breaks height resolution for PDF.js and scroll containers).
+  // Only render the active tab. Inactive tabs are unmounted to free memory
+  // (PDF documents, canvases, iframes). View state (page number, zoom) is
+  // saved to tab.data on unmount and restored on remount.
+  // Library and welcome tabs are lightweight and always re-mount cleanly.
   return (
-    <>
-      {tabs.map((tab) => (
-        <div
-          key={tab.id}
-          className={
-            tab.id === currentActiveId
-              ? "flex-1 flex flex-col min-h-0"
-              : "hidden"
-          }
-        >
-          {renderTab(tab)}
-        </div>
-      ))}
-    </>
+    <div key={activeTab.id} className="flex-1 flex flex-col min-h-0">
+      <RenderTab tab={activeTab} onViewStateChange={handleViewStateChange} />
+    </div>
   );
 }

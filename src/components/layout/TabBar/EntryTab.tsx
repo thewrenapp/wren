@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -40,9 +40,12 @@ interface EntryTabProps {
   entryId: string;
   attachmentId?: string; // Specific attachment to display
   viewMode?: "default" | "extracted" | "parsed"; // "extracted" shows markdown viewer, "parsed" shows AI-structured content
+  initialPdfPage?: number;
+  initialHtmlScale?: number;
+  onViewStateChange?: (state: Record<string, unknown>) => void;
 }
 
-export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryTabProps) {
+export function EntryTab({ entryId, attachmentId, viewMode = "default", initialPdfPage, initialHtmlScale, onViewStateChange }: EntryTabProps) {
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -135,7 +138,7 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
   }
 
   // Create entry summary for info panel
-  const entrySummary = {
+  const entrySummary = useMemo(() => ({
     id: entry.id,
     key: entry.key,
     itemType: entry.itemType,
@@ -154,9 +157,24 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
     hasWeblink: entry.attachments?.some(a => a.attachmentType === "weblink") || false,
     hasExtractedText: entry.attachments?.some(a => !!a.markdownPath) || false,
     hasStructuredContent: false, // not available from full entry data
-  };
+  }), [entry]);
 
   const isStacked = libraryLayout === "stacked";
+
+  // Stable callbacks for view state changes to avoid re-creating on every render
+  const handlePdfViewStateChange = useCallback(
+    (s: { page: number; scale: number }) => {
+      onViewStateChange?.({ pdfPage: s.page, pdfScale: s.scale });
+    },
+    [onViewStateChange],
+  );
+
+  const handleHtmlViewStateChange = useCallback(
+    (s: { scale: number }) => {
+      onViewStateChange?.({ htmlScale: s.scale });
+    },
+    [onViewStateChange],
+  );
 
   // Render main content based on attachment type
   const renderMainContent = () => {
@@ -166,11 +184,11 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default" }: EntryT
     }
 
     if (targetAttachment?.attachmentType === "pdf" && targetAttachment.filePath) {
-      return <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
+      return <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} initialPage={initialPdfPage} onViewStateChange={onViewStateChange ? handlePdfViewStateChange : undefined} />;
     }
 
     if (targetAttachment?.attachmentType === "snapshot" && targetAttachment.filePath) {
-      return <HTMLViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} />;
+      return <HTMLViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} title={targetAttachment.title} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} initialScale={initialHtmlScale} onViewStateChange={onViewStateChange ? handleHtmlViewStateChange : undefined} />;
     }
 
     if (targetAttachment?.attachmentType === "epub" && targetAttachment.filePath) {

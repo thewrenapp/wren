@@ -22,9 +22,11 @@ interface HTMLViewerProps {
   title?: string;
   infoPaneOpen?: boolean;
   onToggleInfoPane?: () => void;
+  initialScale?: number;
+  onViewStateChange?: (state: { scale: number }) => void;
 }
 
-export function HTMLViewer({ filePath, attachmentId, title, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane }: HTMLViewerProps) {
+export function HTMLViewer({ filePath, attachmentId, title, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane, initialScale, onViewStateChange }: HTMLViewerProps) {
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +34,7 @@ export function HTMLViewer({ filePath, attachmentId, title, infoPaneOpen: infoPa
   const [iframeDoc, setIframeDoc] = useState<Document | null>(null);
 
   // Scale / zoom
-  const [scale, setScale] = useState(1.0);
+  const [scale, setScale] = useState(initialScale ?? 1.0);
 
   // Tool mode
   const [toolMode, setToolMode] = useState<ToolMode>(null);
@@ -60,6 +62,14 @@ export function HTMLViewer({ filePath, attachmentId, title, infoPaneOpen: infoPa
   const [drawCurrent, setDrawCurrent] = useState<{ x: number; y: number } | null>(null);
   const [drawingStrokes, setDrawingStrokes] = useState<Array<{ points: Array<{ x: number; y: number }>; color: string; width: number }>>([]);
   const [currentStroke, setCurrentStroke] = useState<{ points: Array<{ x: number; y: number }>; color: string; width: number } | null>(null);
+
+  // Report view state on unmount so parent can persist scale
+  const scaleRef = useRef(initialScale ?? 1.0);
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+  useEffect(() => {
+    return () => { onViewStateChange?.({ scale: scaleRef.current }); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fullscreen
   const [isFullscreen, setIsFullscreen] = useState(false);

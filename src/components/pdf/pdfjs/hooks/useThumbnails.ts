@@ -37,7 +37,7 @@ export function useThumbnails(options: UseThumbnailsOptions): UseThumbnailsResul
   const {
     pdfDocument,
     thumbnailWidth = 200,
-    cacheSize = 150,        // Increased from 50 for better scrolling experience
+    cacheSize = 50,         // Limit memory; virtualized panel loads on demand
     preloadAll = false,     // Changed to false - let virtualization control loading
     imageQuality = 0.8,
   } = options;

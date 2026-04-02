@@ -72,6 +72,8 @@ interface PDFViewerProps {
   attachmentId: string;
   infoPaneOpen?: boolean;
   onToggleInfoPane?: () => void;
+  initialPage?: number;
+  onViewStateChange?: (state: { page: number; scale: number }) => void;
 }
 
 // Tool modes
@@ -279,14 +281,14 @@ function HighlightRenderer({
   );
 }
 
-export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane }: PDFViewerProps) {
+export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane, initialPage, onViewStateChange }: PDFViewerProps) {
   const [highlights, setHighlights] = useState<AppHighlight[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string>("");
   const [scale, setScale] = useState<PdfScaleValue | undefined>(undefined);
   const [displayScale, setDisplayScale] = useState<number>(1);
   const [highlightColor, setHighlightColor] = useState(DEFAULT_TEXT_HIGHLIGHT_COLOR);
   const [areaHighlightColor, setAreaHighlightColor] = useState(DEFAULT_AREA_HIGHLIGHT_COLOR);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(initialPage ?? 1);
   const [totalPages, setTotalPages] = useState(0);
   const [toolMode, setToolMode] = useState<ToolMode>(null);
   const [mode, setMode] = useState<ViewerMode>("pan");
@@ -303,6 +305,21 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
 
   // Left panel tab state
   const [leftPanelTab, setLeftPanelTab] = useState<"thumbnails" | "outline" | "annotations">("thumbnails");
+
+  // Report view state on unmount so parent can persist page/scale
+  const viewStateRef = useRef({ page: initialPage ?? 1, scale: 1 });
+  useEffect(() => {
+    viewStateRef.current.page = currentPage;
+  }, [currentPage]);
+  useEffect(() => {
+    viewStateRef.current.scale = displayScale;
+  }, [displayScale]);
+  useEffect(() => {
+    return () => {
+      onViewStateChange?.(viewStateRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
