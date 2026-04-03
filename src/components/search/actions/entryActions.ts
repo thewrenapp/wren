@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { buildEntryLink } from "@/lib/wrenLinks";
 import {
   bulkMoveToTrash,
   duplicateEntry,
@@ -161,6 +162,15 @@ export function createEntryActions(deps: EntryActionDeps) {
     const titles = selectedEntries.map((e) => e.title).join("\n");
     try { await writeText(titles); toast.success(selectedEntryIds.length > 1 ? `${selectedEntryIds.length} titles copied` : "Title copied"); }
     catch (err) { console.error("Copy title error:", err); toast.error("Failed to copy title"); }
+    setCommandPaletteOpen(false);
+  };
+
+  const handleCopyWrenLink = async () => {
+    if (selectedEntryIds.length !== 1) { toast.warning("Select a single entry"); return; }
+    const selectedEntry = entries.find((e) => e.id === selectedEntryIds[0]);
+    if (!selectedEntry) return;
+    try { await writeText(buildEntryLink(selectedEntry.key)); toast.success("Wren link copied"); }
+    catch (err) { console.error("Copy wren link error:", err); toast.error("Failed to copy link"); }
     setCommandPaletteOpen(false);
   };
 
@@ -368,7 +378,7 @@ export function createEntryActions(deps: EntryActionDeps) {
   return {
     handleDeleteSelected, handleParseWithAI, handleDuplicate,
     handleAddToCollection, handleAddTag, handleCreateAndAddTag,
-    handleShowInFinder, handleCopyTitle,
+    handleShowInFinder, handleCopyTitle, handleCopyWrenLink,
     handleEmptyTrash, handleRestoreFromTrash, handlePermanentDelete,
     handleAddPdfAttachment, handleRemoveFromCollection, handleRemoveTag,
     handleRenameCollection, handleDeleteCollection,

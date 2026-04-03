@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod connector;
 pub mod db;
+pub mod deep_link;
 pub mod filename;
 pub mod graph;
 pub mod jobs;
@@ -14,7 +15,7 @@ pub mod utils;
 
 use state::AppState;
 use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{Emitter, Manager, RunEvent};
+use tauri::{Emitter, Listener, Manager, RunEvent};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -29,6 +30,10 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_main_window(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -154,6 +159,20 @@ pub fn run() {
             if let Err(e) = tray::setup_tray(app) {
                 tracing::warn!("Failed to setup system tray: {e}");
             }
+
+            // Listen for deep link URLs
+            let handle = app.handle().clone();
+            app.listen("deep-link://new-url", move |event: tauri::Event| {
+                if let Ok(urls) = serde_json::from_str::<Vec<String>>(event.payload()) {
+                    let handle = handle.clone();
+                    for url in urls {
+                        let handle = handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            deep_link::handle_deep_link(&handle, &url).await;
+                        });
+                    }
+                }
+            });
 
             tracing::info!("Wren setup complete");
             Ok(())

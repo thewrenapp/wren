@@ -36,6 +36,9 @@ export function SelectedEntryCommands({
       </div>
       <CommandItem value="show in finder reveal files" onSelect={handlers.handleShowInFinder} icon={<ExternalLink className="h-4 w-4 text-blue-500" />} iconBg="bg-blue-500/10" label="Show in Finder" shortcut={["⌘", "⇧", "R"]} />
       <CommandItem value="copy title clipboard" onSelect={handlers.handleCopyTitle} icon={<Copy className="h-4 w-4 text-cyan-500" />} iconBg="bg-cyan-500/10" label={`Copy Title${selectedEntryIds.length > 1 ? "s" : ""}`} shortcut={["⌘", "⇧", "T"]} />
+      {selectedEntryIds.length === 1 && (
+        <CommandItem value="copy wren link url deep link" onSelect={handlers.handleCopyWrenLink} icon={<Link className="h-4 w-4 text-cyan-500" />} iconBg="bg-cyan-500/10" label="Copy Wren Link" />
+      )}
       <CommandItem value="add to collection folder" onSelect={() => setSubMenu("collection")} icon={<FolderPlus className="h-4 w-4 text-violet-500" />} iconBg="bg-violet-500/10" label="Add to Collection" />
       {(activeCollectionId || collections.length > 0) && (
         <CommandItem

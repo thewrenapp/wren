@@ -1,9 +1,12 @@
 import { useCallback } from "react";
-import { X, Pin, FolderOpen, FileText, Copy, Library, ChevronRight, ArrowRightFromLine, ArrowLeftFromLine } from "lucide-react";
+import { X, Pin, FolderOpen, FileText, Copy, Link, Library, ChevronRight, ArrowRightFromLine, ArrowLeftFromLine } from "lucide-react";
 import { useTabStore, type Tab } from "@/stores/tabStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useUIStore } from "@/stores/uiStore";
-import { showEntryInFinder, showAttachmentInFinder, showMarkdownInFinder, getEntry } from "@/services/tauri/commands";
+import { showEntryInFinder, showAttachmentInFinder, showMarkdownInFinder, getEntry, getEntryAttachments } from "@/services/tauri/commands";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { buildEntryLink, buildPdfLink } from "@/lib/wrenLinks";
+import { toast } from "@/stores/toastStore";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -78,6 +81,32 @@ export function TabContextMenu({ tab, tabIndex, totalTabs, pane = "left", childr
     openTab({ type: "entry", title: tab.title, entryId: tab.entryId, attachmentId: tab.attachmentId });
   }, [tab, openTab]);
 
+  const handleCopyEntryLink = useCallback(async () => {
+    if (!tab.entryId) return;
+    try {
+      const entry = await getEntry(Number(tab.entryId));
+      await writeText(buildEntryLink(entry.key));
+      toast.success("Entry link copied");
+    } catch {
+      toast.error("Failed to copy link");
+    }
+  }, [tab.entryId]);
+
+  const handleCopyPdfLink = useCallback(async () => {
+    if (!tab.entryId || !tab.attachmentId) return;
+    try {
+      const entry = await getEntry(Number(tab.entryId));
+      const attachments = await getEntryAttachments(Number(tab.entryId));
+      const attachment = attachments.find((a) => String(a.id) === tab.attachmentId);
+      if (attachment) {
+        await writeText(buildPdfLink(entry.key, attachment.key));
+        toast.success("PDF link copied");
+      }
+    } catch {
+      toast.error("Failed to copy link");
+    }
+  }, [tab.entryId, tab.attachmentId]);
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
@@ -90,6 +119,15 @@ export function TabContextMenu({ tab, tabIndex, totalTabs, pane = "left", childr
             <ContextMenuItem onClick={handleFindInFinder}>
               <FolderOpen className="h-4 w-4 mr-2" />Find in Finder
             </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={handleCopyEntryLink}>
+              <Link className="h-4 w-4 mr-2" />Copy Entry Link
+            </ContextMenuItem>
+            {isEntry && tab.attachmentId && (
+              <ContextMenuItem onClick={handleCopyPdfLink}>
+                <Link className="h-4 w-4 mr-2" />Copy PDF Link
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
           </>
         )}

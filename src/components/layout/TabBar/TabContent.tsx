@@ -25,6 +25,7 @@ function RenderTab({ tab, onViewStateChange }: { tab: Tab; onViewStateChange?: (
           entryId={tab.entryId}
           attachmentId={tab.attachmentId}
           initialPdfPage={tab.data?.pdfPage as number | undefined}
+          pdfPageRequestId={tab.data?.pdfPageRequestId as number | undefined}
           initialHtmlScale={tab.data?.htmlScale as number | undefined}
           onViewStateChange={onViewStateChange}
         />

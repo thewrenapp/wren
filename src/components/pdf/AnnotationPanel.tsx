@@ -7,6 +7,7 @@ import {
   Square,
   Download,
   Copy,
+  Link,
   FileJson,
   FileText,
   Trash2,
@@ -30,10 +31,12 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { toast } from "@/stores/toastStore";
+import { buildPdfLink } from "@/lib/wrenLinks";
 import { SidebarSearchInput } from "./SidebarSearchInput";
 
 interface AnnotationHighlight {
   id: string;
+  dbKey?: string;
   type?: string;
   position: {
     boundingRect: {
@@ -57,6 +60,8 @@ interface AnnotationPanelProps {
   onAnnotationClick?: (annotationId: string, pageNumber: number) => void;
   onDelete?: (annotationId: string) => void;
   pdfTitle?: string;
+  entryKey?: string;
+  attachmentKey?: string;
 }
 
 function getAnnotationIcon(type?: string) {
@@ -93,7 +98,7 @@ function getAnnotationLabel(type?: string) {
   }
 }
 
-export function AnnotationPanel({ annotations, onAnnotationClick, onDelete, pdfTitle }: AnnotationPanelProps) {
+export function AnnotationPanel({ annotations, onAnnotationClick, onDelete, pdfTitle, entryKey, attachmentKey }: AnnotationPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -356,6 +361,21 @@ export function AnnotationPanel({ annotations, onAnnotationClick, onDelete, pdfT
                         </div>
                       </ContextMenuTrigger>
                       <ContextMenuContent>
+                        {entryKey && attachmentKey && annotation.dbKey && (
+                          <ContextMenuItem
+                            onClick={async () => {
+                              const link = buildPdfLink(entryKey, attachmentKey, {
+                                page: annotation.position.boundingRect.pageNumber,
+                                annotationKey: annotation.dbKey!,
+                              });
+                              await writeText(link);
+                              toast.success("Wren link copied");
+                            }}
+                          >
+                            <Link className="h-4 w-4 mr-2" />
+                            Copy Wren Link
+                          </ContextMenuItem>
+                        )}
                         <ContextMenuItem
                           onClick={() => onDelete?.(annotation.id)}
                           className="text-destructive focus:text-destructive"

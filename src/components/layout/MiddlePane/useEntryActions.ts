@@ -22,6 +22,7 @@ import { parseEntries } from '@/services/tauri/commands';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { buildEntryLink } from '@/lib/wrenLinks';
 
 interface UseEntryActionsParams {
   entry: EntrySummary;
@@ -379,6 +380,18 @@ export function useEntryActions({ entry, onClose }: UseEntryActionsParams) {
     onClose?.();
   };
 
+  const handleCopyWrenLink = async () => {
+    try {
+      const link = buildEntryLink(entry.key);
+      await writeText(link);
+      toast.success('Wren link copied');
+    } catch (err) {
+      console.error('Failed to copy Wren link:', err);
+      toast.error('Failed to copy link');
+    }
+    onClose?.();
+  };
+
   return {
     targetIds,
     isMultiSelect,
@@ -407,5 +420,6 @@ export function useEntryActions({ entry, onClose }: UseEntryActionsParams) {
     handleExportBibtex,
     handleCopyCslJson,
     handleCopyBibtex,
+    handleCopyWrenLink,
   };
 }

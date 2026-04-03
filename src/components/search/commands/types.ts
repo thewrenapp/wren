@@ -45,6 +45,7 @@ export interface CommandHandlers {
   handleDuplicate: () => void;
   handleShowInFinder: () => void;
   handleCopyTitle: () => void;
+  handleCopyWrenLink: () => void;
   handleEmptyTrash: () => void;
   handleRestoreFromTrash: () => void;
   handlePermanentDelete: () => void;

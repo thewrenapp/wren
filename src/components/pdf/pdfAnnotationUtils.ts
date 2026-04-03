@@ -2,6 +2,7 @@ import type { Highlight, ScaledPosition, ShapeType } from "@/components/pdf/pdfj
 import type { Annotation } from "@/services/tauri/commands";
 
 export interface AppHighlight extends Highlight {
+  dbKey?: string;
   highlightColor?: string;
   selectedText?: string;
   color?: string;
@@ -43,6 +44,7 @@ export function convertAnnotationToHighlight(annotation: Annotation): AppHighlig
       const drawingContent = JSON.parse(annotation.comment);
       return {
         id: String(annotation.id),
+        dbKey: annotation.key,
         type: "drawing" as AppHighlight["type"],
         position,
         content: { image: drawingContent.image, strokes: drawingContent.strokes },
@@ -58,6 +60,7 @@ export function convertAnnotationToHighlight(annotation: Annotation): AppHighlig
       const shapeData = JSON.parse(annotation.comment);
       return {
         id: String(annotation.id),
+        dbKey: annotation.key,
         type: "shape" as AppHighlight["type"],
         position,
         content: { shape: shapeData },
@@ -80,6 +83,7 @@ export function convertAnnotationToHighlight(annotation: Annotation): AppHighlig
       const style = JSON.parse(annotation.color);
       return {
         id: String(annotation.id),
+        dbKey: annotation.key,
         type: "freetext" as AppHighlight["type"],
         position,
         content: { text: textContent },
@@ -95,6 +99,7 @@ export function convertAnnotationToHighlight(annotation: Annotation): AppHighlig
 
   return {
     id: String(annotation.id),
+    dbKey: annotation.key,
     type: highlightType as AppHighlight["type"],
     position,
     content: { text: textContent },

@@ -7,10 +7,12 @@ import { ClaimRelationsDialog } from "@/components/dialogs/ClaimRelationsDialog"
 import { RaptorSummariesDialog } from "@/components/dialogs/RaptorSummariesDialog";
 import { AdvancedSearchDialog } from "@/components/search/AdvancedSearchDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { toast } from "@/stores/toastStore";
 import { getEntry, getAttachment } from "@/services/tauri";
 
 function AppShell() {
@@ -123,6 +125,52 @@ function AppShell() {
       window.removeEventListener("wren:open-attachment", handleOpenAttachment);
       window.removeEventListener("wren:navigate-tag", handleNavigateTag);
       window.removeEventListener("wren:navigate-collection", handleNavigateCollection);
+    };
+  }, []);
+
+  // Deep link event listeners (wren:// URL scheme)
+  useEffect(() => {
+    const unlistenSelect = listen<{
+      entryId: number;
+      entryKey: string;
+      title: string;
+    }>("deep-link:select-item", (event) => {
+      const { entryId } = event.payload;
+      // Navigate to library and highlight the entry (don't open it)
+      useTabStore.getState().openTab({ type: "library", title: "Library" });
+      useLibraryStore.getState().selectEntries([entryId]);
+    });
+
+    const unlistenOpenPdf = listen<{
+      entryId: number;
+      entryKey: string;
+      title: string;
+      attachmentId: number;
+      attachmentKey: string;
+      page: number | null;
+      annotationKey: string | null;
+    }>("deep-link:open-pdf", (event) => {
+      const { entryId, title, attachmentId, page } = event.payload;
+      useTabStore.getState().openTab({
+        type: "entry",
+        title,
+        entryId: String(entryId),
+        attachmentId: String(attachmentId),
+        data: page ? { pdfPage: page, pdfPageRequestId: Date.now() } : undefined,
+      });
+    });
+
+    const unlistenError = listen<{ message: string }>(
+      "deep-link:error",
+      (event) => {
+        toast.error(event.payload.message);
+      }
+    );
+
+    return () => {
+      unlistenSelect.then((fn) => fn());
+      unlistenOpenPdf.then((fn) => fn());
+      unlistenError.then((fn) => fn());
     };
   }, []);
 

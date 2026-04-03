@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from 'react';
-import { Trash2, ExternalLink, ScrollText, RefreshCw, Sparkles, CircleCheck, FolderOpen } from 'lucide-react';
+import { Trash2, ExternalLink, ScrollText, RefreshCw, Sparkles, CircleCheck, FolderOpen, Link } from 'lucide-react';
 import { type EntrySummary, type Attachment, useLibraryStore } from '@/stores/libraryStore';
 import { AttachmentIcon, getAttachmentIcon, getEntryTypeIcon } from '@/lib/icons';
 import { useUIStore, type SortField, type SortDirection } from '@/stores/uiStore';
@@ -11,6 +11,8 @@ import { deleteAttachment, reindexAttachment, exportToBiblatexWithFiles, type Ex
 import { parseDocument, showAttachmentInFinder } from '@/services/tauri/commands';
 import { useTabStore } from '@/stores/tabStore';
 import { toast } from '@/stores/toastStore';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { buildPdfLink } from '@/lib/wrenLinks';
 import type { EntryDragData } from '@/components/dnd/DragDropProvider';
 import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -579,6 +581,24 @@ export function EntryTable({
               </DropdownMenuItem>
             </>
           )}
+
+          {contextMenuAttachment?.attachment.attachmentType === 'pdf' && (() => {
+            const entryKey = entries.find((e) => e.id === contextMenuAttachment.entryId)?.key;
+            if (!entryKey) return null;
+            return (
+              <DropdownMenuItem
+                onClick={async () => {
+                  const link = buildPdfLink(entryKey, contextMenuAttachment.attachment.key);
+                  await writeText(link);
+                  toast.success('Wren link copied');
+                  closeContextMenu();
+                }}
+              >
+                <Link className='h-4 w-4 mr-2' />
+                Copy Wren Link
+              </DropdownMenuItem>
+            );
+          })()}
 
           <DropdownMenuSeparator />
 

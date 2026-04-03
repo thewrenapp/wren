@@ -6,6 +6,7 @@ import {
   FileText,
   File,
   Copy,
+  Link,
   Trash2,
   FolderPlus,
   FolderMinus,
@@ -91,6 +92,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
     handleExportBibtex,
     handleCopyCslJson,
     handleCopyBibtex,
+    handleCopyWrenLink,
   } = useEntryActions({ entry, onClose });
 
   return (
@@ -252,6 +254,13 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
         {isMultiSelect ? `Copy ${targetIds.length} Titles` : 'Copy Title'}
       </DropdownMenuItem>
 
+      {!isMultiSelect && (
+        <DropdownMenuItem onClick={handleCopyWrenLink}>
+          <Link className='h-4 w-4 mr-2' />
+          Copy Wren Link
+        </DropdownMenuItem>
+      )}
+
       <DropdownMenuSeparator />
 
       <DropdownMenuItem onClick={handleParseWithAI}>
@@ -330,6 +339,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
     handleExportBibtex,
     handleCopyCslJson,
     handleCopyBibtex,
+    handleCopyWrenLink,
   } = useEntryActions({ entry });
 
   const handleExportBiblatexWithFiles = async (options: ExportOptions) => {
@@ -515,6 +525,13 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
           <Copy className='h-4 w-4 mr-2' />
           {isMultiSelect ? `Copy ${targetIds.length} Titles` : 'Copy Title'}
         </ContextMenuItem>
+
+        {!isMultiSelect && (
+          <ContextMenuItem onClick={handleCopyWrenLink}>
+            <Link className='h-4 w-4 mr-2' />
+            Copy Wren Link
+          </ContextMenuItem>
+        )}
 
         <ContextMenuSeparator />
 

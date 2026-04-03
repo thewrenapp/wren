@@ -11,6 +11,7 @@ type ViewerMode = "pan" | "edit";
 interface UsePDFNavigationOptions {
   filePath: string;
   initialPage?: number;
+  pageRequestId?: number;
   pdfHighlighterUtilsRef: MutableRefObject<PdfHighlighterUtils | null>;
   containerRef: MutableRefObject<HTMLDivElement | null>;
   mode: ViewerMode;
@@ -23,6 +24,7 @@ interface UsePDFNavigationOptions {
 export function usePDFNavigation({
   filePath,
   initialPage,
+  pageRequestId,
   pdfHighlighterUtilsRef,
   containerRef,
   mode,
@@ -92,6 +94,17 @@ export function usePDFNavigation({
     pdfHighlighterUtilsRef.current?.goToPage(page);
     setCurrentPage(page);
   }, [pdfHighlighterUtilsRef]);
+
+  // Navigate to initialPage on first load, or when a new page request arrives
+  // (deep link with a unique pageRequestId).
+  const lastHandledRequestRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!viewerReady || initialPage == null || initialPage <= 1) return;
+    // Skip if we already handled this exact request
+    if (pageRequestId != null && pageRequestId === lastHandledRequestRef.current) return;
+    lastHandledRequestRef.current = pageRequestId;
+    goToPage(initialPage);
+  }, [viewerReady, initialPage, pageRequestId, goToPage]);
 
   const nextPage = useCallback(() => {
     if (currentPage < totalPages) goToPage(currentPage + 1);

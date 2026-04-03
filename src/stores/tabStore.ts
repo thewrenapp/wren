@@ -115,11 +115,23 @@ export const useTabStore = create<TabState>()(
           );
           if (existing) {
             const existingPane = getTabPane(existing);
-            if (existingPane === "left") {
-              set({ activeTabId: existing.id, focusedPane: "left" });
-            } else {
-              set({ activeRightTabId: existing.id, focusedPane: "right" });
-            }
+            // Merge in new data (e.g. pdfPage from deep link) if provided
+            const updates: Partial<TabState> = {
+              focusedPane: existingPane,
+              ...(existingPane === "left"
+                ? { activeTabId: existing.id }
+                : { activeRightTabId: existing.id }),
+              ...(tab.data
+                ? {
+                    tabs: state.tabs.map((t) =>
+                      t.id === existing.id
+                        ? { ...t, data: { ...t.data, ...tab.data } }
+                        : t
+                    ),
+                  }
+                : {}),
+            };
+            set(updates);
             return existing.id;
           }
         }

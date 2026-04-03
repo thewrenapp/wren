@@ -28,15 +28,18 @@ GlobalWorkerOptions.workerSrc = new URL(
 interface PDFViewerProps {
   filePath: string;
   attachmentId: string;
+  entryKey?: string;
+  attachmentKey?: string;
   infoPaneOpen?: boolean;
   onToggleInfoPane?: () => void;
   initialPage?: number;
+  pageRequestId?: number;
   onViewStateChange?: (state: { page: number; scale: number }) => void;
 }
 
 type ViewerMode = "pan" | "edit";
 
-export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane, initialPage, onViewStateChange }: PDFViewerProps) {
+export function PDFViewer({ filePath, attachmentId, entryKey, attachmentKey, infoPaneOpen: infoPaneOpenProp, onToggleInfoPane, initialPage, pageRequestId, onViewStateChange }: PDFViewerProps) {
   const [pdfUrl, setPdfUrl] = useState<string>("");
   const [toolMode, setToolMode] = useState<ToolMode>(null);
   const [mode, setMode] = useState<ViewerMode>("pan");
@@ -66,7 +69,7 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
 
   const annotations = usePDFAnnotations({ attachmentId, toolMode });
   const navigation = usePDFNavigation({
-    filePath, initialPage, pdfHighlighterUtilsRef, containerRef,
+    filePath, initialPage, pageRequestId, pdfHighlighterUtilsRef, containerRef,
     mode, toolMode, setToolMode, handleModeChange, onViewStateChange,
   });
 
@@ -177,6 +180,8 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
                     currentPage={navigation.currentPage}
                     pdfHighlighterUtils={pdfHighlighterUtilsRef.current}
                     togglePdfLeftPanel={togglePdfLeftPanel}
+                    entryKey={entryKey}
+                    attachmentKey={attachmentKey}
                   />
                 )}
 

@@ -18,6 +18,8 @@ interface PDFLeftPanelProps {
   currentPage: number;
   pdfHighlighterUtils: PdfHighlighterUtils | null;
   togglePdfLeftPanel: () => void;
+  entryKey?: string;
+  attachmentKey?: string;
 }
 
 export function PDFLeftPanel({
@@ -31,6 +33,8 @@ export function PDFLeftPanel({
   currentPage,
   pdfHighlighterUtils,
   togglePdfLeftPanel,
+  entryKey,
+  attachmentKey,
 }: PDFLeftPanelProps) {
   return (
     <div className="relative flex flex-col h-full w-[220px] border-r bg-background overflow-visible">
@@ -73,6 +77,8 @@ export function PDFLeftPanel({
             annotations={annotations}
             onAnnotationClick={onAnnotationClick}
             onDelete={onDelete}
+            entryKey={entryKey}
+            attachmentKey={attachmentKey}
           />
         ) : leftPanelTab === "outline" ? (
           <OutlinePanel

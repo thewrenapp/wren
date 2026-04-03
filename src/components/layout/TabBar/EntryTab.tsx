@@ -41,11 +41,12 @@ interface EntryTabProps {
   attachmentId?: string; // Specific attachment to display
   viewMode?: "default" | "extracted" | "parsed"; // "extracted" shows markdown viewer, "parsed" shows AI-structured content
   initialPdfPage?: number;
+  pdfPageRequestId?: number;
   initialHtmlScale?: number;
   onViewStateChange?: (state: Record<string, unknown>) => void;
 }
 
-export function EntryTab({ entryId, attachmentId, viewMode = "default", initialPdfPage, initialHtmlScale, onViewStateChange }: EntryTabProps) {
+export function EntryTab({ entryId, attachmentId, viewMode = "default", initialPdfPage, pdfPageRequestId, initialHtmlScale, onViewStateChange }: EntryTabProps) {
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -183,7 +184,7 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default", initialP
     }
 
     if (targetAttachment?.attachmentType === "pdf" && targetAttachment.filePath) {
-      return <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} initialPage={initialPdfPage} onViewStateChange={onViewStateChange ? handlePdfViewStateChange : undefined} />;
+      return <PDFViewer filePath={targetAttachment.filePath} attachmentId={String(targetAttachment.id)} entryKey={entry.key} attachmentKey={targetAttachment.key} infoPaneOpen={infoPaneOpen} onToggleInfoPane={toggleInfoPane} initialPage={initialPdfPage} pageRequestId={pdfPageRequestId} onViewStateChange={onViewStateChange ? handlePdfViewStateChange : undefined} />;
     }
 
     if (targetAttachment?.attachmentType === "snapshot" && targetAttachment.filePath) {

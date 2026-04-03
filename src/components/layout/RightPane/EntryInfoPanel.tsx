@@ -47,6 +47,7 @@ import {
 import { openFileWithDefaultApp, getLibraryPath, parseDocument } from "@/services/tauri/commands";
 import type { ItemTypeInfo } from "@/types/schema";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { buildEntryLink, buildPdfLink } from "@/lib/wrenLinks";
 
 interface EntryInfoPanelProps {
   entry: EntrySummary;
@@ -808,6 +809,28 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
           )}
         </InfoSection>
 
+        {/* Wren Links */}
+        {fullEntry && (
+          <InfoSection
+            title="Wren Links"
+            icon={<Link2 className="h-4 w-4" />}
+          >
+            <div className="space-y-1.5">
+              <CopyLinkButton label="Copy Entry Link" value={buildEntryLink(fullEntry.key)} />
+              {fullEntry.attachments
+                ?.filter((a) => a.attachmentType === "pdf" && a.filePath)
+                .map((a) => (
+                  <CopyLinkButton
+                    key={a.id}
+                    label={`Copy PDF Link`}
+                    subtitle={a.filePath?.split("/").pop()}
+                    value={buildPdfLink(fullEntry.key, a.key)}
+                  />
+                ))}
+            </div>
+          </InfoSection>
+        )}
+
         {/* Actions */}
         {!isEditing && (() => {
           const activeTab = tabs.find(t => t.id === activeTabId);
@@ -923,6 +946,40 @@ const MetadataField = React.memo(function MetadataField({
   );
 });
 
+function CopyLinkButton({ label, subtitle, value }: { label: string; subtitle?: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await writeText(value);
+      setCopied(true);
+      toast.success("Link copied");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Failed to copy link");
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-left hover:bg-muted/50 transition-colors"
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+      ) : (
+        <Link2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+      )}
+      <div className="flex-1 min-w-0">
+        <span className="text-xs font-medium">{label}</span>
+        {subtitle && (
+          <span className="block text-[10px] text-muted-foreground truncate">{subtitle}</span>
+        )}
+      </div>
+      <Copy className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+    </button>
+  );
+}
 
 function formatRelativeDate(dateStr: string): string {
   try {
