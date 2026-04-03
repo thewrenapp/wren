@@ -337,16 +337,28 @@ pub async fn list_collections(
     Ok(Json(collections))
 }
 
-/// GET /api/collections/:id/items — paginated entries in a collection
+/// GET /api/collections/:id_or_name/items — paginated entries in a collection (by ID or name)
 pub async fn list_collection_items(
     headers: HeaderMap,
     State(state): State<Arc<ConnectorState>>,
-    Path(collection_id): Path<i64>,
+    Path(id_or_name): Path<String>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedResponse<ApiEntrySummary>>, StatusCode> {
     validate_token(&headers, &state.token)?;
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(50).min(200);
+
+    // Resolve: try as numeric ID first, then by name
+    let collection_id: i64 = if let Ok(id) = id_or_name.parse::<i64>() {
+        id
+    } else {
+        sqlx::query_scalar("SELECT id FROM collections WHERE name = ? COLLATE NOCASE")
+            .bind(&id_or_name)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
 
     // Count
     let total: i64 = sqlx::query_scalar(
