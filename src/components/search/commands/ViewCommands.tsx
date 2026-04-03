@@ -6,6 +6,7 @@ import {
 import type { ColumnConfig } from "@/stores/uiStore";
 import type { CommandHandlers, CommandsProps } from "./types";
 import { CommandItem, ShortcutBadge } from "./shared";
+import { toast } from "@/stores/toastStore";
 
 interface ViewCommandsProps {
   handlers: CommandHandlers;
@@ -26,7 +27,6 @@ export function ViewCommands({
   libraryLayout, columns, trashCount, libraryInfoPaneEnabled,
   uiActions, setCommandPaletteOpen,
 }: ViewCommandsProps) {
-  const { toast } = require("@/stores/toastStore");
   return (
     <Command.Group>
       <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">View</div>

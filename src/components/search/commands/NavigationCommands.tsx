@@ -6,6 +6,8 @@ import {
 } from "lucide-react";
 import { sidebarIcons } from "@/lib/icons";
 import type { Tab } from "@/stores/tabStore";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { useUIStore } from "@/stores/uiStore";
 import type { CommandHandlers, CommandsProps } from "./types";
 import { CommandItem, ShortcutBadge } from "./shared";
 
@@ -157,8 +159,6 @@ export function TabCommands({
             tabActions.openTab({ type: "library", title: "Library" });
             let isTrashed = false;
             try { await getEntry(entryId); } catch { isTrashed = true; }
-            const { useLibraryStore } = require("@/stores/libraryStore");
-            const { useUIStore } = require("@/stores/uiStore");
             const { selectEntry, setFilter, setSearchQuery } = useLibraryStore.getState();
             const { setActiveFilter } = useUIStore.getState();
             if (isTrashed) {

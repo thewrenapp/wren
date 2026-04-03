@@ -8,6 +8,7 @@ import {
   Quote, Minus, ArrowLeft, ArrowRight, StickyNote, Table2,
   BookOpen, FileUp, Highlighter, MessageCircle, Paperclip,
 } from "lucide-react";
+import { toast } from "@/stores/toastStore";
 import { IconTagOff } from "@tabler/icons-react";
 import type { Collection, Tag as TagType } from "@/services/tauri";
 import type { CommandHandlers, SubMenu } from "./types";
@@ -272,7 +273,6 @@ export function MarkdownCommands({ setCommandPaletteOpen, contextAttachmentId, r
   contextAttachmentId: number | null;
   reindexAttachment: (id: number, opts?: { forceOcr: boolean }) => Promise<void>;
 }) {
-  const { toast } = require("@/stores/toastStore");
   return (
     <Command.Group>
       <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">Extracted Text</div>
