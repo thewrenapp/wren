@@ -477,6 +477,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
                 isEditing={false}
               />
             )}
+
           </div>
         </InfoSection>
 
@@ -816,6 +817,7 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
             icon={<Link2 className="h-4 w-4" />}
           >
             <div className="space-y-1.5">
+              <CopyLinkButton label="Copy Item Key" value={entry.key} />
               <CopyLinkButton label="Copy Entry Link" value={buildEntryLink(fullEntry.key)} />
               {fullEntry.attachments
                 ?.filter((a) => a.attachmentType === "pdf" && a.filePath)

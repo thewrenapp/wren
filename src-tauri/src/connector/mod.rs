@@ -1,3 +1,4 @@
+pub mod api_handlers;
 pub mod handlers;
 pub mod models;
 pub mod server;

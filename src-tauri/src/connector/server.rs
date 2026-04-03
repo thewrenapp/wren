@@ -4,6 +4,7 @@ use axum::Router;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
+use super::api_handlers;
 use super::handlers;
 use super::ConnectorState;
 
@@ -29,6 +30,16 @@ pub async fn start_server(
         .route("/connector/updateSession", post(handlers::update_session))
         .route("/connector/delaySync", post(handlers::delay_sync))
         .route("/connector/collections", get(handlers::get_collections))
+        // REST API endpoints
+        .route("/api/items", get(api_handlers::list_items))
+        .route("/api/items/{key}/cite", get(api_handlers::get_item_cite))
+        .route("/api/items/{key}/bibtex", get(api_handlers::get_item_bibtex))
+        .route("/api/items/{key}/json", get(api_handlers::get_item_json))
+        .route("/api/items/{key}/attachments", get(api_handlers::get_item_attachments))
+        .route("/api/search", get(api_handlers::search_items))
+        .route("/api/collections", get(api_handlers::list_collections))
+        .route("/api/collections/{id}/items", get(api_handlers::list_collection_items))
+        .route("/api/tags/{name}/items", get(api_handlers::list_tag_items))
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB max upload
         .layer(cors)
         .with_state(state);

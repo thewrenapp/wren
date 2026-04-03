@@ -203,6 +203,349 @@ fn string_to_chunks(value: &str) -> Vec<Spanned<Chunk>> {
 }
 
 // =====================================================
+// PER-ENTRY EXPORT HELPERS (reused by Tauri commands and API handlers)
+// =====================================================
+
+/// Build a CSL JSON object for a single entry.
+pub async fn build_csl_json_for_entry(
+    db: &sqlx::SqlitePool,
+    entry_id: i64,
+) -> Result<Option<CslJson>, String> {
+    let entry_row = sqlx::query(
+        r#"
+        SELECT e.id, e.key, it.name as item_type, e.title, e.date, e.url,
+               e.access_date, e.date_added, e.date_modified,
+               it.display_name as item_type_display
+        FROM entries e
+        JOIN item_types it ON e.item_type_id = it.id
+        WHERE e.id = ? AND e.is_deleted = 0
+        "#
+    )
+    .bind(entry_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let entry_row = match entry_row {
+        Some(row) => row,
+        None => return Ok(None),
+    };
+
+    let key: String = entry_row.get("key");
+    let item_type: String = entry_row.get("item_type");
+    let title: String = entry_row.get("title");
+    let date: Option<String> = entry_row.get("date");
+    let url: Option<String> = entry_row.get("url");
+
+    let field_rows: Vec<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT f.name as field_name, ef.value
+        FROM entry_fields ef
+        JOIN fields f ON ef.field_id = f.id
+        WHERE ef.entry_id = ?
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut fields: HashMap<String, String> = HashMap::new();
+    for (name, value) in field_rows {
+        fields.insert(name, value);
+    }
+
+    let creator_rows: Vec<(String, Option<String>, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        r#"
+        SELECT ct.name as creator_type, ec.first_name, ec.last_name, ec.name, ec.sort_order
+        FROM entry_creators ec
+        JOIN creator_types ct ON ec.creator_type_id = ct.id
+        WHERE ec.entry_id = ?
+        ORDER BY ec.sort_order
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut authors = Vec::new();
+    let mut editors = Vec::new();
+    let mut translators = Vec::new();
+
+    for (creator_type, first_name, last_name, name, _) in creator_rows {
+        let csl_name = if let Some(literal) = name {
+            CslName { family: None, given: None, literal: Some(literal) }
+        } else {
+            CslName { family: last_name, given: first_name, literal: None }
+        };
+
+        match creator_type_to_csl_role(&creator_type) {
+            "editor" => editors.push(csl_name),
+            "translator" => translators.push(csl_name),
+            _ => authors.push(csl_name),
+        }
+    }
+
+    let issued = date.map(|d| {
+        let date_parts: Vec<i32> = d.split('-').filter_map(|p| p.parse().ok()).collect();
+        CslDate {
+            date_parts: if date_parts.is_empty() { None } else { Some(vec![date_parts]) },
+            raw: Some(d),
+        }
+    });
+
+    Ok(Some(CslJson {
+        id: key,
+        item_type: item_type_to_csl(&item_type).to_string(),
+        title: Some(title),
+        author: if authors.is_empty() { None } else { Some(authors) },
+        editor: if editors.is_empty() { None } else { Some(editors) },
+        translator: if translators.is_empty() { None } else { Some(translators) },
+        issued,
+        container_title: fields.get("publicationTitle").or(fields.get("journalAbbreviation")).cloned(),
+        publisher: fields.get("publisher").cloned(),
+        publisher_place: fields.get("place").cloned(),
+        volume: fields.get("volume").cloned(),
+        issue: fields.get("issue").cloned(),
+        page: fields.get("pages").cloned(),
+        doi: fields.get("DOI").cloned(),
+        isbn: fields.get("ISBN").cloned(),
+        issn: fields.get("ISSN").cloned(),
+        url,
+        abstract_: fields.get("abstractNote").cloned(),
+        language: fields.get("language").cloned(),
+        number_of_pages: fields.get("numPages").cloned(),
+        edition: fields.get("edition").cloned(),
+        note: fields.get("extra").cloned(),
+    }))
+}
+
+/// Build a BibTeX string for a single entry.
+pub async fn build_bibtex_for_entry(
+    db: &sqlx::SqlitePool,
+    entry_id: i64,
+) -> Result<Option<String>, String> {
+    let entry_row = sqlx::query(
+        r#"
+        SELECT e.id, e.key, it.name as item_type, e.title, e.date, e.url,
+               e.access_date, e.date_added, e.date_modified
+        FROM entries e
+        JOIN item_types it ON e.item_type_id = it.id
+        WHERE e.id = ? AND e.is_deleted = 0
+        "#
+    )
+    .bind(entry_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let entry_row = match entry_row {
+        Some(row) => row,
+        None => return Ok(None),
+    };
+
+    let key: String = entry_row.get("key");
+    let item_type: String = entry_row.get("item_type");
+    let title: String = entry_row.get("title");
+    let date: Option<String> = entry_row.get("date");
+    let url: Option<String> = entry_row.get("url");
+
+    let field_rows: Vec<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT f.name as field_name, ef.value
+        FROM entry_fields ef
+        JOIN fields f ON ef.field_id = f.id
+        WHERE ef.entry_id = ?
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut fields: HashMap<String, String> = HashMap::new();
+    for (name, value) in field_rows {
+        fields.insert(name, value);
+    }
+
+    let creator_rows: Vec<(String, Option<String>, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        r#"
+        SELECT ct.name as creator_type, ec.first_name, ec.last_name, ec.name, ec.sort_order
+        FROM entry_creators ec
+        JOIN creator_types ct ON ec.creator_type_id = ct.id
+        WHERE ec.entry_id = ?
+        ORDER BY ec.sort_order
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let entry_type = item_type_to_bibtex_entry_type(&item_type);
+    let mut bib_entry = Entry::new(key, entry_type);
+    bib_entry.set("title", string_to_chunks(&title));
+
+    let mut authors: Vec<Person> = Vec::new();
+    let mut editors: Vec<Person> = Vec::new();
+    for (creator_type, first_name, last_name, name, _) in creator_rows {
+        if let Some(person) = create_person(first_name, last_name, name) {
+            if creator_type == "editor" { editors.push(person); }
+            else { authors.push(person); }
+        }
+    }
+    if !authors.is_empty() { bib_entry.set_as("author", &authors); }
+    if !editors.is_empty() { bib_entry.set_as("editor", &editors); }
+    if let Some(d) = &date { bib_entry.set("date", string_to_chunks(d)); }
+    if let Some(journal) = fields.get("publicationTitle") { bib_entry.set("journaltitle", string_to_chunks(journal)); }
+    if let Some(v) = fields.get("volume") { bib_entry.set("volume", string_to_chunks(v)); }
+    if let Some(v) = fields.get("issue") { bib_entry.set("number", string_to_chunks(v)); }
+    if let Some(v) = fields.get("pages") { bib_entry.set("pages", string_to_chunks(v)); }
+    if let Some(v) = fields.get("publisher") { bib_entry.set("publisher", string_to_chunks(v)); }
+    if let Some(v) = fields.get("place") { bib_entry.set("location", string_to_chunks(v)); }
+    if let Some(v) = fields.get("DOI") { bib_entry.set("doi", string_to_chunks(v)); }
+    if let Some(v) = fields.get("ISBN") { bib_entry.set("isbn", string_to_chunks(v)); }
+    if let Some(u) = &url { bib_entry.set("url", string_to_chunks(u)); }
+    if let Some(v) = fields.get("abstractNote") { bib_entry.set("abstract", string_to_chunks(v)); }
+
+    match bib_entry.to_bibtex_string() {
+        Ok(bibtex) => Ok(Some(bibtex)),
+        Err(e) => {
+            tracing::warn!("Failed to serialize entry to BibTeX: {:?}", e);
+            Ok(None)
+        }
+    }
+}
+
+/// Build a plain-text citation for a single entry (APA-style).
+pub async fn build_citation_for_entry(
+    db: &sqlx::SqlitePool,
+    entry_id: i64,
+) -> Result<Option<String>, String> {
+    let entry_row = sqlx::query(
+        r#"
+        SELECT e.id, e.title, e.date, e.url, it.name as item_type
+        FROM entries e
+        JOIN item_types it ON e.item_type_id = it.id
+        WHERE e.id = ? AND e.is_deleted = 0
+        "#
+    )
+    .bind(entry_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let entry_row = match entry_row {
+        Some(row) => row,
+        None => return Ok(None),
+    };
+
+    let title: String = entry_row.get("title");
+    let date: Option<String> = entry_row.get("date");
+    let url: Option<String> = entry_row.get("url");
+
+    // Get creators
+    let creator_rows: Vec<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT ec.first_name, ec.last_name, ec.name
+        FROM entry_creators ec
+        JOIN creator_types ct ON ec.creator_type_id = ct.id
+        WHERE ec.entry_id = ? AND ct.name = 'author'
+        ORDER BY ec.sort_order
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Get fields for journal, volume, issue, pages
+    let field_rows: Vec<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT f.name, ef.value
+        FROM entry_fields ef
+        JOIN fields f ON ef.field_id = f.id
+        WHERE ef.entry_id = ? AND f.name IN ('publicationTitle', 'volume', 'issue', 'pages', 'DOI')
+        "#
+    )
+    .bind(entry_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut fields: HashMap<String, String> = field_rows.into_iter().collect();
+
+    // Format authors: "Last, F. I., Last2, F. I., & Last3, F. I."
+    let author_parts: Vec<String> = creator_rows
+        .iter()
+        .map(|(first, last, name)| {
+            if let Some(lit) = name {
+                lit.clone()
+            } else {
+                let ln = last.as_deref().unwrap_or("");
+                let initials = first.as_deref().unwrap_or("")
+                    .split_whitespace()
+                    .map(|w| format!("{}.", w.chars().next().unwrap_or(' ')))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if initials.is_empty() { ln.to_string() }
+                else { format!("{}, {}", ln, initials) }
+            }
+        })
+        .collect();
+
+    let authors_str = match author_parts.len() {
+        0 => String::new(),
+        1 => author_parts[0].clone(),
+        2 => format!("{} & {}", author_parts[0], author_parts[1]),
+        _ => {
+            let last = author_parts.last().unwrap();
+            let rest = &author_parts[..author_parts.len() - 1];
+            format!("{}, & {}", rest.join(", "), last)
+        }
+    };
+
+    // Year
+    let year = date
+        .as_deref()
+        .and_then(|d| d.split('-').next())
+        .unwrap_or("n.d.");
+
+    // Build citation
+    let mut cite = String::new();
+    if !authors_str.is_empty() {
+        cite.push_str(&authors_str);
+        cite.push_str(" ");
+    }
+    cite.push_str(&format!("({}). ", year));
+    cite.push_str(&title);
+    cite.push('.');
+
+    if let Some(journal) = fields.remove("publicationTitle") {
+        cite.push_str(&format!(" {}", journal));
+        if let Some(vol) = fields.remove("volume") {
+            cite.push_str(&format!(", {}", vol));
+            if let Some(issue) = fields.remove("issue") {
+                cite.push_str(&format!("({})", issue));
+            }
+        }
+        if let Some(pages) = fields.remove("pages") {
+            cite.push_str(&format!(", {}", pages));
+        }
+        cite.push('.');
+    }
+
+    if let Some(doi) = fields.remove("DOI") {
+        cite.push_str(&format!(" https://doi.org/{}", doi));
+    } else if let Some(u) = url {
+        cite.push_str(&format!(" {}", u));
+    }
+
+    Ok(Some(cite))
+}
+
+// =====================================================
 // EXPORT COMMANDS
 // =====================================================
 
@@ -213,143 +556,11 @@ pub async fn export_to_csl_json(
     entry_ids: Vec<i64>,
 ) -> Result<String, String> {
     let mut csl_items = Vec::new();
-
     for entry_id in entry_ids {
-        // Get entry
-        let entry_row = sqlx::query(
-            r#"
-            SELECT
-                e.id, e.key, it.name as item_type, e.title, e.date, e.url,
-                e.access_date, e.date_added, e.date_modified,
-                it.display_name as item_type_display
-            FROM entries e
-            JOIN item_types it ON e.item_type_id = it.id
-            WHERE e.id = ? AND e.is_deleted = 0
-            "#
-        )
-        .bind(entry_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        let entry_row = match entry_row {
-            Some(row) => row,
-            None => continue,
-        };
-
-        let key: String = entry_row.get("key");
-        let item_type: String = entry_row.get("item_type");
-        let title: String = entry_row.get("title");
-        let date: Option<String> = entry_row.get("date");
-        let url: Option<String> = entry_row.get("url");
-
-        // Get fields
-        let field_rows: Vec<(String, String)> = sqlx::query_as(
-            r#"
-            SELECT f.name as field_name, ef.value
-            FROM entry_fields ef
-            JOIN fields f ON ef.field_id = f.id
-            WHERE ef.entry_id = ?
-            "#
-        )
-        .bind(entry_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        let mut fields: HashMap<String, String> = HashMap::new();
-        for (name, value) in field_rows {
-            fields.insert(name, value);
+        if let Some(item) = build_csl_json_for_entry(&state.db, entry_id).await? {
+            csl_items.push(item);
         }
-
-        // Get creators
-        let creator_rows: Vec<(String, Option<String>, Option<String>, Option<String>, i32)> = sqlx::query_as(
-            r#"
-            SELECT ct.name as creator_type, ec.first_name, ec.last_name, ec.name, ec.sort_order
-            FROM entry_creators ec
-            JOIN creator_types ct ON ec.creator_type_id = ct.id
-            WHERE ec.entry_id = ?
-            ORDER BY ec.sort_order
-            "#
-        )
-        .bind(entry_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        // Group creators by role
-        let mut authors = Vec::new();
-        let mut editors = Vec::new();
-        let mut translators = Vec::new();
-
-        for (creator_type, first_name, last_name, name, _) in creator_rows {
-            let csl_name = if let Some(literal) = name {
-                CslName {
-                    family: None,
-                    given: None,
-                    literal: Some(literal),
-                }
-            } else {
-                CslName {
-                    family: last_name,
-                    given: first_name,
-                    literal: None,
-                }
-            };
-
-            match creator_type_to_csl_role(&creator_type) {
-                "editor" => editors.push(csl_name),
-                "translator" => translators.push(csl_name),
-                _ => authors.push(csl_name),
-            }
-        }
-
-        // Parse date
-        let issued = date.map(|d| {
-            let parts: Vec<&str> = d.split('-').collect();
-            let date_parts: Vec<i32> = parts
-                .iter()
-                .filter_map(|p| p.parse().ok())
-                .collect();
-
-            CslDate {
-                date_parts: if date_parts.is_empty() {
-                    None
-                } else {
-                    Some(vec![date_parts])
-                },
-                raw: Some(d),
-            }
-        });
-
-        let csl_item = CslJson {
-            id: key,
-            item_type: item_type_to_csl(&item_type).to_string(),
-            title: Some(title),
-            author: if authors.is_empty() { None } else { Some(authors) },
-            editor: if editors.is_empty() { None } else { Some(editors) },
-            translator: if translators.is_empty() { None } else { Some(translators) },
-            issued,
-            container_title: fields.get("publicationTitle").or(fields.get("journalAbbreviation")).cloned(),
-            publisher: fields.get("publisher").cloned(),
-            publisher_place: fields.get("place").cloned(),
-            volume: fields.get("volume").cloned(),
-            issue: fields.get("issue").cloned(),
-            page: fields.get("pages").cloned(),
-            doi: fields.get("DOI").cloned(),
-            isbn: fields.get("ISBN").cloned(),
-            issn: fields.get("ISSN").cloned(),
-            url,
-            abstract_: fields.get("abstractNote").cloned(),
-            language: fields.get("language").cloned(),
-            number_of_pages: fields.get("numPages").cloned(),
-            edition: fields.get("edition").cloned(),
-            note: fields.get("extra").cloned(),
-        };
-
-        csl_items.push(csl_item);
     }
-
     serde_json::to_string_pretty(&csl_items).map_err(|e| e.to_string())
 }
 
@@ -360,147 +571,11 @@ pub async fn export_to_bibtex(
     entry_ids: Vec<i64>,
 ) -> Result<String, String> {
     let mut bibtex_entries = Vec::new();
-
     for entry_id in entry_ids {
-        // Get entry
-        let entry_row = sqlx::query(
-            r#"
-            SELECT
-                e.id, e.key, it.name as item_type, e.title, e.date, e.url,
-                e.access_date, e.date_added, e.date_modified
-            FROM entries e
-            JOIN item_types it ON e.item_type_id = it.id
-            WHERE e.id = ? AND e.is_deleted = 0
-            "#
-        )
-        .bind(entry_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        let entry_row = match entry_row {
-            Some(row) => row,
-            None => continue,
-        };
-
-        let key: String = entry_row.get("key");
-        let item_type: String = entry_row.get("item_type");
-        let title: String = entry_row.get("title");
-        let date: Option<String> = entry_row.get("date");
-        let url: Option<String> = entry_row.get("url");
-
-        // Get fields
-        let field_rows: Vec<(String, String)> = sqlx::query_as(
-            r#"
-            SELECT f.name as field_name, ef.value
-            FROM entry_fields ef
-            JOIN fields f ON ef.field_id = f.id
-            WHERE ef.entry_id = ?
-            "#
-        )
-        .bind(entry_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        let mut fields: HashMap<String, String> = HashMap::new();
-        for (name, value) in field_rows {
-            fields.insert(name, value);
-        }
-
-        // Get creators
-        let creator_rows: Vec<(String, Option<String>, Option<String>, Option<String>, i32)> = sqlx::query_as(
-            r#"
-            SELECT ct.name as creator_type, ec.first_name, ec.last_name, ec.name, ec.sort_order
-            FROM entry_creators ec
-            JOIN creator_types ct ON ec.creator_type_id = ct.id
-            WHERE ec.entry_id = ?
-            ORDER BY ec.sort_order
-            "#
-        )
-        .bind(entry_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        // Create biblatex Entry
-        let entry_type = item_type_to_bibtex_entry_type(&item_type);
-        let mut bib_entry = Entry::new(key, entry_type);
-
-        // Set title
-        bib_entry.set("title", string_to_chunks(&title));
-
-        // Set authors and editors using biblatex Person type
-        let mut authors: Vec<Person> = Vec::new();
-        let mut editors: Vec<Person> = Vec::new();
-
-        for (creator_type, first_name, last_name, name, _) in creator_rows {
-            if let Some(person) = create_person(first_name, last_name, name) {
-                if creator_type == "editor" {
-                    editors.push(person);
-                } else {
-                    authors.push(person);
-                }
-            }
-        }
-
-        if !authors.is_empty() {
-            bib_entry.set_as("author", &authors);
-        }
-        if !editors.is_empty() {
-            bib_entry.set_as("editor", &editors);
-        }
-
-        // Set date (biblatex crate handles date->year conversion for BibTeX output)
-        if let Some(d) = &date {
-            bib_entry.set("date", string_to_chunks(d));
-        }
-
-        // Set journal/booktitle based on entry type
-        if let Some(journal) = fields.get("publicationTitle") {
-            // Use journaltitle for BibLaTeX - the crate converts to journal for BibTeX
-            bib_entry.set("journaltitle", string_to_chunks(journal));
-        }
-
-        // Set other fields
-        if let Some(volume) = fields.get("volume") {
-            bib_entry.set("volume", string_to_chunks(volume));
-        }
-        if let Some(issue) = fields.get("issue") {
-            bib_entry.set("number", string_to_chunks(issue));
-        }
-        if let Some(pages) = fields.get("pages") {
-            bib_entry.set("pages", string_to_chunks(pages));
-        }
-        if let Some(publisher) = fields.get("publisher") {
-            bib_entry.set("publisher", string_to_chunks(publisher));
-        }
-        if let Some(place) = fields.get("place") {
-            bib_entry.set("location", string_to_chunks(place));
-        }
-        if let Some(doi) = fields.get("DOI") {
-            bib_entry.set("doi", string_to_chunks(doi));
-        }
-        if let Some(isbn) = fields.get("ISBN") {
-            bib_entry.set("isbn", string_to_chunks(isbn));
-        }
-        if let Some(u) = &url {
-            bib_entry.set("url", string_to_chunks(u));
-        }
-        if let Some(abstract_) = fields.get("abstractNote") {
-            bib_entry.set("abstract", string_to_chunks(abstract_));
-        }
-
-        // Serialize to BibTeX format
-        match bib_entry.to_bibtex_string() {
-            Ok(bibtex) => bibtex_entries.push(bibtex),
-            Err(e) => {
-                // Fallback: log error and skip this entry
-                tracing::warn!("Failed to serialize entry to BibTeX: {:?}", e);
-            }
+        if let Some(bibtex) = build_bibtex_for_entry(&state.db, entry_id).await? {
+            bibtex_entries.push(bibtex);
         }
     }
-
     Ok(bibtex_entries.join("\n\n"))
 }
 
