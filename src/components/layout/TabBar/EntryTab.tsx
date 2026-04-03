@@ -252,7 +252,7 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default", initialP
     : "w-[1px] bg-border hover:bg-primary/50 transition-colors";
 
   return (
-    <div className="h-full w-full">
+    <div className="h-full w-full overflow-hidden">
       <ResizablePanelGroup direction={direction}>
         <ResizablePanel
           defaultSize={infoPaneOpen ? (100 - infoPanelPercent) : 100}

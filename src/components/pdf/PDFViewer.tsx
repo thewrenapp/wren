@@ -114,7 +114,7 @@ export function PDFViewer({ filePath, attachmentId, infoPaneOpen: infoPaneOpenPr
       data-viewer-mode={mode}
       data-tool-mode={toolMode ?? "none"}
       data-selecting={isSelecting ? "true" : "false"}
-      className="pdf-viewer-container flex h-full flex-col bg-muted/30"
+      className="pdf-viewer-container flex h-full flex-col bg-muted/30 overflow-hidden"
     >
       <PDFToolbar
         scale={navigation.displayScale}
