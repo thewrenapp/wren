@@ -1,18 +1,9 @@
-import React, { useCallback } from "react";
-import { X, Pin, FolderOpen, FileText, Copy, Library, ChevronRight, ArrowRightFromLine, ArrowLeftFromLine } from "lucide-react";
+import React, { useRef, useState, useEffect, useMemo } from "react";
+import { X, ChevronDown, Pin } from "lucide-react";
 import { useTabStore, getTabsForPane, type Tab } from "@/stores/tabStore";
-import { useLibraryStore } from "@/stores/libraryStore";
 import { cn } from "@/lib/utils";
 import { tabIconMap, getAttachmentIcon } from "@/lib/icons";
-import { showEntryInFinder, showAttachmentInFinder, showMarkdownInFinder, getEntry } from "@/services/tauri/commands";
-import { useUIStore } from "@/stores/uiStore";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { TabContextMenu } from "./TabContextMenu";
 import {
   SortableContext,
   horizontalListSortingStrategy,
@@ -20,6 +11,12 @@ import {
 } from "@dnd-kit/sortable";
 import { useDroppable, useDndContext } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const tabIcons: Record<Tab["type"], React.ReactNode> = {
   library: <tabIconMap.library className="h-4 w-4" />,
@@ -77,211 +74,6 @@ function SortableTab({ tab, isDragDisabled, children }: SortableTabProps) {
     >
       {children}
     </div>
-  );
-}
-
-function TabContextMenu({ tab, tabIndex, totalTabs, pane = "left", children }: {
-  tab: Tab;
-  tabIndex: number;
-  totalTabs: number;
-  pane?: "left" | "right";
-  children: React.ReactNode;
-}) {
-  const {
-    openTab,
-    closeTab,
-    closeOtherTabs,
-    closeAllTabs,
-    closeTabsToRight,
-    pinTab,
-    unpinTab,
-    duplicateTab,
-    moveTabToPane,
-    splitEnabled,
-  } = useTabStore();
-
-  const hasEntryId = !!tab.entryId;
-  const isLibrary = tab.type === "library";
-  const isWelcome = tab.type === "welcome";
-  const isEntry = tab.type === "entry";
-  const isMarkdown = tab.type === "markdown";
-  const isNote = tab.data?.attachmentType === "note";
-  const hasTabsToRight = tabIndex < totalTabs - 1;
-
-  const handleShowInLibrary = useCallback(async () => {
-    if (!tab.entryId) return;
-    const entryId = Number(tab.entryId);
-    openTab({ type: "library", title: "Library" });
-
-    // Check if entry is trashed (getEntry without includeDeleted throws for trashed entries)
-    let isTrashed = false;
-    try {
-      await getEntry(entryId);
-    } catch {
-      isTrashed = true;
-    }
-
-    const { selectEntry, setFilter, setSearchQuery } = useLibraryStore.getState();
-    const { setActiveFilter } = useUIStore.getState();
-
-    if (isTrashed) {
-      setActiveFilter("trash");
-    } else {
-      // Reset filters so the entry is guaranteed to be visible
-      setActiveFilter("all");
-      setFilter({ type: "all" });
-      setSearchQuery("");
-    }
-    selectEntry(entryId);
-
-    // Delay to allow library data to reload after filter change
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent("wren:scroll-to-entry", {
-          detail: { entryId },
-        })
-      );
-    }, 200);
-  }, [tab.entryId, openTab]);
-
-  const handleFindInFinder = useCallback(async () => {
-    if (!tab.entryId) return;
-    try {
-      if ((isMarkdown || tab.type === "parsed") && tab.attachmentId) {
-        await showMarkdownInFinder(Number(tab.attachmentId), tab.type === "parsed");
-      } else if (tab.attachmentId) {
-        await showAttachmentInFinder(Number(tab.attachmentId));
-      } else {
-        await showEntryInFinder(Number(tab.entryId));
-      }
-    } catch (err) {
-      console.error("Failed to show in Finder:", err);
-    }
-  }, [tab.entryId, tab.attachmentId, tab.type, isMarkdown]);
-
-  const handleOpenExtracted = useCallback(() => {
-    if (!tab.entryId) return;
-    openTab({
-      type: "markdown",
-      title: tab.title,
-      entryId: tab.entryId,
-      attachmentId: tab.attachmentId,
-    });
-  }, [tab, openTab]);
-
-  const handleOpenMainFile = useCallback(() => {
-    if (!tab.entryId) return;
-    openTab({
-      type: "entry",
-      title: tab.title,
-      entryId: tab.entryId,
-      attachmentId: tab.attachmentId,
-    });
-  }, [tab, openTab]);
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-56">
-        {/* Navigation actions */}
-        {hasEntryId && (
-          <>
-            <ContextMenuItem onClick={handleShowInLibrary}>
-              <Library className="h-4 w-4 mr-2" />
-              Show in Library
-            </ContextMenuItem>
-            <ContextMenuItem onClick={handleFindInFinder}>
-              <FolderOpen className="h-4 w-4 mr-2" />
-              Find in Finder
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )}
-
-        {/* Cross-navigation */}
-        {isEntry && hasEntryId && !isNote && (
-          <>
-            <ContextMenuItem onClick={handleOpenExtracted}>
-              <FileText className="h-4 w-4 mr-2" />
-              Open Extracted Content
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )}
-        {isMarkdown && hasEntryId && (
-          <>
-            <ContextMenuItem onClick={handleOpenMainFile}>
-              <ChevronRight className="h-4 w-4 mr-2" />
-              Open Main File
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )}
-
-        {/* Pin/Unpin & Duplicate */}
-        {!isLibrary && (
-          <>
-            {tab.pinned ? (
-              <ContextMenuItem onClick={() => unpinTab(tab.id)}>
-                <Pin className="h-4 w-4 mr-2" />
-                Unpin Tab
-              </ContextMenuItem>
-            ) : (
-              <ContextMenuItem onClick={() => pinTab(tab.id)}>
-                <Pin className="h-4 w-4 mr-2" />
-                Pin Tab
-              </ContextMenuItem>
-            )}
-          </>
-        )}
-        {!isLibrary && !isWelcome && (
-          <ContextMenuItem onClick={() => duplicateTab(tab.id)}>
-            <Copy className="h-4 w-4 mr-2" />
-            Duplicate Tab
-          </ContextMenuItem>
-        )}
-
-        {/* Split pane actions */}
-        {!isLibrary && (
-          <>
-            <ContextMenuSeparator />
-            {pane === "left" && (
-              <ContextMenuItem onClick={() => moveTabToPane(tab.id, "right")}>
-                <ArrowRightFromLine className="h-4 w-4 mr-2" />
-                {splitEnabled ? "Move to Right Pane" : "Split Right"}
-              </ContextMenuItem>
-            )}
-            {pane === "right" && (
-              <ContextMenuItem onClick={() => moveTabToPane(tab.id, "left")}>
-                <ArrowLeftFromLine className="h-4 w-4 mr-2" />
-                Move to Left Pane
-              </ContextMenuItem>
-            )}
-          </>
-        )}
-
-        <ContextMenuSeparator />
-
-        {/* Close actions */}
-        {!isLibrary && (
-          <ContextMenuItem onClick={() => closeTab(tab.id)}>
-            <X className="h-4 w-4 mr-2" />
-            Close Tab
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onClick={() => closeOtherTabs(tab.id)}>
-          Close Other Tabs
-        </ContextMenuItem>
-        {hasTabsToRight && (
-          <ContextMenuItem onClick={() => closeTabsToRight(tab.id)}>
-            Close Tabs to the Right
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onClick={() => closeAllTabs()}>
-          Close All Tabs
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
   );
 }
 
@@ -365,6 +157,9 @@ const TabInner = React.forwardRef<
 });
 TabInner.displayName = "TabInner";
 
+const MIN_TAB_WIDTH = 120;
+const OVERFLOW_BTN_WIDTH = 40;
+
 export function TabBar({ pane = "left" }: { pane?: "left" | "right" }) {
   const {
     tabs: allTabs,
@@ -391,6 +186,54 @@ export function TabBar({ pane = "left" }: { pane?: "left" | "right" }) {
   const paneTabs = getTabsForPane(allTabs, pane);
   const currentActiveId = pane === "left" ? activeTabId : activeRightTabId;
 
+  // Separate library tab (static, not sortable) from other tabs — only in left pane
+  const libraryTab = pane === "left" ? paneTabs.find((t) => t.type === "library") : undefined;
+  const sortableTabs = paneTabs.filter((t) => t.type !== "library");
+
+  // Overflow logic: measure container, calculate how many tabs fit at MIN_TAB_WIDTH
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [visibleCount, setVisibleCount] = useState(999);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const recalculate = () => {
+      const available = el.offsetWidth;
+      const count = sortableTabs.length;
+      if (count === 0) { setVisibleCount(0); return; }
+      if (count * MIN_TAB_WIDTH <= available) { setVisibleCount(count); return; }
+      const usable = available - OVERFLOW_BTN_WIDTH;
+      setVisibleCount(Math.max(1, Math.min(Math.floor(usable / MIN_TAB_WIDTH), count)));
+    };
+    recalculate();
+    const observer = new ResizeObserver(recalculate);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [sortableTabs.length]);
+
+  // Ensure active tab is always in the visible set
+  const { visibleTabs, overflowTabs } = useMemo(() => {
+    if (visibleCount >= sortableTabs.length) {
+      return { visibleTabs: sortableTabs, overflowTabs: [] as Tab[] };
+    }
+    const activeIdx = sortableTabs.findIndex((t) => t.id === currentActiveId);
+    if (activeIdx >= visibleCount) {
+      const reordered = [...sortableTabs];
+      const [activeT] = reordered.splice(activeIdx, 1);
+      reordered.splice(visibleCount - 1, 0, activeT);
+      return {
+        visibleTabs: reordered.slice(0, visibleCount),
+        overflowTabs: reordered.slice(visibleCount),
+      };
+    }
+    return {
+      visibleTabs: sortableTabs.slice(0, visibleCount),
+      overflowTabs: sortableTabs.slice(visibleCount),
+    };
+  }, [sortableTabs, visibleCount, currentActiveId]);
+
+  const visibleIds = visibleTabs.map((t) => t.id);
+
   if (paneTabs.length === 0) {
     return (
       <div
@@ -404,11 +247,6 @@ export function TabBar({ pane = "left" }: { pane?: "left" | "right" }) {
       </div>
     );
   }
-
-  // Separate library tab (static, not sortable) from other tabs — only in left pane
-  const libraryTab = pane === "left" ? paneTabs.find((t) => t.type === "library") : undefined;
-  const sortableTabs = paneTabs.filter((t) => t.type !== "library");
-  const sortableIds = sortableTabs.map((t) => t.id);
 
   return (
     <div
@@ -429,30 +267,63 @@ export function TabBar({ pane = "left" }: { pane?: "left" | "right" }) {
         </TabContextMenu>
       )}
 
-      {/* Sortable tabs — DndContext is provided by TabDndProvider above */}
-      <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
-        {sortableTabs.map((tab, index) => {
-          // tabIndex accounts for the library tab at position 0
-          const globalIndex = libraryTab ? index + 1 : index;
+      {/* Sortable visible tabs */}
+      <div ref={containerRef} className="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
+        <SortableContext items={visibleIds} strategy={horizontalListSortingStrategy}>
+          {visibleTabs.map((tab, index) => {
+            const globalIndex = libraryTab ? index + 1 : index;
+            return (
+              <SortableTab key={tab.id} tab={tab} isDragDisabled={false}>
+                <TabContextMenu tab={tab} tabIndex={globalIndex} totalTabs={paneTabs.length} pane={pane}>
+                  <TabInner
+                    tab={tab}
+                    isActive={tab.id === currentActiveId}
+                    onActivate={() => setActiveTab(tab.id)}
+                    onClose={() => closeTab(tab.id)}
+                  />
+                </TabContextMenu>
+              </SortableTab>
+            );
+          })}
+        </SortableContext>
+      </div>
 
-          return (
-            <SortableTab
-              key={tab.id}
-              tab={tab}
-              isDragDisabled={false}
+      {/* Overflow dropdown */}
+      {overflowTabs.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="flex items-center gap-0.5 px-1.5 h-7 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors flex-shrink-0"
+              title={`${overflowTabs.length} more tab${overflowTabs.length > 1 ? "s" : ""}`}
             >
-              <TabContextMenu tab={tab} tabIndex={globalIndex} totalTabs={paneTabs.length} pane={pane}>
-                <TabInner
-                  tab={tab}
-                  isActive={tab.id === currentActiveId}
-                  onActivate={() => setActiveTab(tab.id)}
-                  onClose={() => closeTab(tab.id)}
-                />
-              </TabContextMenu>
-            </SortableTab>
-          );
-        })}
-      </SortableContext>
+              {overflowTabs.length}
+              <ChevronDown className="h-3 w-3" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-56 max-h-[300px] overflow-y-auto" align="end">
+            {overflowTabs.map((tab) => (
+              <DropdownMenuItem
+                key={tab.id}
+                className="flex items-center gap-2"
+                onSelect={() => setActiveTab(tab.id)}
+              >
+                <span className="flex-shrink-0">{getTabIcon(tab)}</span>
+                <span className={cn("truncate flex-1", tab.id === currentActiveId && "font-medium text-primary")}>
+                  {tab.title}
+                </span>
+                {!tab.pinned && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                    className="flex-shrink-0 p-0.5 rounded-sm hover:bg-foreground/10 opacity-50 hover:opacity-100"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 }
