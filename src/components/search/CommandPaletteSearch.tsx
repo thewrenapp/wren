@@ -19,7 +19,9 @@ import {
   type RagSearchResult,
 } from "@/services/tauri";
 
+import type { SearchState } from "./SearchResults";
 export { SearchResults } from "./SearchResults";
+export type { SearchState };
 
 export type SearchMode = "quick" | "full" | "semantic";
 export type QuickSearchScope = "title_creator_year" | "fields_tags";
@@ -29,33 +31,6 @@ const searchModeConfig = {
   full: { icon: FileSearch, label: "Full", description: "Content search" },
   semantic: { icon: Sparkles, label: "AI", description: "Semantic" },
 };
-
-export interface SearchState {
-  search: string;
-  setSearch: (val: string) => void;
-  searchMode: SearchMode;
-  setSearchMode: (mode: SearchMode) => void;
-  quickScope: QuickSearchScope;
-  setQuickScope: (scope: QuickSearchScope) => void;
-  searchResults: EntrySummary[];
-  setSearchResults: React.Dispatch<React.SetStateAction<EntrySummary[]>>;
-  fullSearchResults: FullSearchResult[];
-  setFullSearchResults: React.Dispatch<React.SetStateAction<FullSearchResult[]>>;
-  semanticResults: RagSearchResult[];
-  setSemanticResults: React.Dispatch<React.SetStateAction<RagSearchResult[]>>;
-  searchPipeline: { strategy: string; reranked: boolean; cragActive: boolean; raptorActive: boolean; queryTimeMs: number } | null;
-  setSearchPipeline: React.Dispatch<React.SetStateAction<{ strategy: string; reranked: boolean; cragActive: boolean; raptorActive: boolean; queryTimeMs: number } | null>>;
-  isSearching: boolean;
-  setIsSearching: React.Dispatch<React.SetStateAction<boolean>>;
-  searchTotal: number;
-  setSearchTotal: React.Dispatch<React.SetStateAction<number>>;
-  searchOffset: number;
-  setSearchOffset: React.Dispatch<React.SetStateAction<number>>;
-  hasMoreResults: boolean;
-  setHasMoreResults: React.Dispatch<React.SetStateAction<boolean>>;
-  searchError: string | null;
-  setSearchError: React.Dispatch<React.SetStateAction<string | null>>;
-}
 
 export function useSearchState(): SearchState {
   const [search, setSearch] = useState("");

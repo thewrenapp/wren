@@ -4,7 +4,34 @@ import {
   Search, File, FileText, StickyNote, Sparkles, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { SearchState } from "./CommandPaletteSearch";
+import type { EntrySummary, FullSearchResult, RagSearchResult } from "@/services/tauri";
+
+export interface SearchState {
+  search: string;
+  setSearch: (val: string) => void;
+  searchMode: "quick" | "full" | "semantic";
+  setSearchMode: (mode: "quick" | "full" | "semantic") => void;
+  quickScope: "title_creator_year" | "fields_tags";
+  setQuickScope: (scope: "title_creator_year" | "fields_tags") => void;
+  searchResults: EntrySummary[];
+  setSearchResults: React.Dispatch<React.SetStateAction<EntrySummary[]>>;
+  fullSearchResults: FullSearchResult[];
+  setFullSearchResults: React.Dispatch<React.SetStateAction<FullSearchResult[]>>;
+  semanticResults: RagSearchResult[];
+  setSemanticResults: React.Dispatch<React.SetStateAction<RagSearchResult[]>>;
+  searchPipeline: { strategy: string; reranked: boolean; cragActive: boolean; raptorActive: boolean; queryTimeMs: number } | null;
+  setSearchPipeline: React.Dispatch<React.SetStateAction<SearchState["searchPipeline"]>>;
+  isSearching: boolean;
+  setIsSearching: React.Dispatch<React.SetStateAction<boolean>>;
+  searchTotal: number;
+  setSearchTotal: React.Dispatch<React.SetStateAction<number>>;
+  searchOffset: number;
+  setSearchOffset: React.Dispatch<React.SetStateAction<number>>;
+  hasMoreResults: boolean;
+  setHasMoreResults: React.Dispatch<React.SetStateAction<boolean>>;
+  searchError: string | null;
+  setSearchError: React.Dispatch<React.SetStateAction<string | null>>;
+}
 
 interface SearchResultsProps {
   state: SearchState;

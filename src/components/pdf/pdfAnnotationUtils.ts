@@ -1,6 +1,19 @@
-import type { ScaledPosition } from "@/components/pdf/pdfjs";
+import type { Highlight, ScaledPosition, ShapeType } from "@/components/pdf/pdfjs";
 import type { Annotation } from "@/services/tauri/commands";
-import type { AppHighlight } from "./usePDFAnnotations";
+
+export interface AppHighlight extends Highlight {
+  highlightColor?: string;
+  selectedText?: string;
+  color?: string;
+  backgroundColor?: string;
+  fontSize?: string;
+  fontFamily?: string;
+  shapeType?: ShapeType;
+  strokeColor?: string;
+  strokeWidth?: number;
+}
+
+export type ToolMode = "highlight" | "area" | "freetext" | "drawing" | "rectangle" | null;
 
 export const DEFAULT_TEXT_HIGHLIGHT_COLOR = "#FFE28F";
 export const DEFAULT_AREA_HIGHLIGHT_COLOR = "#FFE28F";

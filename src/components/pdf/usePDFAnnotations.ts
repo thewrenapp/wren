@@ -1,11 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import {
-  type Highlight,
   type GhostHighlight,
   type ScaledPosition,
   type DrawingStroke,
   type ShapeData,
-  type ShapeType,
 } from "@/components/pdf/pdfjs";
 import {
   getAnnotations,
@@ -14,26 +12,15 @@ import {
   deleteAnnotation,
 } from "@/services/tauri/commands";
 import {
+  type AppHighlight,
+  type ToolMode,
   DEFAULT_TEXT_HIGHLIGHT_COLOR,
   DEFAULT_AREA_HIGHLIGHT_COLOR,
   convertAnnotationToHighlight,
 } from "./pdfAnnotationUtils";
 
+export type { AppHighlight, ToolMode };
 export { DEFAULT_TEXT_HIGHLIGHT_COLOR, DEFAULT_AREA_HIGHLIGHT_COLOR };
-
-export interface AppHighlight extends Highlight {
-  highlightColor?: string;
-  selectedText?: string;
-  color?: string;
-  backgroundColor?: string;
-  fontSize?: string;
-  fontFamily?: string;
-  shapeType?: ShapeType;
-  strokeColor?: string;
-  strokeWidth?: number;
-}
-
-export type ToolMode = "highlight" | "area" | "freetext" | "drawing" | "rectangle" | null;
 
 interface UsePDFAnnotationsOptions {
   attachmentId: string;

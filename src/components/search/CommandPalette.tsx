@@ -16,7 +16,7 @@ import {
   getEntries,
   ragIndexAll, ragRebuild, reindexAttachment,
   showEntryInFinder, getEntry,
-  type ExportOptions, type BiblatexPreviewResult, type Attachment,
+  type ExportOptions, type BiblatexPreviewResult, type Attachment, type EntrySummary,
 } from "@/services/tauri";
 import {
   useSearchState, useSearchEffects, SearchInput, SearchResults, hasSearchResults,
@@ -91,7 +91,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     try {
       const { getEntriesPaged } = await import("@/services/tauri");
       const result = await getEntriesPaged({ searchQuery: searchState.search.trim(), searchScope: searchState.quickScope, limit: 20, offset: searchState.searchOffset });
-      searchState.setSearchResults((prev) => [...prev, ...result.entries]);
+      searchState.setSearchResults((prev: EntrySummary[]) => [...prev, ...result.entries]);
       const nextOffset = searchState.searchOffset + result.entries.length;
       searchState.setSearchOffset(nextOffset); searchState.setSearchTotal(result.total);
       searchState.setHasMoreResults(nextOffset < result.total);
