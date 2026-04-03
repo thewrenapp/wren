@@ -158,6 +158,7 @@ export const PdfHighlighter = ({
         container: containerNodeRef.current!, eventBus: eventBusRef.current,
         textLayerMode: 2, removePageBorders: true,
         linkService: linkServiceRef.current, findController: findControllerRef.current,
+        maxCanvasPixels: 2_097_152, // 2MP (~1448x1448) — caps per-page canvas to ~8MB even on Retina
       });
       viewerRef.current.setDocument(pdfDocument);
       linkServiceRef.current.setDocument(pdfDocument);
