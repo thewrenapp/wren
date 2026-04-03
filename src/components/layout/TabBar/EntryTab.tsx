@@ -94,74 +94,7 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default", initialP
     loadEntry();
   }, [entryId, entryVersion]);
 
-  if (loading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-      </div>
-    );
-  }
-
-  if (error || !entry) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-destructive">
-        {error || "Failed to load entry"}
-      </div>
-    );
-  }
-
-  // Find the attachment to display
-  let targetAttachment: Attachment | undefined;
-
-  if (attachmentId) {
-    // If a specific attachment is requested, find it
-    targetAttachment = entry.attachments?.find(
-      (a: Attachment) => String(a.id) === attachmentId
-    );
-  }
-
-  // If no specific attachment or not found, default to first viewable attachment
-  const viewableTypes = ["pdf", "epub", "snapshot", "image"];
-  if (!targetAttachment) {
-    for (const type of viewableTypes) {
-      targetAttachment = entry.attachments?.find(
-        (a: Attachment) => a.attachmentType === type
-      );
-      if (targetAttachment) break;
-    }
-  }
-  // Fall back to first attachment with a file path
-  if (!targetAttachment) {
-    targetAttachment = entry.attachments?.find(
-      (a: Attachment) => a.filePath
-    );
-  }
-
-  // Create entry summary for info panel
-  const entrySummary = useMemo(() => ({
-    id: entry.id,
-    key: entry.key,
-    itemType: entry.itemType,
-    itemTypeDisplay: entry.itemTypeDisplay,
-    title: entry.title,
-    creatorsDisplay: entry.creators?.map(c =>
-      c.name || [c.firstName, c.lastName].filter(Boolean).join(" ")
-    ).join(", ") || "",
-    year: entry.date?.split("-")[0],
-    dateAdded: entry.dateAdded,
-    tags: entry.tags,
-    attachmentCount: entry.attachmentCount,
-    hasPdf: entry.attachments?.some(a => a.attachmentType === "pdf") || false,
-    hasEpub: entry.attachments?.some(a => a.attachmentType === "epub") || false,
-    hasNote: entry.attachments?.some(a => a.attachmentType === "note") || false,
-    hasWeblink: entry.attachments?.some(a => a.attachmentType === "weblink") || false,
-    hasExtractedText: entry.attachments?.some(a => !!a.markdownPath) || false,
-    hasStructuredContent: false, // not available from full entry data
-  }), [entry]);
-
-  const isStacked = libraryLayout === "stacked";
-
-  // Stable callbacks for view state changes to avoid re-creating on every render
+  // All hooks must be before early returns (Rules of Hooks)
   const handlePdfViewStateChange = useCallback(
     (s: { page: number; scale: number }) => {
       onViewStateChange?.({ pdfPage: s.page, pdfScale: s.scale });
@@ -175,6 +108,72 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default", initialP
     },
     [onViewStateChange],
   );
+
+  const entrySummary = useMemo(() => {
+    if (!entry) return null;
+    return {
+      id: entry.id,
+      key: entry.key,
+      itemType: entry.itemType,
+      itemTypeDisplay: entry.itemTypeDisplay,
+      title: entry.title,
+      creatorsDisplay: entry.creators?.map(c =>
+        c.name || [c.firstName, c.lastName].filter(Boolean).join(" ")
+      ).join(", ") || "",
+      year: entry.date?.split("-")[0],
+      dateAdded: entry.dateAdded,
+      tags: entry.tags,
+      attachmentCount: entry.attachmentCount,
+      hasPdf: entry.attachments?.some(a => a.attachmentType === "pdf") || false,
+      hasEpub: entry.attachments?.some(a => a.attachmentType === "epub") || false,
+      hasNote: entry.attachments?.some(a => a.attachmentType === "note") || false,
+      hasWeblink: entry.attachments?.some(a => a.attachmentType === "weblink") || false,
+      hasExtractedText: entry.attachments?.some(a => !!a.markdownPath) || false,
+      hasStructuredContent: false,
+    };
+  }, [entry]);
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      </div>
+    );
+  }
+
+  if (error || !entry || !entrySummary) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-destructive">
+        {error || "Failed to load entry"}
+      </div>
+    );
+  }
+
+  // Find the attachment to display
+  let targetAttachment: Attachment | undefined;
+
+  if (attachmentId) {
+    targetAttachment = entry.attachments?.find(
+      (a: Attachment) => String(a.id) === attachmentId
+    );
+  }
+
+  const viewableTypes = ["pdf", "epub", "snapshot", "image"];
+  if (!targetAttachment) {
+    for (const type of viewableTypes) {
+      targetAttachment = entry.attachments?.find(
+        (a: Attachment) => a.attachmentType === type
+      );
+      if (targetAttachment) break;
+    }
+  }
+  if (!targetAttachment) {
+    targetAttachment = entry.attachments?.find(
+      (a: Attachment) => a.filePath
+    );
+  }
+
+  const isStacked = libraryLayout === "stacked";
 
   // Render main content based on attachment type
   const renderMainContent = () => {
