@@ -1,5 +1,4 @@
 import { ReactNode, useState } from 'react';
-import { toast } from '@/stores/toastStore';
 import {
   ExternalLink,
   FolderOpen,
@@ -42,32 +41,15 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuShortcut,
 } from '@/components/ui/dropdown-menu';
-import { useLibraryStore, type EntrySummary } from '@/stores/libraryStore';
-import { useTabStore } from '@/stores/tabStore';
+import { type EntrySummary } from '@/stores/libraryStore';
 import {
-  showEntryInFinder,
-  showEntriesInFinder,
-  addPdfAttachment,
-  addFileAttachment,
-  createAttachment,
-  exportToCslJson,
-  exportToBibtex,
   exportToBiblatexWithFiles,
-  getCollections,
-  getTags,
-  addTagToEntries,
-  reindexEntry,
-  bulkAddToCollection,
-  bulkRemoveFromCollection,
-  bulkRemoveTags,
-  bulkMoveToTrash,
   type ExportOptions,
 } from '@/services/tauri';
-import { parseEntries } from '@/services/tauri/commands';
 import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
-import { open, save } from '@tauri-apps/plugin-dialog';
-import { writeTextFile } from '@tauri-apps/plugin-fs';
-import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { open } from '@tauri-apps/plugin-dialog';
+import { toast } from '@/stores/toastStore';
+import { useEntryActions } from './useEntryActions';
 
 interface EntryContextMenuProps {
   entry: EntrySummary;
@@ -82,363 +64,34 @@ interface EntryContextMenuContentProps {
 
 // Standalone content component for controlled dropdown menus (used in EntryTable)
 export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: EntryContextMenuContentProps) {
-  const { openTab, tabs, closeTab } = useTabStore();
   const {
+    targetIds,
+    isMultiSelect,
     collections,
     tags,
-    entries,
-    removeEntry,
-    invalidateAttachments,
-    setCollections,
-    setTags,
-    invalidateEntry,
-    selectedEntryIds,
     activeCollectionId,
     activeTagIds,
     activeFilter,
-    refreshLibrary,
-  } = useLibraryStore();
-
-  // Use all selected entries for bulk operations when multiple are selected
-  const targetIds =
-    selectedEntryIds.length > 1 && selectedEntryIds.includes(entry.id)
-      ? selectedEntryIds
-      : [entry.id];
-  const isMultiSelect = targetIds.length > 1;
-
-  // Get entry objects for selected entries (for titles, etc.)
-  const targetEntries = isMultiSelect
-    ? entries.filter((e) => targetIds.includes(e.id))
-    : [entry];
-
-  const handleOpen = () => {
-    // Open all selected entries in tabs
-    for (const targetEntry of targetEntries) {
-      openTab({
-        type: 'entry',
-        title: targetEntry.title,
-        entryId: String(targetEntry.id),
-      });
-    }
-    onClose?.();
-  };
-
-  const handleShowInFinder = async () => {
-    try {
-      // Show all selected entries in Finder (batch operation for multiple files)
-      if (targetIds.length === 1) {
-        await showEntryInFinder(targetIds[0]);
-      } else {
-        await showEntriesInFinder(targetIds);
-      }
-    } catch (err) {
-      console.error('Failed to show in Finder:', err);
-    }
-    onClose?.();
-  };
-
-  const handleCopyTitle = async () => {
-    try {
-      // Copy all titles (newline separated for multiple)
-      const titles = targetEntries.map((e) => e.title).join('\n');
-      await writeText(titles);
-      toast.success(isMultiSelect ? `${targetEntries.length} titles copied` : 'Title copied');
-    } catch (err) {
-      console.error('Failed to copy title:', err);
-      toast.error('Failed to copy title');
-    }
-    onClose?.();
-  };
-
-  const handleAddToCollection = async (collectionId: number) => {
-    try {
-      await bulkAddToCollection(targetIds, collectionId);
-      // Refresh collections to update item count
-      const allCollections = await getCollections();
-      setCollections(allCollections);
-      // Invalidate entry to refresh info panel
-      invalidateEntry();
-      toast.success(isMultiSelect ? `Added ${targetIds.length} items to collection` : 'Added to collection');
-    } catch (err) {
-      console.error('Failed to add to collection:', err);
-      toast.error('Failed to add to collection');
-    }
-    onClose?.();
-  };
-
-  const handleRemoveFromCollection = async (collectionId: number) => {
-    try {
-      await bulkRemoveFromCollection(targetIds, collectionId);
-      // Refresh collections to update item count
-      const allCollections = await getCollections();
-      setCollections(allCollections);
-      // Refresh entries using current filters (collection/tag) so view updates correctly
-      await refreshLibrary();
-      // Invalidate entry to refresh info panel
-      invalidateEntry();
-      toast.success(isMultiSelect ? `Removed ${targetIds.length} items from collection` : 'Removed from collection');
-    } catch (err) {
-      console.error('Failed to remove from collection:', err);
-      toast.error('Failed to remove from collection');
-    }
-    onClose?.();
-  };
-
-  const handleAddTag = async (tagName: string) => {
-    try {
-      await addTagToEntries(tagName, targetIds);
-      // Refresh tags to update item count
-      const allTags = await getTags();
-      setTags(allTags);
-      // Refresh entries list to update tag dots
-      await refreshLibrary();
-      // Invalidate entry to refresh info panel
-      invalidateEntry();
-      toast.success(isMultiSelect ? `Tag added to ${targetIds.length} entries` : 'Tag added');
-    } catch (err) {
-      console.error('Failed to add tag:', err);
-      toast.error('Failed to add tag');
-    }
-    onClose?.();
-  };
-
-  const handleRemoveActiveTag = async () => {
-    try {
-      await bulkRemoveTags(targetIds, activeTagIds);
-      // Refresh tags to update item count
-      const allTags = await getTags();
-      setTags(allTags);
-      // Refresh entries list
-      await refreshLibrary();
-      // Invalidate entry to refresh info panel
-      invalidateEntry();
-      const tagCount = activeTagIds.length;
-      const entryCount = targetIds.length;
-      if (entryCount > 1 && tagCount > 1) {
-        toast.success(`Removed ${tagCount} tags from ${entryCount} entries`);
-      } else if (entryCount > 1) {
-        toast.success(`Tag removed from ${entryCount} entries`);
-      } else if (tagCount > 1) {
-        toast.success(`${tagCount} tags removed`);
-      } else {
-        toast.success('Tag removed');
-      }
-    } catch (err) {
-      console.error('Failed to remove tag:', err);
-      toast.error('Failed to remove tag');
-    }
-    onClose?.();
-  };
-
-  const handleAddPdfAttachment = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: 'PDF', extensions: ['pdf'] }],
-      });
-      if (selected) {
-        await addPdfAttachment(entry.id, selected);
-        invalidateAttachments();
-        await refreshLibrary();
-        toast.success('PDF attached');
-      }
-    } catch (err) {
-      console.error('Failed to add PDF attachment:', err);
-      toast.error('Failed to attach PDF');
-    }
-    onClose?.();
-  };
-
-  const handleAddFileAttachment = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [
-          {
-            name: 'Supported Files',
-            extensions: [
-              'epub', 'pdf', 'html', 'htm',
-              'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff',
-              'mp4', 'mov', 'avi', 'mkv', 'webm',
-              'mp3', 'wav', 'flac', 'aac', 'ogg',
-              'md', 'txt',
-            ],
-          },
-        ],
-      });
-      if (selected) {
-        const filePath = typeof selected === 'string' ? selected : (selected as any).path ?? String(selected);
-        await addFileAttachment(entry.id, filePath);
-        invalidateAttachments();
-        await refreshLibrary();
-        toast.success('File attached');
-      }
-    } catch (err) {
-      console.error('Failed to add file attachment:', err);
-      toast.error('Failed to attach file');
-    }
-    onClose?.();
-  };
-
-  const handleAddMarkdownAttachment = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: 'Markdown', extensions: ['md', 'txt'] }],
-      });
-      if (selected) {
-        const filePath = typeof selected === 'string' ? selected : (selected as any).path ?? String(selected);
-        await addFileAttachment(entry.id, filePath);
-        invalidateAttachments();
-        await refreshLibrary();
-        toast.success('Markdown file attached');
-      }
-    } catch (err) {
-      console.error('Failed to add markdown attachment:', err);
-      toast.error('Failed to attach markdown file');
-    }
-    onClose?.();
-  };
-
-  const handleCreateNote = async () => {
-    try {
-      const note = await createAttachment({
-        entryId: entry.id,
-        attachmentType: 'note',
-        title: `Notes - ${entry.title}`,
-      });
-      invalidateAttachments();
-      await refreshLibrary();
-      // Open the note in a new tab
-      openTab({
-        type: 'entry',
-        title: note.title || `Notes - ${entry.title}`,
-        entryId: String(entry.id),
-        attachmentId: String(note.id),
-        data: { attachmentType: 'note' },
-      });
-      toast.success('Note created');
-    } catch (err) {
-      console.error('Failed to create note:', err);
-      toast.error('Failed to create note');
-    }
-    onClose?.();
-  };
-
-  const handleDelete = async () => {
-    try {
-      // Optimistic UI: remove entries and close tabs
-      for (const id of targetIds) {
-        removeEntry(id);
-        const entryTabs = tabs.filter((t) => t.type === 'entry' && t.entryId === String(id));
-        entryTabs.forEach((t) => closeTab(t.id));
-      }
-      // Batch move to trash
-      await bulkMoveToTrash(targetIds);
-      // Full refresh to update entries, counts, collections, tags, and trash count
-      await refreshLibrary();
-      toast.success(isMultiSelect ? `${targetIds.length} entries moved to Trash` : 'Moved to Trash');
-    } catch (err) {
-      console.error('Failed to delete entry:', err);
-      toast.error('Failed to move to Trash');
-    }
-    onClose?.();
-  };
-
-  const handleParseWithAI = async () => {
-    try {
-      const jobIds = await parseEntries(targetIds);
-      if (jobIds.length === 0) {
-        toast.warning('No attachments with extracted text found. Run text extraction first.');
-      } else {
-        toast.info(isMultiSelect ? `Parsing attachments for ${targetIds.length} entries...` : 'Document parsing started');
-      }
-    } catch (err) {
-      toast.error(`Failed to start parsing: ${err}`);
-    }
-    onClose?.();
-  };
-
-  const handleReextractAttachments = (forceOcr = false) => {
-    onClose?.();
-    const ocrLabel = forceOcr ? ' with OCR' : '';
-    const label = isMultiSelect
-      ? `Re-extracting${ocrLabel} attachments for ${targetIds.length} entries`
-      : `Re-extracting${ocrLabel} attachments`;
-    const loadingId = toast.loading(`${label}...`);
-    // Capture ids so the async work doesn't depend on component state
-    const ids = [...targetIds];
-    const multi = isMultiSelect;
-    (async () => {
-      try {
-        for (const id of ids) {
-          await reindexEntry(id, { forceOcr });
-        }
-        invalidateAttachments();
-        await refreshLibrary();
-        toast.dismiss(loadingId);
-        toast.success(multi ? `${ids.length} entries re-extracted` : 'Attachments re-extracted');
-      } catch (err) {
-        console.error('Failed to re-extract:', err);
-        toast.dismiss(loadingId);
-        toast.error(`Failed to re-extract: ${err}`);
-      }
-    })();
-  };
-
-  const handleExportCslJson = async () => {
-    try {
-      const content = await exportToCslJson(targetIds);
-      const defaultName = isMultiSelect ? 'export' : entry.key || 'export';
-      const filePath = await save({
-        defaultPath: `${defaultName}.json`,
-        filters: [{ name: 'CSL JSON', extensions: ['json'] }],
-      });
-      if (filePath) {
-        await writeTextFile(filePath, content);
-      }
-    } catch (err) {
-      console.error('Failed to export to CSL JSON:', err);
-    }
-    onClose?.();
-  };
-
-  const handleExportBibtex = async () => {
-    try {
-      const content = await exportToBibtex(targetIds);
-      const defaultName = isMultiSelect ? 'export' : entry.key || 'export';
-      const filePath = await save({
-        defaultPath: `${defaultName}.bib`,
-        filters: [{ name: 'BibTeX', extensions: ['bib'] }],
-      });
-      if (filePath) {
-        await writeTextFile(filePath, content);
-      }
-    } catch (err) {
-      console.error('Failed to export to BibTeX:', err);
-    }
-    onClose?.();
-  };
-
-  const handleCopyCslJson = async () => {
-    try {
-      const content = await exportToCslJson(targetIds);
-      await writeText(content);
-    } catch (err) {
-      console.error('Failed to copy CSL JSON:', err);
-    }
-    onClose?.();
-  };
-
-  const handleCopyBibtex = async () => {
-    try {
-      const content = await exportToBibtex(targetIds);
-      await writeText(content);
-    } catch (err) {
-      console.error('Failed to copy BibTeX:', err);
-    }
-    onClose?.();
-  };
+    handleOpen,
+    handleShowInFinder,
+    handleCopyTitle,
+    handleAddToCollection,
+    handleRemoveFromCollection,
+    handleAddTag,
+    handleRemoveActiveTag,
+    handleAddPdfAttachment,
+    handleAddFileAttachment,
+    handleAddMarkdownAttachment,
+    handleCreateNote,
+    handleDelete,
+    handleParseWithAI,
+    handleExtractMetadataWithAI,
+    handleReextractAttachments,
+    handleExportCslJson,
+    handleExportBibtex,
+    handleCopyCslJson,
+    handleCopyBibtex,
+  } = useEntryActions({ entry, onClose });
 
   return (
     <>
@@ -609,18 +262,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
         )}
       </DropdownMenuItem>
 
-      <DropdownMenuItem onClick={async () => {
-        try {
-          const { extractMetadataWithAi } = await import('@/services/tauri/commands');
-          for (const id of targetIds) {
-            await extractMetadataWithAi(id);
-          }
-          toast.info(`Metadata extraction started for ${targetIds.length} ${targetIds.length === 1 ? 'entry' : 'entries'}`);
-        } catch (err) {
-          toast.error(`Failed to start metadata extraction: ${err}`);
-        }
-        onClose?.();
-      }}>
+      <DropdownMenuItem onClick={handleExtractMetadataWithAI}>
         <Cpu className='h-4 w-4 mr-2' />
         {isMultiSelect ? `Extract Metadata (${targetIds.length} Entries)` : 'Extract Metadata with AI'}
       </DropdownMenuItem>
@@ -658,347 +300,37 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
 
 // Original wrapper component for backwards compatibility
 export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
-  const { openTab, tabs, closeTab } = useTabStore();
-  const {
-    collections,
-    tags,
-    entries,
-    removeEntry,
-    invalidateAttachments,
-    setCollections,
-    setTags,
-    invalidateEntry,
-    selectedEntryIds,
-    activeCollectionId,
-    activeTagIds,
-    activeFilter,
-    refreshLibrary,
-  } = useLibraryStore();
-
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
-  // Use all selected entries for bulk operations when multiple are selected
-  const targetIds =
-    selectedEntryIds.length > 1 && selectedEntryIds.includes(entry.id)
-      ? selectedEntryIds
-      : [entry.id];
-  const isMultiSelect = targetIds.length > 1;
-
-  // Get entry objects for selected entries (for titles, etc.)
-  const targetEntries = isMultiSelect
-    ? entries.filter((e) => targetIds.includes(e.id))
-    : [entry];
-
-  const handleOpen = () => {
-    // Open all selected entries in tabs
-    for (const targetEntry of targetEntries) {
-      openTab({
-        type: 'entry',
-        title: targetEntry.title,
-        entryId: String(targetEntry.id),
-      });
-    }
-  };
-
-  const handleShowInFinder = async () => {
-    try {
-      // Show all selected entries in Finder (batch operation for multiple files)
-      if (targetIds.length === 1) {
-        await showEntryInFinder(targetIds[0]);
-      } else {
-        await showEntriesInFinder(targetIds);
-      }
-    } catch (err) {
-      console.error('Failed to show in Finder:', err);
-    }
-  };
-
-  const handleCopyTitle = async () => {
-    try {
-      // Copy all titles (newline separated for multiple)
-      const titles = targetEntries.map((e) => e.title).join('\n');
-      await writeText(titles);
-      toast.success(isMultiSelect ? `${targetEntries.length} titles copied` : 'Title copied');
-    } catch (err) {
-      console.error('Failed to copy title:', err);
-      toast.error('Failed to copy title');
-    }
-  };
-
-  const handleAddToCollection = async (collectionId: number) => {
-    try {
-      await bulkAddToCollection(targetIds, collectionId);
-      // Refresh collections to update item count
-      const allCollections = await getCollections();
-      setCollections(allCollections);
-      // Invalidate entry to refresh info panel
-      invalidateEntry();
-      toast.success(isMultiSelect ? `Added ${targetIds.length} items to collection` : 'Added to collection');
-    } catch (err) {
-      console.error('Failed to add to collection:', err);
-      toast.error('Failed to add to collection');
-    }
-  };
-
-  const handleRemoveFromCollection = async (collectionId: number) => {
-    try {
-      await bulkRemoveFromCollection(targetIds, collectionId);
-      // Refresh collections to update item count
-      const allCollections = await getCollections();
-      setCollections(allCollections);
-      // Refresh entries using current filters (collection/tag) so view updates correctly
-      await refreshLibrary();
-      // Invalidate entry to refresh info panel
-      invalidateEntry();
-      toast.success(isMultiSelect ? `Removed ${targetIds.length} items from collection` : 'Removed from collection');
-    } catch (err) {
-      console.error('Failed to remove from collection:', err);
-      toast.error('Failed to remove from collection');
-    }
-  };
-
-  const handleAddTag = async (tagName: string) => {
-    try {
-      await addTagToEntries(tagName, targetIds);
-      // Refresh tags to update item count
-      const allTags = await getTags();
-      setTags(allTags);
-      // Refresh entries list to update tag dots
-      await refreshLibrary();
-      // Invalidate entry to refresh info panel
-      invalidateEntry();
-      toast.success(isMultiSelect ? `Tag added to ${targetIds.length} entries` : 'Tag added');
-    } catch (err) {
-      console.error('Failed to add tag:', err);
-      toast.error('Failed to add tag');
-    }
-  };
-
-  const handleRemoveActiveTag = async () => {
-    try {
-      await bulkRemoveTags(targetIds, activeTagIds);
-      // Refresh tags to update item count
-      const allTags = await getTags();
-      setTags(allTags);
-      // Refresh entries list
-      await refreshLibrary();
-      // Invalidate entry to refresh info panel
-      invalidateEntry();
-      const tagCount = activeTagIds.length;
-      const entryCount = targetIds.length;
-      if (entryCount > 1 && tagCount > 1) {
-        toast.success(`Removed ${tagCount} tags from ${entryCount} entries`);
-      } else if (entryCount > 1) {
-        toast.success(`Tag removed from ${entryCount} entries`);
-      } else if (tagCount > 1) {
-        toast.success(`${tagCount} tags removed`);
-      } else {
-        toast.success('Tag removed');
-      }
-    } catch (err) {
-      console.error('Failed to remove tag:', err);
-      toast.error('Failed to remove tag');
-    }
-  };
-
-  const handleAddPdfAttachment = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: 'PDF', extensions: ['pdf'] }],
-      });
-      if (selected) {
-        await addPdfAttachment(entry.id, selected);
-        invalidateAttachments();
-        await refreshLibrary();
-        toast.success('PDF attached');
-      }
-    } catch (err) {
-      console.error('Failed to add PDF attachment:', err);
-      toast.error('Failed to attach PDF');
-    }
-  };
-
-  const handleAddFileAttachment = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [
-          {
-            name: 'Supported Files',
-            extensions: [
-              'epub', 'pdf', 'html', 'htm',
-              'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff',
-              'mp4', 'mov', 'avi', 'mkv', 'webm',
-              'mp3', 'wav', 'flac', 'aac', 'ogg',
-              'md', 'txt',
-            ],
-          },
-        ],
-      });
-      if (selected) {
-        await addFileAttachment(entry.id, selected);
-        invalidateAttachments();
-        await refreshLibrary();
-        toast.success('File attached');
-      }
-    } catch (err) {
-      console.error('Failed to add file attachment:', err);
-      toast.error('Failed to attach file');
-    }
-  };
-
-  const handleAddMarkdownAttachment = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: 'Markdown', extensions: ['md', 'txt'] }],
-      });
-      if (selected) {
-        const filePath = typeof selected === 'string' ? selected : (selected as any).path ?? String(selected);
-        await addFileAttachment(entry.id, filePath);
-        invalidateAttachments();
-        await refreshLibrary();
-        toast.success('Markdown file attached');
-      }
-    } catch (err) {
-      console.error('Failed to add markdown attachment:', err);
-      toast.error('Failed to attach markdown file');
-    }
-  };
-
-  const handleCreateNote = async () => {
-    try {
-      const note = await createAttachment({
-        entryId: entry.id,
-        attachmentType: 'note',
-        title: `Notes - ${entry.title}`,
-      });
-      invalidateAttachments();
-      await refreshLibrary();
-      // Open the note in a new tab
-      openTab({
-        type: 'entry',
-        title: note.title || `Notes - ${entry.title}`,
-        entryId: String(entry.id),
-        attachmentId: String(note.id),
-        data: { attachmentType: 'note' },
-      });
-      toast.success('Note created');
-    } catch (err) {
-      console.error('Failed to create note:', err);
-      toast.error('Failed to create note');
-    }
-  };
-
-  const handleDelete = async () => {
-    try {
-      // Optimistic UI: remove entries and close tabs
-      for (const id of targetIds) {
-        removeEntry(id);
-        const entryTabs = tabs.filter((t) => t.type === 'entry' && t.entryId === String(id));
-        entryTabs.forEach((t) => closeTab(t.id));
-      }
-      // Batch move to trash
-      await bulkMoveToTrash(targetIds);
-      // Full refresh to update entries, counts, collections, tags, and trash count
-      await refreshLibrary();
-      toast.success(isMultiSelect ? `${targetIds.length} entries moved to Trash` : 'Moved to Trash');
-    } catch (err) {
-      console.error('Failed to delete entry:', err);
-      toast.error('Failed to move to Trash');
-    }
-  };
-
-  const handleParseWithAI = async () => {
-    try {
-      const jobIds = await parseEntries(targetIds);
-      if (jobIds.length === 0) {
-        toast.warning('No attachments with extracted text found. Run text extraction first.');
-      } else {
-        toast.info(isMultiSelect ? `Parsing attachments for ${targetIds.length} entries...` : 'Document parsing started');
-      }
-    } catch (err) {
-      toast.error(`Failed to start parsing: ${err}`);
-    }
-  };
-
-  const handleReextractAttachments = (forceOcr = false) => {
-    const ocrLabel = forceOcr ? ' with OCR' : '';
-    const label = isMultiSelect
-      ? `Re-extracting${ocrLabel} attachments for ${targetIds.length} entries`
-      : `Re-extracting${ocrLabel} attachments`;
-    const loadingId = toast.loading(`${label}...`);
-    // Capture ids so the async work doesn't depend on component state
-    const ids = [...targetIds];
-    const multi = isMultiSelect;
-    (async () => {
-      try {
-        for (const id of ids) {
-          await reindexEntry(id, { forceOcr });
-        }
-        invalidateAttachments();
-        await refreshLibrary();
-        toast.dismiss(loadingId);
-        toast.success(multi ? `${ids.length} entries re-extracted` : 'Attachments re-extracted');
-      } catch (err) {
-        console.error('Failed to re-extract:', err);
-        toast.dismiss(loadingId);
-        toast.error(`Failed to re-extract: ${err}`);
-      }
-    })();
-  };
-
-  const handleExportCslJson = async () => {
-    try {
-      const content = await exportToCslJson(targetIds);
-      const defaultName = isMultiSelect ? 'export' : entry.key || 'export';
-      const filePath = await save({
-        defaultPath: `${defaultName}.json`,
-        filters: [{ name: 'CSL JSON', extensions: ['json'] }],
-      });
-      if (filePath) {
-        await writeTextFile(filePath, content);
-      }
-    } catch (err) {
-      console.error('Failed to export to CSL JSON:', err);
-    }
-  };
-
-  const handleExportBibtex = async () => {
-    try {
-      const content = await exportToBibtex(targetIds);
-      const defaultName = isMultiSelect ? 'export' : entry.key || 'export';
-      const filePath = await save({
-        defaultPath: `${defaultName}.bib`,
-        filters: [{ name: 'BibTeX', extensions: ['bib'] }],
-      });
-      if (filePath) {
-        await writeTextFile(filePath, content);
-      }
-    } catch (err) {
-      console.error('Failed to export to BibTeX:', err);
-    }
-  };
-
-  const handleCopyCslJson = async () => {
-    try {
-      const content = await exportToCslJson(targetIds);
-      await writeText(content);
-    } catch (err) {
-      console.error('Failed to copy CSL JSON:', err);
-    }
-  };
-
-  const handleCopyBibtex = async () => {
-    try {
-      const content = await exportToBibtex(targetIds);
-      await writeText(content);
-    } catch (err) {
-      console.error('Failed to copy BibTeX:', err);
-    }
-  };
+  const {
+    targetIds,
+    isMultiSelect,
+    collections,
+    tags,
+    activeCollectionId,
+    activeTagIds,
+    activeFilter,
+    handleOpen,
+    handleShowInFinder,
+    handleCopyTitle,
+    handleAddToCollection,
+    handleRemoveFromCollection,
+    handleAddTag,
+    handleRemoveActiveTag,
+    handleAddPdfAttachment,
+    handleAddFileAttachment,
+    handleAddMarkdownAttachment,
+    handleCreateNote,
+    handleDelete,
+    handleParseWithAI,
+    handleExtractMetadataWithAI,
+    handleReextractAttachments,
+    handleExportCslJson,
+    handleExportBibtex,
+    handleCopyCslJson,
+    handleCopyBibtex,
+  } = useEntryActions({ entry });
 
   const handleExportBiblatexWithFiles = async (options: ExportOptions) => {
     try {
@@ -1194,17 +526,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
           )}
         </ContextMenuItem>
 
-        <ContextMenuItem onClick={async () => {
-          try {
-            const { extractMetadataWithAi } = await import('@/services/tauri/commands');
-            for (const id of targetIds) {
-              await extractMetadataWithAi(id);
-            }
-            toast.info(`Metadata extraction started for ${targetIds.length} ${targetIds.length === 1 ? 'entry' : 'entries'}`);
-          } catch (err) {
-            toast.error(`Failed to start metadata extraction: ${err}`);
-          }
-        }}>
+        <ContextMenuItem onClick={handleExtractMetadataWithAI}>
           <Cpu className='h-4 w-4 mr-2' />
           {isMultiSelect ? `Extract Metadata (${targetIds.length} Entries)` : 'Extract Metadata with AI'}
         </ContextMenuItem>
