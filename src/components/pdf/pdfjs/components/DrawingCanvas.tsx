@@ -6,10 +6,9 @@ import {
   MouseEvent as ReactMouseEvent,
   TouchEvent as ReactTouchEvent,
 } from "react";
-import { viewportPositionToPdfScaled } from "../lib/coordinates";
-import { DrawingStroke, ScaledPosition, ViewportPosition } from "../types";
-
+import { DrawingStroke, ScaledPosition } from "../types";
 import type { PDFViewer as TPDFViewer } from "pdfjs-dist/web/pdf_viewer.mjs";
+import { findPageFromPoint, redrawAllStrokes, computeDrawingResult } from "./drawingCanvasUtils";
 
 /**
  * The props type for {@link DrawingCanvas}.
@@ -17,40 +16,11 @@ import type { PDFViewer as TPDFViewer } from "pdfjs-dist/web/pdf_viewer.mjs";
  * @category Component Properties
  */
 export interface DrawingCanvasProps {
-  /**
-   * Whether drawing mode is active.
-   */
   isActive: boolean;
-
-  /**
-   * Stroke color for drawing.
-   * @default "#000000"
-   */
   strokeColor?: string;
-
-  /**
-   * Stroke width for drawing.
-   * @default 3
-   */
   strokeWidth?: number;
-
-  /**
-   * The PDF viewer instance.
-   */
   viewer: InstanceType<typeof TPDFViewer>;
-
-  /**
-   * Callback when drawing is complete.
-   *
-   * @param dataUrl - The drawing as a PNG data URL.
-   * @param position - Scaled position of the drawing on the page.
-   * @param strokes - The stroke data for later editing.
-   */
   onComplete: (dataUrl: string, position: ScaledPosition, strokes: DrawingStroke[]) => void;
-
-  /**
-   * Callback when drawing is cancelled.
-   */
   onCancel: () => void;
 }
 
@@ -87,89 +57,18 @@ export const DrawingCanvas = ({
   const [pageElement, setPageElement] = useState<HTMLElement | null>(null);
   const pageRectRef = useRef<DOMRect | null>(null);
 
-  // Find which page the user is drawing on
-  const findPageFromPoint = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!viewer) return null;
-
-      for (let i = 0; i < viewer.pagesCount; i++) {
-        const pageView = viewer.getPageView(i);
-        if (!pageView?.div) continue;
-
-        const pageNode = pageView.div as HTMLElement;
-        const pageRect = pageNode.getBoundingClientRect();
-        const textLayerNode = pageView.textLayer?.div as HTMLElement | undefined;
-        const baseRect = textLayerNode
-          ? textLayerNode.getBoundingClientRect()
-          : pageRect;
-        if (
-          clientX >= pageRect.left &&
-          clientX <= pageRect.right &&
-          clientY >= pageRect.top &&
-          clientY <= pageRect.bottom
-        ) {
-          return {
-            pageNumber: i + 1,
-            element: textLayerNode ?? pageNode,
-            rect: baseRect,
-          };
-        }
-      }
-      return null;
-    },
-    [viewer]
-  );
-
-  // Redraw all strokes
-  const redrawCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!ctx || !canvas) return;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Draw all completed strokes with their own color/width
-    strokes.forEach((stroke) => {
-      if (stroke.points.length < 2) return;
-
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = stroke.width;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-
-      ctx.beginPath();
-      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-      stroke.points.slice(1).forEach((point) => {
-        ctx.lineTo(point.x, point.y);
-      });
-      ctx.stroke();
-    });
-
-    // Draw current stroke with current color/width
-    if (currentStroke && currentStroke.points.length >= 2) {
-      ctx.strokeStyle = currentStroke.color;
-      ctx.lineWidth = currentStroke.width;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-
-      ctx.beginPath();
-      ctx.moveTo(currentStroke.points[0].x, currentStroke.points[0].y);
-      currentStroke.points.slice(1).forEach((point) => {
-        ctx.lineTo(point.x, point.y);
-      });
-      ctx.stroke();
-    }
-  }, [strokes, currentStroke]);
-
   // Redraw when strokes change
   useEffect(() => {
-    redrawCanvas();
-  }, [redrawCanvas]);
+    const canvas = canvasRef.current;
+    if (canvas) {
+      redrawAllStrokes(canvas, strokes, currentStroke);
+    }
+  }, [strokes, currentStroke]);
 
   // Handle mouse/touch down
   const handleStart = useCallback(
     (clientX: number, clientY: number) => {
-      const pageInfo = findPageFromPoint(clientX, clientY);
+      const pageInfo = findPageFromPoint(viewer, clientX, clientY);
       if (!pageInfo) return;
 
       // Set page context if not already set
@@ -208,7 +107,7 @@ export const DrawingCanvas = ({
       };
       setCurrentStroke({ points: [pos], color: strokeColor, width: strokeWidth });
     },
-    [pageNumber, findPageFromPoint, strokeColor, strokeWidth]
+    [pageNumber, viewer, strokeColor, strokeWidth]
   );
 
   // Handle mouse/touch move
@@ -316,88 +215,13 @@ export const DrawingCanvas = ({
       return;
     }
 
-    // Calculate bounding box of all strokes
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-
-    strokes.forEach((stroke) => {
-      stroke.points.forEach((point) => {
-        minX = Math.min(minX, point.x);
-        minY = Math.min(minY, point.y);
-        maxX = Math.max(maxX, point.x);
-        maxY = Math.max(maxY, point.y);
-      });
-    });
-
-    // Find max stroke width for padding
-    const maxStrokeWidth = Math.max(...strokes.map(s => s.width));
-    const padding = maxStrokeWidth * 2;
-    minX = Math.max(0, minX - padding);
-    minY = Math.max(0, minY - padding);
-    maxX = maxX + padding;
-    maxY = maxY + padding;
-
-    const width = maxX - minX;
-    const height = maxY - minY;
-
-    // Create a new canvas with just the drawing (cropped to bounding box)
-    const outputCanvas = document.createElement("canvas");
-    outputCanvas.width = width;
-    outputCanvas.height = height;
-    const outputCtx = outputCanvas.getContext("2d");
-
-    if (!outputCtx) {
-      console.error("DrawingCanvas: Could not get output canvas context");
+    const result = computeDrawingResult(strokes, pageNumber, viewer);
+    if (!result) {
       onCancel();
       return;
     }
 
-    // Draw all strokes offset by bounding box origin, using per-stroke color/width
-    strokes.forEach((stroke) => {
-      if (stroke.points.length < 2) return;
-
-      outputCtx.strokeStyle = stroke.color;
-      outputCtx.lineWidth = stroke.width;
-      outputCtx.lineCap = "round";
-      outputCtx.lineJoin = "round";
-
-      outputCtx.beginPath();
-      outputCtx.moveTo(stroke.points[0].x - minX, stroke.points[0].y - minY);
-      stroke.points.slice(1).forEach((point) => {
-        outputCtx.lineTo(point.x - minX, point.y - minY);
-      });
-      outputCtx.stroke();
-    });
-
-    const dataUrl = outputCanvas.toDataURL("image/png");
-
-    // Create viewport position
-    const viewportPosition: ViewportPosition = {
-      boundingRect: {
-        left: minX,
-        top: minY,
-        width: width,
-        height: height,
-        pageNumber: pageNumber,
-      },
-      rects: [],
-    };
-
-    const scaledPosition = viewportPositionToPdfScaled(viewportPosition, viewer);
-
-    // Normalize strokes as percentages (0-1) relative to bounding box for storage
-    // This ensures strokes scale correctly when viewed at different zoom levels
-    const normalizedStrokes: DrawingStroke[] = strokes.map((stroke) => ({
-      ...stroke,
-      points: stroke.points.map((point) => ({
-        x: (point.x - minX) / width,
-        y: (point.y - minY) / height,
-      })),
-    }));
-
-    onComplete(dataUrl, scaledPosition, normalizedStrokes);
+    onComplete(result.dataUrl, result.scaledPosition, result.normalizedStrokes);
 
     // Reset state
     setStrokes([]);

@@ -9,6 +9,7 @@ import React, {
 import { Rnd } from "react-rnd";
 import { getPageFromElement } from "../lib/pdfjs-dom";
 import type { LTWHP, ViewportHighlight } from "../types";
+import { FreetextStylePanel } from "./FreetextStylePanel";
 
 /**
  * Style options for freetext highlight appearance.
@@ -26,125 +27,29 @@ export interface FreetextStyle {
  * @category Component Properties
  */
 export interface FreetextHighlightProps {
-  /**
-   * The highlight to be rendered as a {@link FreetextHighlight}.
-   */
   highlight: ViewportHighlight;
-
-  /**
-   * A callback triggered whenever the highlight position changes (drag).
-   *
-   * @param rect - The updated highlight area.
-   */
   onChange?(rect: LTWHP): void;
-
-  /**
-   * A callback triggered whenever the text content changes.
-   *
-   * @param text - The new text content.
-   */
   onTextChange?(text: string): void;
-
-  /**
-   * A callback triggered whenever the style changes.
-   *
-   * @param style - The new style options.
-   */
   onStyleChange?(style: FreetextStyle): void;
-
-  /**
-   * Has the highlight been auto-scrolled into view?
-   */
   isScrolledTo?: boolean;
-
-  /**
-   * react-rnd bounds on the highlight area.
-   */
   bounds?: string | Element;
-
-  /**
-   * A callback triggered on context menu.
-   */
   onContextMenu?(event: MouseEvent<HTMLDivElement>): void;
-
-  /**
-   * Event called when editing begins (drag or text edit).
-   */
   onEditStart?(): void;
-
-  /**
-   * Event called when editing ends.
-   */
   onEditEnd?(): void;
-
-  /**
-   * Custom styling for the container.
-   */
   style?: CSSProperties;
-
-  /**
-   * Text color.
-   */
   color?: string;
-
-  /**
-   * Background color.
-   */
   backgroundColor?: string;
-
-  /**
-   * Font family.
-   */
   fontFamily?: string;
-
-  /**
-   * Font size (e.g., "14px").
-   */
   fontSize?: string;
-
-  /**
-   * Custom drag icon. Receives default icon as child if not provided.
-   */
   dragIcon?: ReactNode;
-
-  /**
-   * Custom edit icon. Receives default icon as child if not provided.
-   */
   editIcon?: ReactNode;
-
-  /**
-   * Custom style/settings icon. Receives default icon as child if not provided.
-   */
   styleIcon?: ReactNode;
-
-  /**
-   * Custom background color presets for the style panel.
-   * Default: ["#ffffc8", "#ffcdd2", "#c8e6c9", "#bbdefb", "#e1bee7"]
-   */
   backgroundColorPresets?: string[];
-
-  /**
-   * Custom text color presets for the style panel.
-   * Default: ["#333333", "#d32f2f", "#1976d2", "#388e3c", "#7b1fa2"]
-   */
   textColorPresets?: string[];
-
-  /**
-   * Callback triggered when the delete button is clicked.
-   */
   onDelete?(): void;
-
-  /**
-   * Custom delete icon. Replaces the default trash icon.
-   */
   deleteIcon?: ReactNode;
 }
 
-/**
- * Renders a draggable, editable freetext annotation.
- *
- * @category Component
- */
 // Default icons
 const DefaultDragIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -206,7 +111,6 @@ export const FreetextHighlight = ({
   const [isStylePanelOpen, setIsStylePanelOpen] = useState(false);
   const [text, setText] = useState(highlight.content?.text || "");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const stylePanelRef = useRef<HTMLDivElement>(null);
 
   // Sync text with highlight content when it changes externally
   useEffect(() => {
@@ -220,27 +124,6 @@ export const FreetextHighlight = ({
       textareaRef.current.select();
     }
   }, [isEditing]);
-
-  // Close style panel when clicking outside
-  useEffect(() => {
-    if (!isStylePanelOpen) return;
-
-    const handleClickOutside = (e: globalThis.MouseEvent) => {
-      if (stylePanelRef.current && !stylePanelRef.current.contains(e.target as Node)) {
-        setIsStylePanelOpen(false);
-      }
-    };
-
-    // Delay adding listener to avoid immediate close
-    const timeoutId = setTimeout(() => {
-      document.addEventListener("mousedown", handleClickOutside);
-    }, 0);
-
-    return () => {
-      clearTimeout(timeoutId);
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isStylePanelOpen]);
 
   const highlightClass = isScrolledTo ? "FreetextHighlight--scrolledTo" : "";
   const editingClass = isEditing ? "FreetextHighlight--editing" : "";
@@ -386,96 +269,17 @@ export const FreetextHighlight = ({
               </button>
             )}
           </div>
-          {isStylePanelOpen && (
-            <div
-              className="FreetextHighlight__style-panel"
-              ref={stylePanelRef}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="FreetextHighlight__style-row">
-                <label>Background</label>
-                <div className="FreetextHighlight__color-options">
-                  <div className="FreetextHighlight__color-presets">
-                    {backgroundColorPresets.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        className={`FreetextHighlight__color-preset ${c === "transparent" ? "FreetextHighlight__color-preset--transparent" : ""} ${backgroundColor === c ? "active" : ""}`}
-                        style={c !== "transparent" ? { backgroundColor: c } : undefined}
-                        onClick={() => onStyleChange?.({ backgroundColor: c })}
-                        title={c === "transparent" ? "No background" : c}
-                      />
-                    ))}
-                  </div>
-                  <input
-                    type="color"
-                    value={backgroundColor === "transparent" ? "#ffffff" : backgroundColor}
-                    onChange={(e) => {
-                      onStyleChange?.({ backgroundColor: e.target.value });
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="FreetextHighlight__style-row">
-                <label
-
-                >Text Color</label>
-                <div className="FreetextHighlight__color-options">
-                  <div className="FreetextHighlight__color-presets">
-                    {textColorPresets.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        className={`FreetextHighlight__color-preset ${color === c ? "active" : ""}`}
-                        style={{ backgroundColor: c }}
-                        onClick={() => onStyleChange?.({ color: c })}
-                        title={c}
-                      />
-                    ))}
-                  </div>
-                  <input
-                    type="color"
-                    value={color}
-                    onChange={(e) => {
-                      onStyleChange?.({ color: e.target.value });
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="FreetextHighlight__style-row">
-                <label>Font Size</label>
-                <select
-                  value={fontSize}
-                  onChange={(e) => {
-                    onStyleChange?.({ fontSize: e.target.value });
-                  }}
-                >
-                  <option value="10px">10px</option>
-                  <option value="12px">12px</option>
-                  <option value="14px">14px</option>
-                  <option value="16px">16px</option>
-                  <option value="18px">18px</option>
-                  <option value="20px">20px</option>
-                  <option value="24px">24px</option>
-                </select>
-              </div>
-              <div className="FreetextHighlight__style-row">
-                <label>Font</label>
-                <select
-                  value={fontFamily}
-                  onChange={(e) => {
-                    onStyleChange?.({ fontFamily: e.target.value });
-                  }}
-                >
-                  <option value="inherit">Default</option>
-                  <option value="Arial, sans-serif">Arial</option>
-                  <option value="Georgia, serif">Georgia</option>
-                  <option value="'Courier New', monospace">Courier</option>
-                  <option value="'Times New Roman', serif">Times</option>
-                </select>
-              </div>
-            </div>
-          )}
+          <FreetextStylePanel
+            isOpen={isStylePanelOpen}
+            onClose={() => setIsStylePanelOpen(false)}
+            backgroundColor={backgroundColor}
+            color={color}
+            fontSize={fontSize}
+            fontFamily={fontFamily}
+            backgroundColorPresets={backgroundColorPresets}
+            textColorPresets={textColorPresets}
+            onStyleChange={onStyleChange}
+          />
           <div className="FreetextHighlight__content">
             {isEditing ? (
               <textarea

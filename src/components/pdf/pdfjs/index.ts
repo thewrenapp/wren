@@ -70,8 +70,8 @@ import {
 } from "./contexts/PdfHighlighterContext";
 
 // Left Panel components
-import {
-  LeftPanel,
+import { LeftPanel } from "./components/leftpanel/LeftPanel";
+import type {
   LeftPanelProps,
   LeftPanelTheme,
   TabStyles,
@@ -80,7 +80,7 @@ import {
   FooterClassNames,
   ToggleButtonStyles,
   ToggleButtonClassNames,
-} from "./components/leftpanel/LeftPanel";
+} from "./components/leftpanel/LeftPanelTypes";
 import {
   DocumentOutline,
   DocumentOutlineProps,

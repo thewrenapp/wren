@@ -12,12 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
   Search,
   Plus,
-  X,
   File,
   FileText,
   BookmarkPlus,
@@ -30,41 +28,13 @@ import { useTabStore } from "@/stores/tabStore";
 import { getEntriesPaged, type EntrySummary } from "@/services/tauri";
 import { SaveSearchDialog } from "@/components/dialogs/SaveSearchDialog";
 import { cn } from "@/lib/utils";
-
-type AdvancedMatchMode = "all" | "any";
-type AdvancedCriterion = {
-  id: string;
-  field: string;
-  operator: string;
-  value: string;
-};
-type AdvancedScope = "all" | "collection";
-
-const advancedFields = [
-  { value: "title", label: "Title" },
-  { value: "creator", label: "Creator" },
-  { value: "year", label: "Year" },
-  { value: "publication_title", label: "Publication Title" },
-  { value: "abstract", label: "Abstract" },
-  { value: "tags", label: "Tags" },
-  { value: "collection", label: "Collection" },
-  { value: "saved_search", label: "Smart Filter" },
-  { value: "item_type", label: "Item Type" },
-  { value: "date_added", label: "Date Added" },
-];
-
-const advancedOperators = [
-  { value: "contains", label: "contains", requiresValue: true },
-  { value: "does_not_contain", label: "does not contain", requiresValue: true },
-  { value: "is", label: "is", requiresValue: true },
-  { value: "is_not", label: "is not", requiresValue: true },
-  { value: "begins_with", label: "begins with", requiresValue: true },
-  { value: "ends_with", label: "ends with", requiresValue: true },
-  { value: "is_before", label: "is before", requiresValue: true },
-  { value: "is_after", label: "is after", requiresValue: true },
-  { value: "is_empty", label: "is empty", requiresValue: false },
-  { value: "is_not_empty", label: "is not empty", requiresValue: false },
-];
+import { SearchCriteriaRow } from "./SearchCriteriaRow";
+import {
+  advancedOperators,
+  type AdvancedMatchMode,
+  type AdvancedCriterion,
+  type AdvancedScope,
+} from "./searchFieldConfig";
 
 export function AdvancedSearchDialog() {
   const { advancedSearchOpen, setAdvancedSearchOpen } = useUIStore();
@@ -94,7 +64,6 @@ export function AdvancedSearchDialog() {
   const searchTimeoutRef = useRef<number | null>(null);
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Initialize scope from active collection when opening
   useEffect(() => {
     if (advancedSearchOpen) {
       if (activeCollectionId) {
@@ -107,7 +76,6 @@ export function AdvancedSearchDialog() {
     }
   }, [advancedSearchOpen, activeCollectionId]);
 
-  // Search when criteria change
   useEffect(() => {
     if (!advancedSearchOpen) return;
 
@@ -266,9 +234,7 @@ export function AdvancedSearchDialog() {
             </DialogTitle>
           </DialogHeader>
 
-          {/* Search Options */}
           <div className="px-6 py-4 border-b bg-muted/30 space-y-4">
-            {/* Scope and Match controls */}
             <div className="flex items-center gap-3 text-sm flex-wrap">
               <span className="text-muted-foreground">Search in</span>
               <Select value={advancedScope} onValueChange={(value) => setAdvancedScope(value as AdvancedScope)}>
@@ -311,106 +277,19 @@ export function AdvancedSearchDialog() {
               <span className="text-muted-foreground">of the following:</span>
             </div>
 
-            {/* Criteria rows */}
             <div className="space-y-2">
-              {advancedCriteria.map((criterion) => {
-                const operator = advancedOperators.find((op) => op.value === criterion.operator);
-                const requiresValue = operator ? operator.requiresValue : true;
-                const isCollection = criterion.field === "collection";
-                const isSavedSearch = criterion.field === "saved_search";
-                const isDropdownField = isCollection || isSavedSearch;
-                return (
-                  <div key={criterion.id} className="flex items-center gap-2">
-                    <Select
-                      value={criterion.field}
-                      onValueChange={(value) => updateAdvancedCriterion(criterion.id, { field: value })}
-                    >
-                      <SelectTrigger className="h-8 w-44">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {advancedFields.map((field) => (
-                          <SelectItem key={field.value} value={field.value}>
-                            {field.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select
-                      value={criterion.operator}
-                      onValueChange={(value) => updateAdvancedCriterion(criterion.id, { operator: value })}
-                    >
-                      <SelectTrigger className="h-8 w-40">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {advancedOperators
-                          .filter((op) => (isDropdownField ? ["is", "is_not"].includes(op.value) : true))
-                          .map((op) => (
-                            <SelectItem key={op.value} value={op.value}>
-                              {op.label}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                    {isCollection ? (
-                      <Select
-                        value={criterion.value}
-                        onValueChange={(value) => updateAdvancedCriterion(criterion.id, { value })}
-                      >
-                        <SelectTrigger className="h-8 flex-1">
-                          <SelectValue placeholder="Select collection" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {collections.map((collection) => (
-                            <SelectItem key={collection.id} value={collection.id.toString()}>
-                              {collection.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : isSavedSearch ? (
-                      <Select
-                        value={criterion.value}
-                        onValueChange={(value) => updateAdvancedCriterion(criterion.id, { value })}
-                      >
-                        <SelectTrigger className="h-8 flex-1">
-                          <SelectValue placeholder="Select smart filter" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {savedSearches.map((search) => (
-                            <SelectItem key={search.id} value={search.id.toString()}>
-                              {search.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <Input
-                        value={criterion.value}
-                        onChange={(event) =>
-                          updateAdvancedCriterion(criterion.id, { value: event.target.value })
-                        }
-                        placeholder={requiresValue ? "Value" : "No value needed"}
-                        disabled={!requiresValue}
-                        className="h-8 flex-1"
-                      />
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeAdvancedCriterion(criterion.id)}
-                      className="h-8 w-8 shrink-0"
-                      aria-label="Remove rule"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                );
-              })}
+              {advancedCriteria.map((criterion) => (
+                <SearchCriteriaRow
+                  key={criterion.id}
+                  criterion={criterion}
+                  collections={collections}
+                  savedSearches={savedSearches}
+                  onUpdate={updateAdvancedCriterion}
+                  onRemove={removeAdvancedCriterion}
+                />
+              ))}
             </div>
 
-            {/* Actions */}
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={addAdvancedCriterion}>
                 <Plus className="h-4 w-4 mr-1" />
@@ -428,7 +307,6 @@ export function AdvancedSearchDialog() {
             </div>
           </div>
 
-          {/* Results */}
           <div
             ref={resultsContainerRef}
             onScroll={handleResultsScroll}
