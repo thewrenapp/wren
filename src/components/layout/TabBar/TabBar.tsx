@@ -94,6 +94,7 @@ const TabInner = React.forwardRef<
     <div
       ref={ref}
       onClick={onActivate}
+      title={tab.title}
       {...props}
       className={cn(
         "group relative flex items-center gap-2 h-8 px-3 rounded-md cursor-pointer transition-all duration-200",
@@ -157,7 +158,7 @@ const TabInner = React.forwardRef<
 });
 TabInner.displayName = "TabInner";
 
-const MIN_TAB_WIDTH = 120;
+const MIN_TAB_WIDTH = 144;
 const OVERFLOW_BTN_WIDTH = 40;
 
 export function TabBar({ pane = "left" }: { pane?: "left" | "right" }) {
