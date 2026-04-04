@@ -1264,10 +1264,7 @@ export async function extractMetadataWithAi(entryId: number): Promise<string> {
 
 export interface RagSearchResponse {
   results: RagSearchResult[];
-  strategy: string;
   reranked: boolean;
-  cragActive: boolean;
-  raptorActive: boolean;
   totalResults: number;
   queryTimeMs: number;
 }
@@ -1275,9 +1272,8 @@ export interface RagSearchResponse {
 export async function ragSearch(
   query: string,
   limit?: number,
-  strategy?: "auto" | "semantic" | "hyde" | "step_back",
 ): Promise<RagSearchResponse> {
-  return invoke('rag_search', { query, limit: limit ?? null, strategy: strategy ?? null });
+  return invoke('rag_search', { query, limit: limit ?? null });
 }
 
 export async function ragStatus(): Promise<RagStatus> {
@@ -1290,25 +1286,6 @@ export async function ragIndexEntry(entryId: number): Promise<string> {
 
 export async function ragIndexAll(): Promise<string> {
   return invoke('rag_index_all');
-}
-
-export interface RagSummary {
-  level: number;
-  content: string;
-  documentId: string;
-  source: string; // "document" | "collection"
-}
-
-export async function ragGetSummaries(entryId: number): Promise<RagSummary[]> {
-  return invoke('rag_get_summaries', { entryId });
-}
-
-export async function ragGetCollectionSummaries(collectionId: number): Promise<RagSummary[]> {
-  return invoke('rag_get_collection_summaries', { collectionId });
-}
-
-export async function ragBuildCollectionRaptor(collectionId: number): Promise<string> {
-  return invoke('rag_build_collection_raptor', { collectionId });
 }
 
 export async function ragRebuild(): Promise<void> {

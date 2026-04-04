@@ -348,9 +348,6 @@ pub fn run() {
             commands::rag::rag_status,
             commands::rag::rag_index_entry,
             commands::rag::rag_index_all,
-            commands::rag::rag_get_summaries,
-            commands::rag::rag_get_collection_summaries,
-            commands::rag::rag_build_collection_raptor,
             commands::rag::rag_rebuild,
             // Connector
             commands::connector::get_connector_status,

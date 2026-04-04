@@ -244,6 +244,12 @@ export function EntryTable({
                     </div>
                   )}
                   <span className='font-medium truncate'>{entry.title}</span>
+                  {entry.hasExtractedText && (
+                    <span
+                      className={`h-2 w-2 rounded-full shrink-0 ${entry.ragIndexed ? 'bg-green-500/60' : 'bg-yellow-500/80'}`}
+                      title={entry.ragIndexed ? 'Indexed for AI search' : 'Not indexed for AI search'}
+                    />
+                  )}
                 </div>
               );
             },

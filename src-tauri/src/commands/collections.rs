@@ -148,23 +148,6 @@ pub async fn delete_collection(state: State<'_, AppState>, id: i64) -> Result<()
         .await
         .map_err(|e| e.to_string())?;
 
-    // Clean up cross-doc RAPTOR summaries for this collection in background
-    {
-        let db = state.db.clone();
-        let library_path = state.library_path.clone();
-        let collection_id = id;
-        tokio::spawn(async move {
-            tracing::debug!("Background task started: cleanup_collection_raptor for collection {}", collection_id);
-            let result = std::panic::AssertUnwindSafe(
-                cleanup_collection_raptor(&db, &library_path, collection_id)
-            );
-            match futures::FutureExt::catch_unwind(result).await {
-                Ok(()) => tracing::debug!("Background task completed: cleanup_collection_raptor for collection {}", collection_id),
-                Err(_) => tracing::error!("Background task panicked: cleanup_collection_raptor for collection {}", collection_id),
-            }
-        });
-    }
-
     Ok(())
 }
 
@@ -187,10 +170,6 @@ pub async fn add_item_to_collection(
     .await
     .map_err(|e| e.to_string())?;
 
-    crate::commands::rag::spawn_collection_raptor_rebuild(
-        state.db.clone(), state.library_path.clone(), collection_id,
-    );
-
     Ok(())
 }
 
@@ -206,10 +185,6 @@ pub async fn remove_item_from_collection(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
-
-    crate::commands::rag::spawn_collection_raptor_rebuild(
-        state.db.clone(), state.library_path.clone(), collection_id,
-    );
 
     Ok(())
 }
@@ -265,7 +240,7 @@ pub async fn merge_collections(
             .map_err(|e| e.to_string())?;
     }
 
-    // Delete source collections and their cross-doc RAPTOR summaries
+    // Delete source collections
     let merged_count = source_ids.len() as u32;
     for source_id in &source_ids {
         sqlx::query("DELETE FROM collections WHERE id = ?")
@@ -274,11 +249,6 @@ pub async fn merge_collections(
             .await
             .map_err(|e| e.to_string())?;
     }
-
-    // Rebuild cross-doc RAPTOR for the target (merged) collection
-    crate::commands::rag::spawn_collection_raptor_rebuild(
-        state.db.clone(), state.library_path.clone(), target_id,
-    );
 
     Ok(merged_count)
 }
@@ -322,20 +292,6 @@ pub async fn delete_collection_with_entries(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Clean up cross-doc RAPTOR summaries
-    let db = state.db.clone();
-    let library_path = state.library_path.clone();
-    tokio::spawn(async move {
-        tracing::debug!("Background task started: cleanup_collection_raptor for collection {} (bulk delete)", id);
-        let result = std::panic::AssertUnwindSafe(
-            cleanup_collection_raptor(&db, &library_path, id)
-        );
-        match futures::FutureExt::catch_unwind(result).await {
-            Ok(()) => tracing::debug!("Background task completed: cleanup_collection_raptor for collection {} (bulk delete)", id),
-            Err(_) => tracing::error!("Background task panicked: cleanup_collection_raptor for collection {} (bulk delete)", id),
-        }
-    });
-
     Ok(deleted_entries)
 }
 
@@ -361,61 +317,3 @@ pub async fn bulk_update_collection_color(
     Ok(updated)
 }
 
-/// Clean up all cross-doc RAPTOR summaries for a collection from the vector store.
-/// Deletes both `collection_{id}` and `__corpus__` (legacy) document IDs.
-async fn cleanup_collection_raptor(
-    db: &sqlx::SqlitePool,
-    library_path: &std::sync::Arc<tokio::sync::RwLock<std::path::PathBuf>>,
-    collection_id: i64,
-) {
-    let lib_path = library_path.read().await;
-    let lance_path = lib_path.join(".wren").join("rag_vectors");
-    if let Ok(embed_config) = crate::rag::embeddings::resolve_embedding_config(db).await {
-        let dim = crate::rag::embeddings::known_dimension(
-            &embed_config.provider_type, &embed_config.model,
-        ).unwrap_or(1536);
-        if let Ok(store) = crate::rag::store::VectorStore::new(&lance_path, dim).await {
-            let scope_id = format!("collection_{}", collection_id);
-            if let Err(e) = store.delete_document(&scope_id).await {
-                tracing::warn!("Failed to delete RAG vectors for collection {}: {}", collection_id, e);
-            }
-            if let Err(e) = store.delete_document("__corpus__").await {
-                tracing::warn!("Failed to delete corpus RAG vectors for collection {}: {}", collection_id, e);
-            }
-            tracing::info!("Cleaned up cross-doc RAPTOR for collection {}", collection_id);
-        }
-    }
-}
-
-/// Clean up per-document RAPTOR summaries + vector chunks for a deleted entry.
-pub async fn cleanup_entry_vectors(
-    db: &sqlx::SqlitePool,
-    library_path: &std::sync::Arc<tokio::sync::RwLock<std::path::PathBuf>>,
-    entry_id: i64,
-) {
-    let att_ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM attachments WHERE entry_id = ?",
-    )
-    .bind(entry_id)
-    .fetch_all(db)
-    .await
-    .unwrap_or_default();
-
-    if att_ids.is_empty() {
-        return;
-    }
-
-    let lib_path = library_path.read().await;
-    let lance_path = lib_path.join(".wren").join("rag_vectors");
-    if let Ok(embed_config) = crate::rag::embeddings::resolve_embedding_config(db).await {
-        let dim = crate::rag::embeddings::known_dimension(
-            &embed_config.provider_type, &embed_config.model,
-        ).unwrap_or(1536);
-        if let Ok(store) = crate::rag::store::VectorStore::new(&lance_path, dim).await {
-            for att_id in &att_ids {
-                let _ = store.delete_document(&att_id.to_string()).await;
-            }
-            tracing::info!("Cleaned up vectors for entry {} ({} attachments)", entry_id, att_ids.len());
-        }
-    }
-}

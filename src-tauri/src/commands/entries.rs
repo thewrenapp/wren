@@ -2151,31 +2151,13 @@ pub async fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), Str
         tracing::error!("Failed to commit search index: {}", e);
     }
 
-    // Clean up RAG vectors
-    // Clean up RAG vectors and rebuild cross-doc RAPTOR for affected collections
-    let db = state.db.clone();
-    let lp = state.library_path.clone();
-    let affected_collections: Vec<i64> = sqlx::query_scalar(
-        "SELECT collection_id FROM collection_entries WHERE entry_id = ?",
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
-
-    tokio::spawn(async move {
-        tracing::debug!("Background task started: cleanup_entry_vectors + RAPTOR rebuild for entry {}", id);
-        let result = std::panic::AssertUnwindSafe(async {
-            crate::commands::collections::cleanup_entry_vectors(&db, &lp, id).await;
-            for cid in &affected_collections {
-                crate::commands::rag::spawn_collection_raptor_rebuild(db.clone(), lp.clone(), *cid);
-            }
-        });
-        match futures::FutureExt::catch_unwind(result).await {
-            Ok(()) => tracing::debug!("Background task completed: cleanup_entry_vectors + RAPTOR rebuild for entry {}", id),
-            Err(_) => tracing::error!("Background task panicked: cleanup_entry_vectors + RAPTOR rebuild for entry {}", id),
-        }
-    });
+    // Clean up RAG vectors via job queue
+    let _ = state.job_queue.enqueue(
+        crate::jobs::types::JobType::RagCleanupVectors,
+        Some(format!("Cleanup vectors: entry {}", id)),
+        serde_json::json!({ "entryId": id }),
+        0,
+    ).await;
 
     Ok(())
 }
@@ -2400,8 +2382,13 @@ pub async fn permanent_delete_entry(state: State<'_, AppState>, id: i64) -> Resu
             .await
             .map_err(|e| e.to_string())?;
 
-    // Clean up RAG vectors before CASCADE deletes attachments
-    crate::commands::collections::cleanup_entry_vectors(&state.db, &state.library_path, id).await;
+    // Clean up RAG vectors via job queue (must enqueue before CASCADE deletes attachments)
+    let _ = state.job_queue.enqueue(
+        crate::jobs::types::JobType::RagCleanupVectors,
+        Some(format!("Cleanup vectors: entry {}", id)),
+        serde_json::json!({ "entryId": id }),
+        0,
+    ).await;
 
     // Wrap DB deletion in a transaction
     let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
@@ -2463,6 +2450,14 @@ pub async fn empty_trash(state: State<'_, AppState>) -> Result<i64, String> {
 
         all_file_paths.extend(file_paths.into_iter().flatten());
         entry_keys.push(entry_key.clone());
+
+        // Clean up RAG vectors via job queue
+        let _ = state.job_queue.enqueue(
+            crate::jobs::types::JobType::RagCleanupVectors,
+            Some(format!("Cleanup vectors: entry {}", id)),
+            serde_json::json!({ "entryId": id }),
+            0,
+        ).await;
     }
 
     // Delete all trashed entries in a single transaction
@@ -3377,11 +3372,6 @@ pub async fn add_entry_to_collection(
     .await
     .map_err(|e| e.to_string())?;
 
-    // Rebuild cross-doc RAPTOR for this collection in background
-    crate::commands::rag::spawn_collection_raptor_rebuild(
-        state.db.clone(), state.library_path.clone(), collection_id,
-    );
-
     Ok(())
 }
 
@@ -3398,11 +3388,6 @@ pub async fn remove_entry_from_collection(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
-
-    // Rebuild cross-doc RAPTOR for this collection in background
-    crate::commands::rag::spawn_collection_raptor_rebuild(
-        state.db.clone(), state.library_path.clone(), collection_id,
-    );
 
     Ok(())
 }
@@ -4448,26 +4433,15 @@ pub async fn bulk_move_to_trash(
         tracing::error!("Failed to commit search index: {}", e);
     }
 
-    // Clean up RAG vectors in background
-    let db = state.db.clone();
-    let lp = state.library_path.clone();
-    let ids_clone = ids.clone();
-    tokio::spawn(async move {
-        for id in ids_clone {
-            let affected_collections: Vec<i64> = sqlx::query_scalar(
-                "SELECT collection_id FROM collection_entries WHERE entry_id = ?",
-            )
-            .bind(id)
-            .fetch_all(&db)
-            .await
-            .unwrap_or_default();
-
-            crate::commands::collections::cleanup_entry_vectors(&db, &lp, id).await;
-            for cid in affected_collections {
-                crate::commands::rag::spawn_collection_raptor_rebuild(db.clone(), lp.clone(), cid);
-            }
-        }
-    });
+    // Clean up RAG vectors via job queue
+    for id in &ids {
+        let _ = state.job_queue.enqueue(
+            crate::jobs::types::JobType::RagCleanupVectors,
+            Some(format!("Cleanup vectors: entry {}", id)),
+            serde_json::json!({ "entryId": id }),
+            0,
+        ).await;
+    }
 
     let trash_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entries WHERE is_deleted = 1")
         .fetch_one(&state.db)
@@ -4600,8 +4574,13 @@ pub async fn bulk_permanent_delete(
 
         all_file_paths.extend(file_paths.into_iter().flatten());
 
-        // Clean up RAG vectors before CASCADE deletes attachments
-        crate::commands::collections::cleanup_entry_vectors(&state.db, &state.library_path, *id).await;
+        // Clean up RAG vectors via job queue
+        let _ = state.job_queue.enqueue(
+            crate::jobs::types::JobType::RagCleanupVectors,
+            Some(format!("Cleanup vectors: entry {}", id)),
+            serde_json::json!({ "entryId": id }),
+            0,
+        ).await;
     }
 
     // Delete all entries in a single transaction
@@ -4685,11 +4664,6 @@ pub async fn bulk_add_to_collection(
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    // Rebuild cross-doc RAPTOR for this collection in background
-    crate::commands::rag::spawn_collection_raptor_rebuild(
-        state.db.clone(), state.library_path.clone(), collection_id,
-    );
-
     Ok(())
 }
 
@@ -4723,11 +4697,6 @@ pub async fn bulk_remove_from_collection(
         .map_err(|e| e.to_string())?;
 
     tx.commit().await.map_err(|e| e.to_string())?;
-
-    // Rebuild cross-doc RAPTOR for this collection in background
-    crate::commands::rag::spawn_collection_raptor_rebuild(
-        state.db.clone(), state.library_path.clone(), collection_id,
-    );
 
     Ok(())
 }

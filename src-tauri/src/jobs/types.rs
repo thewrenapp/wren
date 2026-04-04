@@ -43,7 +43,7 @@ pub enum JobType {
     LlmParse,
     MetadataExtract,
     RagIndex,
-    RagCollectionRaptor,
+    RagCleanupVectors,
 }
 
 impl JobType {
@@ -56,7 +56,7 @@ impl JobType {
             JobType::LlmParse => "llm_parse",
             JobType::MetadataExtract => "metadata_extract",
             JobType::RagIndex => "rag_index",
-            JobType::RagCollectionRaptor => "rag_collection_raptor",
+            JobType::RagCleanupVectors => "rag_cleanup_vectors",
         }
     }
 
@@ -69,7 +69,7 @@ impl JobType {
             JobType::LlmParse => "Parse Document Structure",
             JobType::MetadataExtract => "Extract Metadata with AI",
             JobType::RagIndex => "Build Semantic Index",
-            JobType::RagCollectionRaptor => "Cross-doc RAPTOR",
+            JobType::RagCleanupVectors => "Cleanup Vectors",
         }
     }
 
@@ -82,7 +82,7 @@ impl JobType {
             "llm_parse" => Some(JobType::LlmParse),
             "metadata_extract" => Some(JobType::MetadataExtract),
             "rag_index" => Some(JobType::RagIndex),
-            "rag_collection_raptor" => Some(JobType::RagCollectionRaptor),
+            "rag_cleanup_vectors" => Some(JobType::RagCleanupVectors),
             _ => None,
         }
     }
@@ -98,7 +98,7 @@ impl JobType {
             JobType::LlmParse => true,          // checkpointed, can resume
             JobType::MetadataExtract => true,
             JobType::RagIndex => true,
-            JobType::RagCollectionRaptor => true,
+            JobType::RagCleanupVectors => true,
         }
     }
 
@@ -111,7 +111,7 @@ impl JobType {
             JobType::LlmParse => false,
             JobType::MetadataExtract => false,
             JobType::RagIndex => false,
-            JobType::RagCollectionRaptor => false,
+            JobType::RagCleanupVectors => false,
         }
     }
 }
@@ -189,7 +189,7 @@ pub struct RagIndexPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RagCollectionRaptorPayload {
-    pub collection_id: i64,
+pub struct RagCleanupVectorsPayload {
+    pub entry_id: i64,
 }
 

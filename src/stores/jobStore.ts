@@ -29,7 +29,7 @@ const JOB_TYPE_NAMES: Record<string, string> = {
   llm_parse: "Parse Document Structure",
   rag_index: "Build Semantic Index",
   metadata_extract: "Extract Metadata with AI",
-  rag_collection_raptor: "Cross-doc RAPTOR",
+  rag_cleanup_vectors: "Cleanup Vectors",
 };
 
 export function jobDisplayName(job: Job): string {
@@ -134,7 +134,7 @@ export const useJobStore = create<JobState>()((set, get) => ({
       get()._upsertJob(event.payload);
       // Refresh library when metadata extraction or OCR extraction completes
       const job = event.payload;
-      if (job.status === "completed" && (job.jobType === "metadata_extract" || job.jobType === "ocr_extract")) {
+      if (job.status === "completed" && (job.jobType === "metadata_extract" || job.jobType === "ocr_extract" || job.jobType === "rag_index" || job.jobType === "rag_cleanup_vectors")) {
         // Dynamic import to avoid circular dependency
         import("@/stores/libraryStore").then(({ useLibraryStore }) => {
           // Re-check subscription is still active after async import

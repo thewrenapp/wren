@@ -19,7 +19,7 @@ export interface SearchState {
   setFullSearchResults: React.Dispatch<React.SetStateAction<FullSearchResult[]>>;
   semanticResults: RagSearchResult[];
   setSemanticResults: React.Dispatch<React.SetStateAction<RagSearchResult[]>>;
-  searchPipeline: { strategy: string; reranked: boolean; cragActive: boolean; raptorActive: boolean; queryTimeMs: number } | null;
+  searchPipeline: { reranked: boolean; queryTimeMs: number } | null;
   setSearchPipeline: React.Dispatch<React.SetStateAction<SearchState["searchPipeline"]>>;
   isSearching: boolean;
   setIsSearching: React.Dispatch<React.SetStateAction<boolean>>;
@@ -37,7 +37,7 @@ interface SearchResultsProps {
   state: SearchState;
   isLoadingMoreResults: boolean;
   onSelect: (callback: () => void) => void;
-  onOpenTab: (tab: { type: "entry"; title: string; entryId?: string; attachmentId?: string }) => void;
+  onOpenTab: (tab: { type: "entry"; title: string; entryId?: string; attachmentId?: string; data?: Record<string, unknown> }) => void;
 }
 
 export function SearchResults({ state, isLoadingMoreResults, onSelect, onOpenTab }: SearchResultsProps) {
@@ -186,10 +186,7 @@ export function SearchResults({ state, isLoadingMoreResults, onSelect, onOpenTab
             </div>
             {searchPipeline && (
               <div className="flex gap-2 text-[10px] text-muted-foreground/50">
-                <span>{searchPipeline.strategy === "auto" ? "auto" : searchPipeline.strategy}</span>
-                {searchPipeline.raptorActive && <span>+ RAPTOR</span>}
-                {searchPipeline.reranked && <span>+ reranked</span>}
-                {searchPipeline.cragActive && <span>+ CRAG</span>}
+                {searchPipeline.reranked && <span>reranked</span>}
                 <span>{searchPipeline.queryTimeMs}ms</span>
               </div>
             )}
@@ -199,13 +196,18 @@ export function SearchResults({ state, isLoadingMoreResults, onSelect, onOpenTab
               key={`semantic-${result.chunkId}-${idx}`}
               value={`${result.entryTitle || result.filename} ${result.content.slice(0, 100)}`}
               onSelect={() =>
-                result.entryId ? onSelect(() =>
+                result.entryId ? onSelect(() => {
+                  const isPdf = result.filename?.toLowerCase().endsWith(".pdf");
                   onOpenTab({
                     type: "entry",
                     title: result.entryTitle || "Untitled",
                     entryId: String(result.entryId),
-                  })
-                ) : undefined
+                    attachmentId: isPdf ? result.documentId : undefined,
+                    data: isPdf && result.pageNumber != null
+                      ? { pdfPage: result.pageNumber, pdfPageRequestId: Date.now() }
+                      : undefined,
+                  });
+                }) : undefined
               }
               className="flex items-start gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
             >
@@ -218,9 +220,10 @@ export function SearchResults({ state, isLoadingMoreResults, onSelect, onOpenTab
                   <span className="text-xs text-muted-foreground">{result.sectionName}</span>
                 )}
                 <p className="text-xs text-muted-foreground/80 mt-0.5 line-clamp-2">{result.content.slice(0, 200)}</p>
-                <span className="text-xs text-muted-foreground/60 mt-0.5">
-                  relevance: {(result.relevanceScore * 100).toFixed(0)}%
-                </span>
+                <div className="flex items-center gap-2 text-[10px] text-muted-foreground/50 mt-0.5">
+                  {result.pageNumber != null && <span>p. {result.pageNumber}</span>}
+                  <span>score: {result.relevanceScore.toFixed(2)}</span>
+                </div>
               </div>
             </Command.Item>
           ))}

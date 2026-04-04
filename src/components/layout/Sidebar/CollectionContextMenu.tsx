@@ -8,7 +8,6 @@ import {
   Pencil,
   Settings2,
   Trash2,
-  TreePine,
 } from 'lucide-react';
 import {
   ContextMenu,
@@ -18,7 +17,6 @@ import {
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
-  ContextMenuSeparator,
 } from '@/components/ui/context-menu';
 import { useUIStore } from '@/stores/uiStore';
 import { useLibraryStore } from '@/stores/libraryStore';
@@ -130,21 +128,6 @@ export function CollectionItem({
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
-          <ContextMenuItem
-            onClick={async () => {
-              try {
-                const { ragBuildCollectionRaptor } = await import('@/services/tauri/commands');
-                await ragBuildCollectionRaptor(collection.id);
-                toast.info(`Cross-doc summaries building for "${collection.name}"`);
-              } catch (err) {
-                toast.error(`Failed: ${err}`);
-              }
-            }}
-          >
-            <TreePine className='h-4 w-4 mr-2' />
-            Rebuild Cross-doc Summaries
-          </ContextMenuItem>
-          <ContextMenuSeparator />
           <ContextMenuItem
             onClick={() => onDelete(collection.id, collection.name)}
             className='text-destructive focus:text-destructive'

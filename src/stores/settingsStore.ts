@@ -43,13 +43,6 @@ interface SettingsState {
 
   // RAG (Document Search)
   ragAutoIndex: boolean;
-  ragGenModel: string;         // LLM model for HyDE/step-back/CRAG (defaults to llmModel)
-  cragEnabled: boolean;
-  cragUpperThreshold: number;  // 1-100, default 60
-  cragLowerThreshold: number;  // 1-100, default 25
-  raptorEnabled: boolean;
-  raptorTokenBudget: number;   // default 2000
-  raptorRetrievalMode: string; // "collapsed" | "tree_traversal"
 
   // Code Editor
   showCodeLineNumbers: boolean;
@@ -77,13 +70,6 @@ interface SettingsState {
   setLlmTokenBudget: (budget: number) => void;
   setLlmContextWindow: (size: number) => void;
   setRagAutoIndex: (enabled: boolean) => void;
-  setRagGenModel: (model: string) => void;
-  setCragEnabled: (enabled: boolean) => void;
-  setCragUpperThreshold: (value: number) => void;
-  setCragLowerThreshold: (value: number) => void;
-  setRaptorEnabled: (enabled: boolean) => void;
-  setRaptorTokenBudget: (value: number) => void;
-  setRaptorRetrievalMode: (mode: string) => void;
   setShowWelcomeOnStartup: (show: boolean) => void;
   loadFromBackend: () => Promise<void>;
 }
@@ -119,13 +105,6 @@ export const useSettingsStore = create<SettingsState>()(
       llmTokenBudget: 200000,
       llmContextWindow: 0,
       ragAutoIndex: true,
-      ragGenModel: "",
-      cragEnabled: false,
-      cragUpperThreshold: 60,
-      cragLowerThreshold: 25,
-      raptorEnabled: false,
-      raptorTokenBudget: 2000,
-      raptorRetrievalMode: "tree_traversal",
       showCodeLineNumbers: false,
       showWelcomeOnStartup: true,
 
@@ -307,34 +286,6 @@ export const useSettingsStore = create<SettingsState>()(
           toast.error("Failed to update setting");
         }
       },
-      setRagGenModel: async (model) => {
-        set({ ragGenModel: model });
-        await updateSetting("rag_gen_model", model).catch(() => {});
-      },
-      setCragEnabled: async (enabled) => {
-        set({ cragEnabled: enabled });
-        await updateSetting("crag_enabled", enabled ? "true" : "false").catch(() => {});
-      },
-      setCragUpperThreshold: async (value) => {
-        set({ cragUpperThreshold: value });
-        await updateSetting("crag_upper_threshold", String(value)).catch(() => {});
-      },
-      setCragLowerThreshold: async (value) => {
-        set({ cragLowerThreshold: value });
-        await updateSetting("crag_lower_threshold", String(value)).catch(() => {});
-      },
-      setRaptorEnabled: async (enabled) => {
-        set({ raptorEnabled: enabled });
-        await updateSetting("raptor_enabled", enabled ? "true" : "false").catch(() => {});
-      },
-      setRaptorTokenBudget: async (value) => {
-        set({ raptorTokenBudget: value });
-        await updateSetting("raptor_token_budget", String(value)).catch(() => {});
-      },
-      setRaptorRetrievalMode: async (mode) => {
-        set({ raptorRetrievalMode: mode });
-        await updateSetting("raptor_retrieval_mode", mode).catch(() => {});
-      },
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
       loadFromBackend: async () => {
         try {
@@ -402,20 +353,6 @@ export const useSettingsStore = create<SettingsState>()(
           if (ragAutoIndex !== undefined) set({ ragAutoIndex: ragAutoIndex !== "false" });
 
           // RAG advanced settings
-          const ragGenModel = settingsMap.get("rag_gen_model");
-          if (ragGenModel !== undefined) set({ ragGenModel });
-          const cragEnabled = settingsMap.get("crag_enabled");
-          if (cragEnabled !== undefined) set({ cragEnabled: cragEnabled === "true" });
-          const cragUpper = settingsMap.get("crag_upper_threshold");
-          if (cragUpper !== undefined) set({ cragUpperThreshold: parseInt(cragUpper, 10) || 60 });
-          const cragLower = settingsMap.get("crag_lower_threshold");
-          if (cragLower !== undefined) set({ cragLowerThreshold: parseInt(cragLower, 10) || 25 });
-          const raptorEnabled = settingsMap.get("raptor_enabled");
-          if (raptorEnabled !== undefined) set({ raptorEnabled: raptorEnabled === "true" });
-          const raptorBudget = settingsMap.get("raptor_token_budget");
-          if (raptorBudget !== undefined) set({ raptorTokenBudget: parseInt(raptorBudget, 10) || 2000 });
-          const raptorMode = settingsMap.get("raptor_retrieval_mode");
-          if (raptorMode !== undefined) set({ raptorRetrievalMode: raptorMode });
         } catch (err) {
           console.error("Failed to load settings from backend:", err);
         }

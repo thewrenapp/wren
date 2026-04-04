@@ -80,6 +80,12 @@ export function EntryCardView({
                   {entry.attachmentCount > 1 && (
                     <span className='text-xs'>{entry.attachmentCount}</span>
                   )}
+                  {entry.hasExtractedText && (
+                    <span
+                      className={`h-2 w-2 rounded-full shrink-0 ${entry.ragIndexed ? 'bg-green-500/60' : 'bg-yellow-500/80'}`}
+                      title={entry.ragIndexed ? 'Indexed for AI search' : 'Not indexed for AI search'}
+                    />
+                  )}
                 </div>
               </div>
 

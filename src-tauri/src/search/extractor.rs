@@ -136,7 +136,13 @@ pub async fn extract_text(
                 let text: String = parsed
                     .sections
                     .iter()
-                    .map(|s| s.content.as_str())
+                    .map(|s| {
+                        if let Some(pg) = s.page_number {
+                            format!("<!-- page {} -->\n\n{}", pg, s.content)
+                        } else {
+                            s.content.clone()
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("\n\n");
 

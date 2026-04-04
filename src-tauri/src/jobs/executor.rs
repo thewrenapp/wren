@@ -91,10 +91,10 @@ pub async fn run_job(
             execute_llm_parse(db, app_handle, library_path, job_id, &payload, cancel_flag)
                 .await
         }
-        "rag_collection_raptor" => {
-            let payload: RagCollectionRaptorPayload =
+        "rag_cleanup_vectors" => {
+            let payload: RagCleanupVectorsPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_collection_raptor(db, app_handle, library_path, job_id, &payload, cancel_flag).await
+            execute_rag_cleanup_vectors(db, app_handle, library_path, job_id, &payload).await
         }
         "rag_index" => {
             let payload: RagIndexPayload =
@@ -1277,7 +1277,7 @@ async fn execute_metadata_extract(
     Ok(Some(serde_json::json!({"entryId": payload.entry_id}).to_string()))
 }
 
-/// Execute RAG indexing (chunk + embed + vector store + optional RAPTOR) for a single entry.
+/// Execute RAG indexing (chunk + embed + vector store) for a single entry.
 async fn execute_rag_index(
     db: &SqlitePool,
     app_handle: &AppHandle,
@@ -1289,8 +1289,7 @@ async fn execute_rag_index(
     if cancel_flag.load(Ordering::Relaxed) {
         return Err("Job cancelled".to_string());
     }
-    let raptor_enabled = crate::commands::settings::is_setting_enabled(db, "raptor_enabled").await;
-    let total_steps: i64 = if raptor_enabled { 4 } else { 3 };
+    let total_steps: i64 = 3;
 
     // Step 1: Resolve embedding config
     update_progress(app_handle, db, job_id, 0, total_steps, Some("Resolving embedding config...".to_string())).await;
@@ -1309,93 +1308,68 @@ async fn execute_rag_index(
     let lance_path = lib_path.join(".wren").join("rag_vectors");
     let store = crate::rag::store::VectorStore::new(&lance_path, dimension).await?;
 
-    let raptor_config = if raptor_enabled {
-        let provider = crate::commands::settings::get_setting_value(db, "llm_provider").await.unwrap_or_default();
-        let api_key = crate::commands::settings::get_setting_value(db, &format!("llm_api_key_{}", provider)).await.unwrap_or_default();
-        let base_url = crate::commands::settings::get_setting_value(db, "llm_base_url").await;
-        let model = crate::commands::settings::get_setting_value(db, "rag_gen_model").await
-            .filter(|m| !m.is_empty())
-            .or(crate::commands::settings::get_setting_value(db, "llm_model").await);
-        model.map(|m| crate::rag::indexer::RaptorIndexConfig {
-            enabled: true,
-            gen_config: crate::rag::retrieval::RagGenModelConfig {
-                provider_type: provider,
-                api_key,
-                base_url,
-                model: m,
-            },
-        })
-    } else {
-        None
-    };
-
     if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
 
     let count = crate::rag::indexer::index_entry(
-        db, &store, &embed_config, payload.entry_id, &lib_path, raptor_config.as_ref(),
+        db, &store, &embed_config, payload.entry_id, &lib_path,
     ).await?;
 
     if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
 
-    // Step 3: Vector store indexed
+    // Step 3: Done
     update_progress(app_handle, db, job_id, 2, total_steps, Some(format!("Indexed {} chunks into vector store", count))).await;
-
-    // Step 4: RAPTOR (if enabled — already ran inside index_entry)
-    if raptor_enabled {
-        update_progress(app_handle, db, job_id, 3, total_steps, Some("RAPTOR hierarchical indexing complete".to_string())).await;
-    }
-
     update_progress(app_handle, db, job_id, total_steps, total_steps, Some("Done".to_string())).await;
 
     Ok(Some(serde_json::json!({"entryId": payload.entry_id, "chunks": count}).to_string()))
 }
 
-/// Execute cross-document RAPTOR for a collection as a background job.
-async fn execute_collection_raptor(
+/// Clean up vector indexes for a deleted/trashed entry.
+async fn execute_rag_cleanup_vectors(
     db: &SqlitePool,
     app_handle: &AppHandle,
     library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
     job_id: &str,
-    payload: &RagCollectionRaptorPayload,
-    cancel_flag: CancelFlag,
+    payload: &RagCleanupVectorsPayload,
 ) -> Result<Option<String>, String> {
-    if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
-    update_progress(app_handle, db, job_id, 0, 2, Some("Resolving config...".to_string())).await;
+    update_progress(app_handle, db, job_id, 0, 2, Some("Cleaning up vector indexes...".to_string())).await;
 
-    let embed_config = crate::rag::embeddings::resolve_embedding_config(db).await?;
-    let dimension = match crate::rag::embeddings::probe_dimension(&embed_config).await {
-        Ok(d) => d,
-        Err(_) => crate::rag::embeddings::known_dimension(&embed_config.provider_type, &embed_config.model)
-            .ok_or_else(|| "Cannot determine embedding dimension".to_string())?,
-    };
+    let att_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM attachments WHERE entry_id = ?",
+    )
+    .bind(payload.entry_id)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
-    let lib_path = library_path.read().await;
-    let lance_path = lib_path.join(".wren").join("rag_vectors");
-    let store = crate::rag::store::VectorStore::new(&lance_path, dimension).await?;
+    if !att_ids.is_empty() {
+        let lib_path = library_path.read().await;
+        let lance_path = lib_path.join(".wren").join("rag_vectors");
 
-    let provider = crate::commands::settings::get_setting_value(db, "llm_provider").await.unwrap_or_default();
-    let api_key = crate::commands::settings::get_setting_value(db, &format!("llm_api_key_{}", provider)).await.unwrap_or_default();
-    let base_url = crate::commands::settings::get_setting_value(db, "llm_base_url").await;
-    let model = crate::commands::settings::get_setting_value(db, "rag_gen_model").await
-        .filter(|m| !m.is_empty())
-        .or(crate::commands::settings::get_setting_value(db, "llm_model").await)
-        .ok_or_else(|| "No RAG gen model configured".to_string())?;
+        // Try to resolve embedding dimension to open the store
+        if let Ok(embed_config) = crate::rag::embeddings::resolve_embedding_config(db).await {
+            let dimension = crate::rag::embeddings::probe_dimension(&embed_config).await
+                .or_else(|_| crate::rag::embeddings::known_dimension(&embed_config.provider_type, &embed_config.model)
+                    .ok_or_else(|| "Unknown dimension".to_string()));
 
-    let gen_config = crate::rag::retrieval::RagGenModelConfig {
-        provider_type: provider,
-        api_key,
-        base_url,
-        model,
-    };
+            if let Ok(dim) = dimension {
+                if let Ok(store) = crate::rag::store::VectorStore::new(&lance_path, dim).await {
+                    for att_id in &att_ids {
+                        let _ = store.delete_document(&att_id.to_string()).await;
+                    }
+                }
+            }
+        }
+    }
 
-    if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
-    update_progress(app_handle, db, job_id, 1, 2, Some("Building cross-document summaries...".to_string())).await;
+    // Reset rag_indexed flag
+    let _ = sqlx::query(
+        "UPDATE entries SET rag_indexed = 0, rag_indexed_at = NULL WHERE id = ?",
+    )
+    .bind(payload.entry_id)
+    .execute(db)
+    .await;
 
-    let count = crate::rag::indexer::build_collection_raptor(
-        db, &store, &embed_config, &gen_config, payload.collection_id,
-    ).await?;
+    update_progress(app_handle, db, job_id, 2, 2, Some("Done".to_string())).await;
 
-    update_progress(app_handle, db, job_id, 2, 2, Some(format!("Done — {} summary nodes", count))).await;
-
-    Ok(Some(serde_json::json!({"collectionId": payload.collection_id, "summaries": count}).to_string()))
+    Ok(Some(serde_json::json!({"entryId": payload.entry_id}).to_string()))
 }

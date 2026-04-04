@@ -64,14 +64,6 @@ arrow-array = "57"
 arrow-schema = "57"
 
 
-# Parallel processing (RAPTOR kNN graph)
-rayon = "1.11"
-
-# Linear algebra (RAPTOR UMAP + GMM clustering)
-nalgebra = "0.32"
-rand = "0.8"
-ndarray = "0.15"
-
 # Async stream utilities
 futures = "0.3"
 

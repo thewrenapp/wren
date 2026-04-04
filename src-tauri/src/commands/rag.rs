@@ -1,7 +1,6 @@
 //! Tauri commands for the RAG system.
 //!
-//! Wires up: embedding config resolution, vector store, indexing pipeline,
-//! search with strategies (HyDE/step-back/CRAG), reranking, and RAPTOR.
+//! Simple vector DB chunk indexing with optional reranker support.
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -30,10 +29,7 @@ pub struct RagSearchResult {
 #[serde(rename_all = "camelCase")]
 pub struct RagSearchResponse {
     pub results: Vec<RagSearchResult>,
-    pub strategy: String,
     pub reranked: bool,
-    pub crag_active: bool,
-    pub raptor_active: bool,
     pub total_results: usize,
     pub query_time_ms: u64,
 }
@@ -46,7 +42,7 @@ pub struct RagStatus {
     pub total_chunks: i64,
 }
 
-// ── Helper: resolve all RAG configs from settings ────────────────
+// ── Helper: resolve configs from settings ────────────────────────
 
 async fn get_setting(db: &sqlx::SqlitePool, key: &str) -> Option<String> {
     sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
@@ -61,40 +57,10 @@ async fn resolve_embed_config(db: &sqlx::SqlitePool) -> Result<crate::rag::embed
     crate::rag::embeddings::resolve_embedding_config(db).await
 }
 
-async fn resolve_rag_gen_config(db: &sqlx::SqlitePool) -> Option<crate::rag::retrieval::RagGenModelConfig> {
-    let provider = get_setting(db, "llm_provider").await?;
-    let api_key = get_setting(db, &format!("llm_api_key_{}", provider)).await.unwrap_or_default();
-    let base_url = get_setting(db, "llm_base_url").await;
-
-    // Use dedicated RAG gen model if set, otherwise fall back to main LLM model
-    let model = get_setting(db, "rag_gen_model").await
-        .filter(|m| !m.is_empty())
-        .or_else(|| None) // Will use blocking get below
-        .unwrap_or_else(|| {
-            // Can't await here, but this is synchronous context inside unwrap_or_else
-            // Use empty string as sentinel — caller checks
-            String::new()
-        });
-
-    let model = if model.is_empty() {
-        get_setting(db, "llm_model").await?
-    } else {
-        model
-    };
-
-    Some(crate::rag::retrieval::RagGenModelConfig {
-        provider_type: provider,
-        api_key,
-        base_url,
-        model,
-    })
-}
-
 async fn resolve_reranker_config(db: &sqlx::SqlitePool) -> Option<crate::rag::retrieval::RerankerConfig> {
     let provider = get_setting(db, "reranker_provider").await?;
     let model = get_setting(db, "reranker_model").await?;
 
-    // For oMLX reranker, use the same API key and base URL
     let llm_provider = get_setting(db, "llm_provider").await.unwrap_or_default();
     let api_key = if provider == "omlx" || provider == llm_provider {
         get_setting(db, &format!("llm_api_key_{}", llm_provider)).await.unwrap_or_default()
@@ -114,50 +80,6 @@ async fn resolve_reranker_config(db: &sqlx::SqlitePool) -> Option<crate::rag::re
         api_key,
         base_url,
         model,
-    })
-}
-
-async fn resolve_crag_config(db: &sqlx::SqlitePool) -> Option<crate::rag::retrieval::CragConfig> {
-    let enabled = get_setting(db, "crag_enabled").await
-        .map(|v| v == "true")
-        .unwrap_or(false);
-
-    if !enabled {
-        return None;
-    }
-
-    let upper = get_setting(db, "crag_upper_threshold").await
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(60.0);
-    let lower = get_setting(db, "crag_lower_threshold").await
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(25.0);
-
-    Some(crate::rag::retrieval::CragConfig {
-        upper_threshold: upper,
-        lower_threshold: lower,
-        enable_query_rewrite: true,
-    })
-}
-
-async fn resolve_raptor_retrieval_config(
-    db: &sqlx::SqlitePool,
-) -> Option<crate::rag::retrieval::RaptorRetrievalConfig> {
-    let enabled = get_setting(db, "raptor_enabled").await
-        .map(|v| v == "true")
-        .unwrap_or(false);
-
-    if !enabled {
-        return None;
-    }
-
-    let budget = get_setting(db, "raptor_token_budget").await
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2000);
-
-    Some(crate::rag::retrieval::RaptorRetrievalConfig {
-        enabled: true,
-        token_budget: budget,
     })
 }
 
@@ -186,14 +108,12 @@ async fn resolve_dimension(
 
 // ── Commands ─────────────────────────────────────────────────────
 
-/// Search across all indexed documents using the RAG system.
-/// Reads ALL settings: embedding, RAG gen model, reranker, CRAG, strategy.
+/// Search across all indexed documents using vector similarity + optional reranking.
 #[tauri::command]
 pub async fn rag_search(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
-    strategy: Option<String>,
 ) -> Result<RagSearchResponse, String> {
     let start = std::time::Instant::now();
     let limit = limit.unwrap_or(10).min(50);
@@ -208,49 +128,21 @@ pub async fn rag_search(
     if store.is_empty().await {
         return Ok(RagSearchResponse {
             results: Vec::new(),
-            strategy: "none".to_string(),
             reranked: false,
-            crag_active: false,
-            raptor_active: false,
             total_results: 0,
             query_time_ms: start.elapsed().as_millis() as u64,
         });
     }
 
-    let strategy = match strategy.as_deref() {
-        Some("semantic") => crate::rag::retrieval::SearchStrategy::Semantic,
-        Some("hyde") => crate::rag::retrieval::SearchStrategy::Hyde,
-        Some("step_back") => crate::rag::retrieval::SearchStrategy::StepBack,
-        _ => crate::rag::retrieval::SearchStrategy::Auto,
-    };
-
-    let rag_gen = resolve_rag_gen_config(db).await;
     let reranker = resolve_reranker_config(db).await;
-    let crag = resolve_crag_config(db).await;
-    let raptor_retrieval = resolve_raptor_retrieval_config(db).await;
-
     let has_reranker = reranker.is_some();
-    let has_crag = crag.is_some();
-    let has_raptor = raptor_retrieval.as_ref().map(|r| r.enabled).unwrap_or(false);
-
-    // Determine actual strategy (Auto resolves here for reporting)
-    let strategy_name = match &strategy {
-        crate::rag::retrieval::SearchStrategy::Auto => "auto",
-        crate::rag::retrieval::SearchStrategy::Semantic => "semantic",
-        crate::rag::retrieval::SearchStrategy::Hyde => "hyde",
-        crate::rag::retrieval::SearchStrategy::StepBack => "step_back",
-    };
 
     let results = crate::rag::retrieval::search_documents(
         &store,
         &embed_config,
         &query,
         limit,
-        strategy,
-        rag_gen.as_ref(),
         reranker.as_ref(),
-        crag.as_ref(),
-        raptor_retrieval.as_ref(),
         None,
     )
     .await?;
@@ -287,10 +179,7 @@ pub async fn rag_search(
 
     Ok(RagSearchResponse {
         results: out,
-        strategy: strategy_name.to_string(),
         reranked: has_reranker,
-        crag_active: has_crag,
-        raptor_active: has_raptor,
         total_results,
         query_time_ms: start.elapsed().as_millis() as u64,
     })
@@ -315,8 +204,6 @@ pub async fn rag_status(state: State<'_, AppState>) -> Result<RagStatus, String>
     .await
     .unwrap_or(0);
 
-    // Chunk count is not tracked in SQLite; the vector store does not expose a count API.
-    // Report 0 until a metadata table or vector-store query is available.
     let total_chunks = 0i64;
 
     Ok(RagStatus {
@@ -391,112 +278,6 @@ pub async fn rag_index_all(state: State<'_, AppState>) -> Result<String, String>
     Ok(format!("Enqueued {} entries for semantic indexing", count))
 }
 
-/// Build cross-document RAPTOR summaries for a collection.
-/// Clusters per-document summaries and creates higher-level thematic summaries.
-#[tauri::command]
-pub async fn rag_build_collection_raptor(
-    state: State<'_, AppState>,
-    collection_id: i64,
-) -> Result<String, String> {
-    let name: String = sqlx::query_scalar("SELECT name FROM collections WHERE id = ?")
-        .bind(collection_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| format!("Collection {}", collection_id));
-
-    let payload = serde_json::json!({ "collectionId": collection_id });
-    let job_id = state.job_queue.enqueue(
-        crate::jobs::types::JobType::RagCollectionRaptor,
-        Some(format!("Cross-doc RAPTOR: {}", name)),
-        payload,
-        0,
-    ).await?;
-
-    Ok(job_id)
-}
-
-/// Get RAPTOR summaries for an entry (per-document summaries at all levels).
-#[tauri::command]
-pub async fn rag_get_summaries(
-    state: State<'_, AppState>,
-    entry_id: i64,
-) -> Result<Vec<RagSummary>, String> {
-    let db = &state.db;
-    let embed_config = resolve_embed_config(db).await?;
-    let dimension = resolve_dimension(&embed_config).await?;
-    let lib_path = state.library_path.read().await;
-    let store = open_vector_store(&lib_path, dimension).await?;
-
-    // Get attachment IDs for this entry
-    let att_ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM attachments WHERE entry_id = ? AND markdown_path IS NOT NULL",
-    )
-    .bind(entry_id)
-    .fetch_all(db)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let mut summaries = Vec::new();
-    for att_id in &att_ids {
-        let filter = format!("document_id = '{}' AND level > 0", att_id);
-        if let Ok(nodes) = store.get_nodes_with_embeddings(Some(&filter)).await {
-            for node in nodes {
-                summaries.push(RagSummary {
-                    level: node.level,
-                    content: node.content,
-                    document_id: node.document_id,
-                    source: "document".to_string(),
-                });
-            }
-        }
-    }
-
-    summaries.sort_by_key(|s| s.level);
-    Ok(summaries)
-}
-
-/// Get cross-document RAPTOR summaries for a collection.
-#[tauri::command]
-pub async fn rag_get_collection_summaries(
-    state: State<'_, AppState>,
-    collection_id: i64,
-) -> Result<Vec<RagSummary>, String> {
-    let db = &state.db;
-    let embed_config = resolve_embed_config(db).await?;
-    let dimension = resolve_dimension(&embed_config).await?;
-    let lib_path = state.library_path.read().await;
-    let store = open_vector_store(&lib_path, dimension).await?;
-
-    // Cross-doc summaries may be stored as 'collection_{id}' or '__corpus__' (legacy)
-    let scope_id = format!("collection_{}", collection_id);
-    let filter = format!("document_id = '{}' OR document_id = '__corpus__'", scope_id);
-
-    let nodes = store.get_nodes_with_embeddings(Some(&filter)).await?;
-
-    let mut summaries: Vec<RagSummary> = nodes
-        .into_iter()
-        .map(|n| RagSummary {
-            level: n.level,
-            content: n.content,
-            document_id: n.document_id,
-            source: "collection".to_string(),
-        })
-        .collect();
-
-    summaries.sort_by_key(|s| s.level);
-    Ok(summaries)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RagSummary {
-    pub level: usize,
-    pub content: String,
-    pub document_id: String,
-    pub source: String,
-}
-
 /// Rebuild the entire RAG index (drop and re-create).
 #[tauri::command]
 pub async fn rag_rebuild(state: State<'_, AppState>) -> Result<(), String> {
@@ -509,6 +290,18 @@ pub async fn rag_rebuild(state: State<'_, AppState>) -> Result<(), String> {
             .map_err(|e| format!("Failed to delete RAG vectors: {}", e))?;
     }
 
+    // Drop legacy summaries table if it exists
+    let _ = sqlx::query("DROP TABLE IF EXISTS document_summaries")
+        .execute(&state.db)
+        .await;
+
+    // Clean up stale settings from removed features
+    let _ = sqlx::query(
+        "DELETE FROM settings WHERE key IN ('rag_gen_model', 'crag_enabled', 'crag_upper_threshold', 'crag_lower_threshold', 'raptor_enabled', 'raptor_token_budget', 'raptor_retrieval_mode')"
+    )
+    .execute(&state.db)
+    .await;
+
     // Reset rag_indexed flags
     sqlx::query("UPDATE entries SET rag_indexed = 0, rag_indexed_at = NULL")
         .execute(&state.db)
@@ -518,52 +311,3 @@ pub async fn rag_rebuild(state: State<'_, AppState>) -> Result<(), String> {
     tracing::info!("RAG index rebuilt (dropped and reset)");
     Ok(())
 }
-
-/// Enqueue a cross-doc RAPTOR job for a collection. No-op if RAPTOR disabled.
-pub fn spawn_collection_raptor_rebuild(
-    db: sqlx::SqlitePool,
-    _library_path: std::sync::Arc<tokio::sync::RwLock<std::path::PathBuf>>,
-    collection_id: i64,
-) {
-    // Check if RAPTOR is enabled before enqueuing — avoid spawning unnecessary jobs
-    tokio::spawn(async move {
-        tracing::debug!("Background task started: spawn_collection_raptor_rebuild for collection {}", collection_id);
-        let result: Result<(), String> = async {
-            let enabled = crate::commands::settings::is_setting_enabled(&db, "raptor_enabled").await;
-            if !enabled {
-                return Ok(());
-            }
-
-            // Get collection name for job title
-            let name: String = sqlx::query_scalar("SELECT name FROM collections WHERE id = ?")
-                .bind(collection_id)
-                .fetch_optional(&db)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| format!("Collection {}", collection_id));
-
-            let payload = serde_json::json!({ "collectionId": collection_id });
-
-            // We don't have access to JobQueue here, so insert directly into DB
-            let job_id = uuid::Uuid::new_v4().to_string();
-            sqlx::query(
-                r#"INSERT INTO jobs (id, job_type, status, title, payload_json, priority)
-                   VALUES (?, 'rag_collection_raptor', 'pending', ?, ?, 0)"#,
-            )
-            .bind(&job_id)
-            .bind(format!("Cross-doc RAPTOR: {}", name))
-            .bind(payload.to_string())
-            .execute(&db)
-            .await
-            .map_err(|e| format!("Failed to enqueue RAPTOR job: {}", e))?;
-
-            tracing::info!("Enqueued cross-doc RAPTOR job {} for collection {}", job_id, collection_id);
-            Ok(())
-        }.await;
-        if let Err(e) = result {
-            tracing::error!("Background task failed (spawn_collection_raptor_rebuild for collection {}): {}", collection_id, e);
-        }
-    });
-}
-

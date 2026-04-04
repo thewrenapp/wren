@@ -117,20 +117,6 @@ export function AISearchSection() {
     setLlmContextWindow,
     ragAutoIndex,
     setRagAutoIndex,
-    ragGenModel,
-    setRagGenModel,
-    cragEnabled,
-    setCragEnabled,
-    cragUpperThreshold,
-    setCragUpperThreshold,
-    cragLowerThreshold,
-    setCragLowerThreshold,
-    raptorEnabled,
-    setRaptorEnabled,
-    raptorTokenBudget,
-    setRaptorTokenBudget,
-    raptorRetrievalMode,
-    setRaptorRetrievalMode,
   } = useSettingsStore();
 
   const hasActiveReindex = useJobStore((s) =>
@@ -624,28 +610,6 @@ export function AISearchSection() {
           )}
         </div>
 
-        {/* RAG Generation Model */}
-        <div className="space-y-2">
-          <label className="text-sm font-medium">
-            RAG Generation Model <span className="text-xs text-muted-foreground font-normal">(optional)</span>
-          </label>
-          <p className="text-xs text-muted-foreground">
-            LLM for HyDE hypothetical answer generation, step-back query expansion, and CRAG evaluation.
-            Use a cheap/fast model. Without this, only basic semantic search is available.
-          </p>
-          <select
-            value={ragGenModel || ""}
-            onChange={(e) => setRagGenModel(e.target.value)}
-            className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-          >
-            <option value="">Same as AI parsing model ({llmModel || "none"})</option>
-            {models
-              .filter((m) => !m.modelType || m.modelType === "llm" || m.modelType === "vlm")
-              .map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-          </select>
-        </div>
 
         {/* Reranker Model */}
         <div className="space-y-2">
@@ -675,110 +639,6 @@ export function AISearchSection() {
             <p className="text-xs text-muted-foreground italic">
               Reranker models available with oMLX. Local Jina/Cohere reranker models can be loaded in oMLX.
             </p>
-          )}
-        </div>
-
-        {/* CRAG (Corrective RAG) */}
-        <div className="space-y-2">
-          <label className="text-sm font-medium">
-            Corrective RAG (CRAG) <span className="text-xs text-muted-foreground font-normal">(optional)</span>
-          </label>
-          <p className="text-xs text-muted-foreground">
-            Post-retrieval LLM evaluation. Scores relevance and rewrites query if results are poor. Requires a RAG gen model.
-          </p>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox
-              checked={cragEnabled}
-              onCheckedChange={(checked) => setCragEnabled(checked === true)}
-            />
-            <span className="text-sm">Enable CRAG evaluation</span>
-          </label>
-          {cragEnabled && (
-            <div className="space-y-3 pl-6">
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">
-                  Upper threshold (Correct): {cragUpperThreshold}
-                </label>
-                <p className="text-[10px] text-muted-foreground/70">Score above this = results are relevant.</p>
-                <input type="range" min={10} max={90} step={5}
-                  value={cragUpperThreshold}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    setCragUpperThreshold(val);
-                    if (cragLowerThreshold >= val) setCragLowerThreshold(Math.max(5, val - 5));
-                  }}
-                  className="w-full"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">
-                  Lower threshold (Rewrite): {cragLowerThreshold}
-                </label>
-                <p className="text-[10px] text-muted-foreground/70">Score below this = attempt query rewrite.</p>
-                <input type="range" min={5} max={50} step={5}
-                  value={cragLowerThreshold}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    setCragLowerThreshold(val);
-                    if (cragUpperThreshold <= val) setCragUpperThreshold(Math.min(90, val + 5));
-                  }}
-                  className="w-full"
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* RAPTOR (Hierarchical Indexing) */}
-        <div className="space-y-2">
-          <label className="text-sm font-medium">
-            Hierarchical Indexing (RAPTOR) <span className="text-xs text-muted-foreground font-normal">(optional)</span>
-          </label>
-          <p className="text-xs text-muted-foreground">
-            Builds multi-level summary trees during indexing. Improves broad queries
-            (&ldquo;what is this about?&rdquo;) by searching summaries at different abstraction levels.
-            Requires a RAG gen model. Increases indexing time.
-          </p>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox
-              checked={raptorEnabled}
-              onCheckedChange={(checked) => setRaptorEnabled(checked === true)}
-            />
-            <span className="text-sm">Enable RAPTOR indexing</span>
-          </label>
-          {raptorEnabled && !ragGenModel && !llmModel && (
-            <p className="text-xs text-yellow-600 dark:text-yellow-400">
-              RAPTOR requires a RAG gen model for summarization. Configure one above.
-            </p>
-          )}
-          {raptorEnabled && (
-            <div className="space-y-3 pl-6">
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">
-                  Retrieval token budget: {raptorTokenBudget.toLocaleString()} tokens
-                </label>
-                <input type="range" min={500} max={4000} step={100}
-                  value={raptorTokenBudget}
-                  onChange={(e) => setRaptorTokenBudget(Number(e.target.value))}
-                  className="w-full"
-                />
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>500</span>
-                  <span>4000</span>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Retrieval mode</label>
-                <select
-                  value={raptorRetrievalMode}
-                  onChange={(e) => setRaptorRetrievalMode(e.target.value)}
-                  className="w-full px-3 py-1.5 text-sm border rounded-md bg-background"
-                >
-                  <option value="collapsed">Collapsed Tree (flat ranking)</option>
-                  <option value="tree_traversal">Tree Traversal (top-down)</option>
-                </select>
-              </div>
-            </div>
           )}
         </div>
 

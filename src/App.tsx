@@ -4,7 +4,6 @@ import { PDFPrintView } from "@/components/pdf/PDFPrintView";
 import { Toaster } from "@/components/ui/Toaster";
 import { DeleteConfirmationDialog } from "@/components/dialogs/DeleteConfirmationDialog";
 import { ClaimRelationsDialog } from "@/components/dialogs/ClaimRelationsDialog";
-import { RaptorSummariesDialog } from "@/components/dialogs/RaptorSummariesDialog";
 import { AdvancedSearchDialog } from "@/components/search/AdvancedSearchDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { listen } from "@tauri-apps/api/event";
@@ -180,7 +179,6 @@ function AppShell() {
       <Toaster />
       <DeleteConfirmationDialog />
       <ClaimRelationsDialog />
-      <RaptorSummariesDialog />
       <AdvancedSearchDialog />
     </>
   );

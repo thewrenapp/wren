@@ -85,7 +85,7 @@ export function useSearchEffects(state: SearchState) {
           setSearchPipeline(null);
           const response = await ragSearch(search.trim(), 20);
           setSemanticResults(response.results);
-          setSearchPipeline({ strategy: response.strategy, reranked: response.reranked, cragActive: response.cragActive, raptorActive: response.raptorActive, queryTimeMs: response.queryTimeMs });
+          setSearchPipeline({ reranked: response.reranked, queryTimeMs: response.queryTimeMs });
           setSearchResults([]); setFullSearchResults([]);
           setSearchTotal(response.totalResults); setHasMoreResults(false);
         } else if (searchMode === "full") {

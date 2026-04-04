@@ -3063,7 +3063,7 @@ dependencies = [
  "imageproc",
  "itertools 0.14.0",
  "lazy_static",
- "ndarray 0.16.1",
+ "ndarray",
  "objc2 0.5.2",
  "objc2-foundation 0.2.2",
  "objc2-vision",
@@ -5524,7 +5524,7 @@ dependencies = [
  "lance-table",
  "libm",
  "log",
- "ndarray 0.16.1",
+ "ndarray",
  "num-traits",
  "object_store",
  "prost",
@@ -6397,23 +6397,11 @@ checksum = "7b5c17de023a86f59ed79891b2e5d5a94c705dbe904a5b5c9c952ea6221b03e4"
 dependencies = [
  "approx",
  "matrixmultiply",
- "nalgebra-macros",
  "num-complex",
  "num-rational",
  "num-traits",
  "simba",
  "typenum",
-]
-
-[[package]]
-name = "nalgebra-macros"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "254a5372af8fc138e36684761d3c0cdb758a4410e938babcff1c860ce14ddbfc"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.115",
 ]
 
 [[package]]
@@ -6431,19 +6419,6 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "tempfile",
-]
-
-[[package]]
-name = "ndarray"
-version = "0.15.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb12d4e967ec485a5f71c6311fe28158e9d6f4bc4a447b474184d0f91a8fa32"
-dependencies = [
- "matrixmultiply",
- "num-complex",
- "num-integer",
- "num-traits",
- "rawpointer",
 ]
 
 [[package]]
@@ -7147,7 +7122,7 @@ checksum = "52afb44b6b0cffa9bf45e4d37e5a4935b0334a51570658e279e9e3e6cf324aa5"
 dependencies = [
  "half",
  "libloading 0.8.9",
- "ndarray 0.16.1",
+ "ndarray",
  "ort-sys",
  "sha2",
  "tracing",
@@ -12412,12 +12387,8 @@ dependencies = [
  "html2text",
  "lancedb",
  "lopdf",
- "nalgebra",
- "ndarray 0.15.6",
  "objc",
  "ort-sys",
- "rand 0.8.5",
- "rayon",
  "regex",
  "reqwest 0.12.28",
  "serde",

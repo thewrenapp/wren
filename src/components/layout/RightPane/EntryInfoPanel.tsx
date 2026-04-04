@@ -18,7 +18,7 @@ import {
   Sparkles,
   Network,
   CheckCircle2,
-  TreePine,
+  AlertTriangle,
 } from "lucide-react";
 import { AttachmentIcon } from "@/lib/icons";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -753,10 +753,13 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
           icon={<Network className="h-4 w-4" />}
         >
           {entry.ragIndexed ? (
-            <SemanticIndexContent entry={entry} collectionIds={fullEntry?.collections ?? []} />
-          ) : (
+            <SemanticIndexContent entry={entry} />
+          ) : entry.hasExtractedText ? (
             <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">Not yet indexed</p>
+              <div className="flex items-center gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-400">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Not indexed for AI search
+              </div>
               <Button
                 variant="outline"
                 size="sm"
@@ -772,9 +775,11 @@ export function EntryInfoPanel({ entry }: EntryInfoPanelProps) {
                 }}
               >
                 <Network className="h-3.5 w-3.5" />
-                Build Semantic Index
+                Build Index
               </Button>
             </div>
+          ) : (
+            <p className="text-xs text-muted-foreground/50">No text extracted yet</p>
           )}
         </InfoSection>
 
@@ -1043,10 +1048,8 @@ function formatItemType(type: string): string {
   return typeMap[type] || type.replace(/([A-Z])/g, " $1").trim();
 }
 
-/** Semantic Index panel content — shows status, RAPTOR summaries, and collection cross-doc summaries. */
-function SemanticIndexContent({ entry, collectionIds }: { entry: EntrySummary; collectionIds: number[] }) {
-  const { showRaptorDialog } = useUIStore();
-
+/** Semantic Index panel content — shows indexed status with re-index option. */
+function SemanticIndexContent({ entry }: { entry: EntrySummary }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1058,15 +1061,6 @@ function SemanticIndexContent({ entry, collectionIds }: { entry: EntrySummary; c
           Indexed {formatRelativeDate(entry.ragIndexedAt)}
         </p>
       )}
-      <Button
-        variant="outline"
-        size="sm"
-        className="w-full gap-2"
-        onClick={() => showRaptorDialog(entry.id, entry.title, collectionIds)}
-      >
-        <TreePine className="h-3.5 w-3.5" />
-        View RAPTOR Summaries
-      </Button>
       <Button
         variant="outline"
         size="sm"

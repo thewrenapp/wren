@@ -40,22 +40,15 @@ pub struct DocumentChunk {
 }
 use super::store::VectorStore;
 
-/// Config for optional RAPTOR indexing.
-pub struct RaptorIndexConfig {
-    pub enabled: bool,
-    pub gen_config: super::retrieval::RagGenModelConfig,
-}
-
 /// Index a single entry's attachments into the RAG vector store.
 ///
-/// Flow: read extracted text → chunk → embed → upsert into LanceDB → (optional) RAPTOR.
+/// Flow: read extracted text -> chunk -> embed -> upsert into LanceDB.
 pub async fn index_entry(
     db: &SqlitePool,
     store: &VectorStore,
     embed_config: &EmbeddingConfig,
     entry_id: i64,
     library_path: &Path,
-    raptor: Option<&RaptorIndexConfig>,
 ) -> Result<usize, String> {
     // 1. Get attachments with extracted markdown text
     let attachments: Vec<(i64, String, Option<String>)> = sqlx::query_as(
@@ -154,31 +147,6 @@ pub async fn index_entry(
             Ok(count) => {
                 total_chunks_indexed += count;
                 tracing::info!("Indexed {} chunks for {} into vector store", count, filename);
-
-                // 6b. Build RAPTOR tree if enabled
-                if let Some(raptor_cfg) = raptor {
-                    if raptor_cfg.enabled {
-                        let chunk_ids: Vec<String> = chunks.iter().map(|c| c.chunk_id.clone()).collect();
-                        let chunk_contents: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
-                        let raptor_config = super::raptor::RaptorConfig::default();
-
-                        match super::raptor::build_raptor_tree(
-                            &document_id, filename,
-                            &chunk_ids, &chunk_contents, &embed_result.embeddings,
-                            embed_config, &raptor_cfg.gen_config, store,
-                            db, &format!("entry_{}", entry_id),
-                            &raptor_config,
-                            |detail| { tracing::debug!("RAPTOR: {}", detail); },
-                        ).await {
-                            Ok(summary_count) => {
-                                tracing::info!("RAPTOR: built {} summary nodes for {}", summary_count, filename);
-                            }
-                            Err(e) => {
-                                tracing::warn!("RAPTOR tree building failed for {}: {}", filename, e);
-                            }
-                        }
-                    }
-                }
             }
             Err(e) => {
                 tracing::error!("Vector store upsert failed for {}: {}", filename, e);
@@ -205,7 +173,6 @@ pub async fn index_all_entries(
     store: &VectorStore,
     embed_config: &EmbeddingConfig,
     library_path: &Path,
-    raptor: Option<&RaptorIndexConfig>,
     progress_callback: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
 ) -> Result<usize, String> {
     // Find entries with extracted text but not yet RAG-indexed
@@ -232,7 +199,7 @@ pub async fn index_all_entries(
             cb(i, total, &format!("Indexing: {}", title));
         }
 
-        match index_entry(db, store, embed_config, *entry_id, library_path, raptor).await {
+        match index_entry(db, store, embed_config, *entry_id, library_path).await {
             Ok(count) => {
                 total_chunks += count;
                 tracing::info!("RAG indexed entry {} ({}) — {} chunks", entry_id, title, count);
@@ -246,7 +213,30 @@ pub async fn index_all_entries(
     Ok(total_chunks)
 }
 
-/// Chunk prose text into DocumentChunks (no tree-sitter, just paragraph-based).
+/// Parse a `<!-- page N -->` comment, returning the page number if matched.
+fn parse_page_marker(s: &str) -> Option<usize> {
+    let s = s.trim();
+    s.strip_prefix("<!-- page ")
+        .and_then(|rest| rest.strip_suffix(" -->"))
+        .and_then(|num| num.trim().parse::<usize>().ok())
+}
+
+/// Check if a paragraph is a references/bibliography heading.
+fn is_references_heading(s: &str) -> bool {
+    let s = s.trim().trim_start_matches('#').trim().to_lowercase();
+    matches!(
+        s.as_str(),
+        "references"
+            | "bibliography"
+            | "works cited"
+            | "literature cited"
+            | "cited references"
+            | "reference list"
+    )
+}
+
+/// Chunk prose text into DocumentChunks (paragraph-based).
+/// Recognises `<!-- page N -->` markers injected by the extractor to track page numbers.
 fn chunk_prose_text(
     text: &str,
     document_id: &str,
@@ -257,16 +247,29 @@ fn chunk_prose_text(
     let mut offset = 0usize;
     let mut chunk_index = 0usize;
 
-    // Split by paragraphs (double newline)
     let paragraphs: Vec<&str> = text.split("\n\n").collect();
     let mut current_chunk = String::new();
     let mut chunk_start = 0usize;
+    let mut current_page: Option<usize> = None;
+    let mut chunk_page: Option<usize> = None; // page of first content in current chunk
 
     for para in &paragraphs {
         let para_trimmed = para.trim();
         if para_trimmed.is_empty() {
-            offset += para.len() + 2; // +2 for "\n\n"
+            offset += para.len() + 2;
             continue;
+        }
+
+        // Check for page marker — update tracking but don't add to chunk content
+        if let Some(pg) = parse_page_marker(para_trimmed) {
+            current_page = Some(pg);
+            offset += para.len() + 2;
+            continue;
+        }
+
+        // Stop chunking once we hit a references/bibliography section
+        if para_trimmed.starts_with('#') && is_references_heading(para_trimmed) {
+            break;
         }
 
         if !current_chunk.is_empty()
@@ -278,7 +281,7 @@ fn chunk_prose_text(
                     chunk_id: uuid::Uuid::new_v4().to_string(),
                     document_id: document_id.to_string(),
                     chunk_index,
-                    page_number: None,
+                    page_number: chunk_page,
                     section_name: None,
                     content: current_chunk.clone(),
                     start_offset: chunk_start,
@@ -294,13 +297,18 @@ fn chunk_prose_text(
             } else {
                 0
             };
-            // Ensure we don't split a multi-byte character
             while overlap_start > 0 && !current_chunk.is_char_boundary(overlap_start) {
                 overlap_start += 1;
             }
             let overlap_text = current_chunk[overlap_start..].to_string();
             chunk_start = offset.saturating_sub(overlap_text.len());
             current_chunk = overlap_text;
+            chunk_page = current_page; // new chunk starts on current page
+        }
+
+        // Set page for this chunk if not yet set
+        if chunk_page.is_none() {
+            chunk_page = current_page;
         }
 
         if !current_chunk.is_empty() {
@@ -316,7 +324,7 @@ fn chunk_prose_text(
             chunk_id: uuid::Uuid::new_v4().to_string(),
             document_id: document_id.to_string(),
             chunk_index,
-            page_number: None,
+            page_number: chunk_page,
             section_name: None,
             content: current_chunk.clone(),
             start_offset: chunk_start,
@@ -324,7 +332,6 @@ fn chunk_prose_text(
             token_estimate: (current_chunk.len() as i64) / 4,
         });
     } else if !current_chunk.is_empty() && !chunks.is_empty() {
-        // Append short remainder to last chunk
         if let Some(last) = chunks.last_mut() {
             last.content.push_str("\n\n");
             last.content.push_str(&current_chunk);
@@ -332,12 +339,11 @@ fn chunk_prose_text(
             last.token_estimate = (last.content.len() as i64) / 4;
         }
     } else if !current_chunk.is_empty() {
-        // Only chunk — include even if small
         chunks.push(DocumentChunk {
             chunk_id: uuid::Uuid::new_v4().to_string(),
             document_id: document_id.to_string(),
             chunk_index,
-            page_number: None,
+            page_number: chunk_page,
             section_name: None,
             content: current_chunk.clone(),
             start_offset: chunk_start,
@@ -375,83 +381,3 @@ async fn embed_per_chunk(
     Ok((good_chunks, good_embeddings))
 }
 
-/// Build cross-document RAPTOR summaries for a collection.
-///
-/// Reads the top-level per-document summaries for all entries in the collection,
-/// clusters them, and builds a cross-document summary tier.
-pub async fn build_collection_raptor(
-    db: &SqlitePool,
-    store: &VectorStore,
-    embed_config: &EmbeddingConfig,
-    gen_config: &super::retrieval::RagGenModelConfig,
-    collection_id: i64,
-) -> Result<usize, String> {
-    let scope_id = format!("collection_{}", collection_id);
-
-    // Delete old cross-doc summaries for this collection
-    let _ = store.delete_document(&scope_id).await;
-
-    // Get attachment IDs for all entries in this collection
-    let attachment_ids: Vec<i64> = sqlx::query_scalar(
-        r#"SELECT DISTINCT a.id
-           FROM attachments a
-           JOIN entries e ON e.id = a.entry_id
-           JOIN collection_entries ec ON ec.entry_id = e.id
-           WHERE ec.collection_id = ?
-             AND a.markdown_path IS NOT NULL
-             AND e.is_deleted = 0"#,
-    )
-    .bind(collection_id)
-    .fetch_all(db)
-    .await
-    .map_err(|e| format!("Failed to query collection entries: {}", e))?;
-
-    if attachment_ids.is_empty() {
-        return Ok(0);
-    }
-
-    // Build filter to get per-document RAPTOR summaries (level > 0) for these attachments
-    let doc_id_filter = attachment_ids
-        .iter()
-        .map(|id| format!("document_id = '{}'", id))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-    let filter = format!("level > 0 AND ({})", doc_id_filter);
-
-    let per_doc_summaries = store.get_nodes_with_embeddings(Some(&filter)).await?;
-
-    if per_doc_summaries.is_empty() {
-        tracing::info!(
-            "No per-document RAPTOR summaries found for collection {} ({} entries). \
-             Index documents with RAPTOR enabled first.",
-            collection_id, attachment_ids.len()
-        );
-        return Ok(0);
-    }
-
-    tracing::info!(
-        "Building cross-doc RAPTOR for collection {} with {} per-doc summaries from {} entries",
-        collection_id, per_doc_summaries.len(), attachment_ids.len()
-    );
-
-    let config = super::raptor::RaptorConfig::default();
-
-    let count = super::raptor::build_cross_doc_tier(
-        &scope_id,
-        &per_doc_summaries,
-        embed_config,
-        gen_config,
-        store,
-        db,
-        &config,
-        |detail| tracing::debug!("RAPTOR cross-doc [collection {}]: {}", collection_id, detail),
-    )
-    .await?;
-
-    tracing::info!(
-        "Cross-doc RAPTOR for collection {}: built {} summary nodes",
-        collection_id, count
-    );
-
-    Ok(count)
-}
