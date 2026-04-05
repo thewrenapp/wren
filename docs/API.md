@@ -133,6 +133,41 @@ Response:
 ]
 ```
 
+### Add Note
+
+Adds a markdown note file to an entry. Useful for programmatically attaching notes from AI tools, scripts, or other apps.
+
+```
+POST /api/items/{key}/notes
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | `string` | Yes | Markdown content of the note |
+| `title` | `string` | No | Display title stored in the database (defaults to first 100 chars of content) |
+| `filename` | `string` | No | Filename for the note on disk (`.md` appended if missing; defaults to `Note.md` / `Note_2.md` etc.) |
+
+```bash
+curl -X POST -H "X-Wren-Token: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "# Summary\nKey findings from the paper...", "title": "AI Summary", "filename": "AI Summary"}' \
+  http://127.0.0.1:1289/api/items/ab0e2e23-c664-41ab-b360-7eda45b6c190/notes
+```
+
+Response:
+```json
+{
+  "id": 42,
+  "key": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
+  "attachmentType": "note",
+  "title": "AI Summary",
+  "filePath": "/Users/you/Wren/library/entries/ab0e2e23/AI Summary.md",
+  "url": null,
+  "pageCount": null,
+  "fileSize": 42,
+  "markdownPath": "/Users/you/Wren/library/entries/ab0e2e23/AI Summary.md"
+}
+```
+
 ---
 
 ## Library Browsing Endpoints
@@ -294,6 +329,9 @@ curl -H "X-Wren-Token: $TOKEN" http://127.0.0.1:1289/api/items/$KEY/cite
 curl -H "X-Wren-Token: $TOKEN" http://127.0.0.1:1289/api/items/$KEY/bibtex
 curl -H "X-Wren-Token: $TOKEN" http://127.0.0.1:1289/api/items/$KEY/json
 curl -H "X-Wren-Token: $TOKEN" http://127.0.0.1:1289/api/items/$KEY/attachments
+curl -X POST -H "X-Wren-Token: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "# Note", "filename": "My Note"}' \
+  http://127.0.0.1:1289/api/items/$KEY/notes
 
 # Browse
 curl -H "X-Wren-Token: $TOKEN" "http://127.0.0.1:1289/api/items?limit=10&offset=0"

@@ -5,6 +5,9 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::sync::Arc;
+use uuid::Uuid;
+
+use tauri::Emitter;
 
 use super::ConnectorState;
 use crate::commands::export::{
@@ -85,6 +88,13 @@ pub struct SearchParams {
     pub q: Option<String>,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+pub struct AddNoteRequest {
+    pub content: String,
+    pub title: Option<String>,
+    pub filename: Option<String>,
 }
 
 // =====================================================
@@ -219,6 +229,104 @@ pub async fn get_item_attachments(
         .collect();
 
     Ok(Json(attachments))
+}
+
+/// POST /api/items/:key/notes — add a markdown note to an entry
+pub async fn add_item_note(
+    headers: HeaderMap,
+    State(state): State<Arc<ConnectorState>>,
+    Path(key): Path<String>,
+    Json(body): Json<AddNoteRequest>,
+) -> Result<Json<ApiAttachment>, StatusCode> {
+    validate_token(&headers, &state.token)?;
+    let entry_id = resolve_entry_key(&state.db, &key).await?;
+
+    let content = body.content.trim();
+    if content.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let library_path = state.library_path.read().await;
+    let entry_dir = library_path.join("library").join("entries").join(&key);
+    std::fs::create_dir_all(&entry_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Use provided filename, or fall back to Note.md / Note_N.md
+    let note_filename = if let Some(ref fname) = body.filename {
+        let f = fname.trim();
+        if f.ends_with(".md") { f.to_string() } else { format!("{}.md", f) }
+    } else {
+        let existing_notes: i64 = sqlx::query_scalar(
+            r#"SELECT COUNT(*) FROM attachments a
+               JOIN attachment_types at ON a.attachment_type_id = at.id
+               WHERE a.entry_id = ? AND at.name = 'note'"#,
+        )
+        .bind(entry_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        if existing_notes == 0 {
+            "Note.md".to_string()
+        } else {
+            format!("Note_{}.md", existing_notes + 1)
+        }
+    };
+
+    let note_path = entry_dir.join(&note_filename);
+
+    std::fs::write(&note_path, content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rel_path = crate::utils::to_relative_path(&library_path, &note_path);
+
+    let note_type_id: i64 =
+        sqlx::query_scalar("SELECT id FROM attachment_types WHERE name = 'note'")
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(2);
+
+    let note_key = Uuid::new_v4().to_string();
+    let title = body
+        .title
+        .unwrap_or_else(|| content.chars().take(100).collect::<String>());
+
+    sqlx::query(
+        r#"INSERT INTO attachments (key, entry_id, attachment_type_id, title, file_path, markdown_path)
+           VALUES (?, ?, ?, ?, ?, ?)"#,
+    )
+    .bind(&note_key)
+    .bind(entry_id)
+    .bind(note_type_id)
+    .bind(&title)
+    .bind(&rel_path)
+    .bind(&rel_path)
+    .execute(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let att_id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Notify the UI
+    let _ = state.app_handle.emit(
+        "connector:item-saved",
+        serde_json::json!({ "id": entry_id, "key": key }),
+    );
+
+    let abs_path = crate::utils::resolve_path(&library_path, &rel_path);
+    Ok(Json(ApiAttachment {
+        id: att_id,
+        key: note_key,
+        attachment_type: "note".to_string(),
+        title: Some(title),
+        file_path: Some(abs_path.clone()),
+        url: None,
+        page_count: None,
+        file_size: Some(content.len() as i64),
+        markdown_path: Some(abs_path),
+    }))
 }
 
 // =====================================================

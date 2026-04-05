@@ -108,17 +108,17 @@ pub async fn setup_sync_folder(state: State<'_, AppState>, sync_folder: String) 
             if let Ok(dirs) = fs::read_dir(&src_entries) {
                 for entry in dirs.flatten() {
                     let dst = dst_entries.join(entry.file_name());
-                    if !dst.exists() {
-                        if let Err(e) = fs::rename(entry.path(), &dst) {
-                            // rename fails across filesystems — fall back to copy + delete
-                            tracing::warn!("rename failed, trying copy: {}", e);
-                            if entry.path().is_dir() {
-                                let _ = copy_dir_all(&entry.path(), &dst);
-                            } else {
-                                let _ = fs::copy(entry.path(), &dst);
-                            }
-                            let _ = fs::remove_dir_all(entry.path());
+                    if !dst.exists()
+                        && let Err(e) = fs::rename(entry.path(), &dst)
+                    {
+                        // rename fails across filesystems — fall back to copy + delete
+                        tracing::warn!("rename failed, trying copy: {}", e);
+                        if entry.path().is_dir() {
+                            let _ = copy_dir_all(&entry.path(), &dst);
+                        } else {
+                            let _ = fs::copy(entry.path(), &dst);
                         }
+                        let _ = fs::remove_dir_all(entry.path());
                     }
                 }
             }

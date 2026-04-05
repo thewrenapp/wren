@@ -36,6 +36,7 @@ pub async fn start_server(
         .route("/api/items/{key}/bibtex", get(api_handlers::get_item_bibtex))
         .route("/api/items/{key}/json", get(api_handlers::get_item_json))
         .route("/api/items/{key}/attachments", get(api_handlers::get_item_attachments))
+        .route("/api/items/{key}/notes", post(api_handlers::add_item_note))
         .route("/api/search", get(api_handlers::search_items))
         .route("/api/collections", get(api_handlers::list_collections))
         .route("/api/collections/{id}/items", get(api_handlers::list_collection_items))
