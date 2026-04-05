@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use crate::sync::writer::sync_entry_json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tauri::State;
@@ -230,6 +231,9 @@ pub async fn create_entry_link(
     .await
     .map_err(|e| format!("Failed to create entry link: {}", e))?;
 
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, source_entry_id).await;
+
     Ok(result.last_insert_rowid())
 }
 
@@ -239,11 +243,26 @@ pub async fn delete_entry_link(
     state: State<'_, AppState>,
     id: i64,
 ) -> Result<(), String> {
+    // Look up source_entry_id before deletion
+    let source_id: Option<i64> = sqlx::query_scalar(
+        "SELECT source_entry_id FROM entry_links WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
     sqlx::query("DELETE FROM entry_links WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await
         .map_err(|e| format!("Failed to delete entry link: {}", e))?;
+
+    if let Some(eid) = source_id {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, eid).await;
+    }
 
     Ok(())
 }

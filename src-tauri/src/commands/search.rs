@@ -214,7 +214,7 @@ pub async fn save_markdown_content(
         } else {
             // New note with no file — create in entry's files directory
             // Safety: entry_key and attachment_key are server-generated UUIDs, not user input
-            let dir = library_path.join("files").join(&attachment.entry_key);
+            let dir = library_path.join("library").join("entries").join(&attachment.entry_key);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let md_path = dir.join(format!("note-{}.md", &attachment.attachment_key));
             std::fs::write(&md_path, &content).map_err(|e| e.to_string())?;
@@ -240,13 +240,11 @@ pub async fn save_markdown_content(
         return Err("Attachment has no file path".to_string());
     };
 
-    // Update DB: notes set both file_path (absolute) and markdown_path (relative)
+    // Update DB: notes set both file_path and markdown_path (both relative)
     if is_note {
-        let full_path = library_path.join(&md_relative_path);
-        let abs_path = full_path.to_string_lossy().to_string();
         sqlx::query("UPDATE attachments SET markdown_path = ?, file_path = ?, date_modified = datetime('now') WHERE id = ?")
             .bind(&md_relative_path)
-            .bind(&abs_path)
+            .bind(&md_relative_path)
             .bind(attachment_id)
             .execute(&state.db)
             .await

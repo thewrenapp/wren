@@ -134,6 +134,45 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default", initialP
     };
   }, [entry]);
 
+  // Find the target attachment (computed from entry, not a hook)
+  const targetAttachment = useMemo(() => {
+    if (!entry) return undefined;
+    let target: Attachment | undefined;
+
+    if (attachmentId) {
+      target = entry.attachments?.find(
+        (a: Attachment) => String(a.id) === attachmentId
+      );
+    }
+
+    if (!target) {
+      const viewableTypes = ["pdf", "epub", "snapshot", "image"];
+      for (const type of viewableTypes) {
+        target = entry.attachments?.find(
+          (a: Attachment) => a.attachmentType === type
+        );
+        if (target) break;
+      }
+    }
+    if (!target) {
+      target = entry.attachments?.find(
+        (a: Attachment) => a.filePath
+      );
+    }
+    return target;
+  }, [entry, attachmentId]);
+
+  // Sync resolved attachmentId back to the tab store so context menu actions work
+  useEffect(() => {
+    if (targetAttachment && !attachmentId) {
+      const { tabs, updateTab } = useTabStore.getState();
+      const tab = tabs.find(t => t.type === "entry" && t.entryId === entryId);
+      if (tab) {
+        updateTab(tab.id, { attachmentId: String(targetAttachment.id) });
+      }
+    }
+  }, [targetAttachment, attachmentId, entryId]);
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -149,41 +188,6 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default", initialP
       </div>
     );
   }
-
-  // Find the attachment to display
-  let targetAttachment: Attachment | undefined;
-
-  if (attachmentId) {
-    targetAttachment = entry.attachments?.find(
-      (a: Attachment) => String(a.id) === attachmentId
-    );
-  }
-
-  const viewableTypes = ["pdf", "epub", "snapshot", "image"];
-  if (!targetAttachment) {
-    for (const type of viewableTypes) {
-      targetAttachment = entry.attachments?.find(
-        (a: Attachment) => a.attachmentType === type
-      );
-      if (targetAttachment) break;
-    }
-  }
-  if (!targetAttachment) {
-    targetAttachment = entry.attachments?.find(
-      (a: Attachment) => a.filePath
-    );
-  }
-
-  // Sync resolved attachmentId back to the tab store so context menu actions work
-  useEffect(() => {
-    if (targetAttachment && !attachmentId) {
-      const { tabs, updateTab } = useTabStore.getState();
-      const tab = tabs.find(t => t.type === "entry" && t.entryId === entryId);
-      if (tab) {
-        updateTab(tab.id, { attachmentId: String(targetAttachment.id) });
-      }
-    }
-  }, [targetAttachment, attachmentId, entryId]);
 
   const isStacked = libraryLayout === "stacked";
 

@@ -49,7 +49,7 @@ export function StorageSection() {
               value={libraryPath || actualPath}
               onChange={(e) => setLibraryPath(e.target.value)}
               className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-              placeholder="~/Wren"
+              placeholder="~/.wren"
             />
             <Button variant="outline" size="default" onClick={handleBrowse}>
               <FolderOpen className="h-4 w-4 mr-2" />

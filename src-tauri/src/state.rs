@@ -28,11 +28,16 @@ impl AppState {
 
         // Ensure library directory exists
         std::fs::create_dir_all(&library_path)?;
-        std::fs::create_dir_all(library_path.join("files"))?;
-        std::fs::create_dir_all(library_path.join(".wren"))?;
+        std::fs::create_dir_all(library_path.join("library").join("entries"))?;
+
+        // Migrate old directory layouts (one-time, idempotent)
+        Self::migrate_local_dir(&library_path);
+        Self::migrate_files_to_library(&library_path);
+
+        std::fs::create_dir_all(library_path.join(".local.nosync"))?;
 
         // Initialize database
-        let db_path = library_path.join(".wren").join("wren.db");
+        let db_path = library_path.join(".local.nosync").join("wren.db");
         let db = db::connection::create_pool(&db_path).await?;
 
         // Run migrations
@@ -43,12 +48,28 @@ impl AppState {
         // Backfill note content into parsed_content table
         Self::backfill_note_parsed_content(&db, &library_path).await;
 
-        // Initialize full-text search index
-        let index_path = library_path.join(".wren").join("tantivy_index");
+        // Migrate absolute file paths to relative (one-time, idempotent)
+        Self::migrate_paths_to_relative(&db, &library_path).await;
+
+        // Initialize full-text search index (before sync so sync can reindex)
+        let index_path = library_path.join(".local.nosync").join("tantivy_index");
         let search_index = SearchIndex::open_or_create(&index_path)?;
         tracing::info!("Search index initialized at {:?}", index_path);
 
         let search_index = Arc::new(search_index);
+
+        // Sync: reconcile entry.json files with SQLite + rebuild indices
+        if let Err(e) = crate::sync::engine::reconcile_on_startup(
+            &db, &library_path, Some(&search_index),
+        ).await {
+            tracing::warn!("Startup sync reconciliation failed: {}", e);
+        }
+
+        // Write global metadata files (collections.json, tags.json, saved_searches.json)
+        crate::sync::globals::sync_collections_json(&db, &library_path).await;
+        crate::sync::globals::sync_tags_json(&db, &library_path).await;
+        crate::sync::globals::sync_saved_searches_json(&db, &library_path).await;
+        crate::sync::globals::sync_settings_json(&db, &library_path).await;
 
         let library_path = Arc::new(RwLock::new(library_path));
 
@@ -72,6 +93,13 @@ impl AppState {
         // Start the background job scheduler
         job_queue.start_scheduler();
         tracing::info!("Job queue initialized");
+
+        // Start file watcher for sync (watches files/ for entry.json changes)
+        crate::sync::watcher::start_watcher(
+            db.clone(),
+            library_path.clone(),
+            app_handle.clone(),
+        );
 
         // Start connector server if enabled
         let connector_server = Arc::new(RwLock::new(None));
@@ -165,10 +193,154 @@ impl AppState {
         self.pdf_parser.clone()
     }
 
+    /// One-time migration: move old files/ directory to library/entries/
+    fn migrate_files_to_library(library_path: &std::path::Path) {
+        let old_dir = library_path.join("files");
+        let new_dir = library_path.join("library").join("entries");
+
+        // Skip if old dir doesn't exist or is a symlink, or new dir already has content
+        if !old_dir.exists() || old_dir.is_symlink() {
+            return;
+        }
+
+        // Check if new dir already has entry folders
+        if new_dir.exists() {
+            if let Ok(mut entries) = std::fs::read_dir(&new_dir) {
+                if entries.next().is_some() {
+                    return; // Already migrated
+                }
+            }
+        }
+
+        tracing::info!("Migrating {:?} → {:?}", old_dir, new_dir);
+
+        if let Err(e) = std::fs::create_dir_all(&new_dir) {
+            tracing::error!("Failed to create {:?}: {}", new_dir, e);
+            return;
+        }
+
+        // Move each entry folder from files/ to library/entries/
+        if let Ok(entries) = std::fs::read_dir(&old_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let src = entry.path();
+                    let dst = new_dir.join(entry.file_name());
+                    if let Err(e) = std::fs::rename(&src, &dst) {
+                        tracing::warn!("Failed to move {:?} → {:?}: {}", src, dst, e);
+                    }
+                }
+            }
+        }
+
+        // Remove old files/ if empty
+        let _ = std::fs::remove_dir(&old_dir);
+    }
+
+    /// One-time migration: move old .wren/ directory to .local.nosync/
+    /// Handles the rename from the pre-sync layout.
+    fn migrate_local_dir(library_path: &std::path::Path) {
+        let old_dir = library_path.join(".wren");
+        let new_dir = library_path.join(".local.nosync");
+
+        if !old_dir.exists() {
+            return;
+        }
+
+        if let Err(e) = std::fs::create_dir_all(&new_dir) {
+            tracing::error!("Failed to create {:?}: {}", new_dir, e);
+            return;
+        }
+
+        // Move known items (handle both old and new names)
+        let items_to_move = [
+            "wren.db", "wren.db-wal", "wren.db-shm",
+            "tantivy_index", "rag_vectors", "lance_db",
+        ];
+        for item in &items_to_move {
+            let src = old_dir.join(item);
+            let dst = new_dir.join(item);
+            if src.exists() && !dst.exists() {
+                if let Err(e) = std::fs::rename(&src, &dst) {
+                    tracing::warn!("Failed to move {:?} → {:?}: {}", src, dst, e);
+                } else {
+                    tracing::info!("Migrated {:?} to .local.nosync/", item);
+                }
+            }
+        }
+
+        // Remove old .wren/ completely (it's all local-only data, safe to nuke)
+        if old_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&old_dir) {
+                tracing::warn!("Failed to remove old {:?}: {}", old_dir, e);
+            } else {
+                tracing::info!("Removed old .wren/ directory");
+            }
+        }
+    }
+
+    /// One-time migration: convert absolute file_path values to relative.
+    /// Safe to run multiple times — only updates paths that start with the library prefix.
+    async fn migrate_paths_to_relative(pool: &SqlitePool, library_path: &std::path::Path) {
+        // Collect all prefixes to strip: current library path + any old known paths
+        let current_prefix = format!("{}/", library_path.display());
+        let home = directories::UserDirs::new()
+            .map(|u| u.home_dir().to_path_buf());
+
+        let mut prefixes = vec![current_prefix];
+        if let Some(ref home_dir) = home {
+            // Old layout: ~/Wren/
+            prefixes.push(format!("{}/", home_dir.join("Wren").display()));
+            // Any other possible old paths
+            prefixes.push(format!("{}/", home_dir.join(".wren").display()));
+        }
+        prefixes.dedup();
+
+        for col in &["file_path", "markdown_path", "thumbnail_path"] {
+            for prefix in &prefixes {
+                let query = format!(
+                    "UPDATE attachments SET {} = SUBSTR({}, ?) WHERE {} LIKE ?",
+                    col, col, col
+                );
+                let like_pattern = format!("{}%", prefix);
+                let offset = prefix.len() as i32 + 1;
+
+                if let Ok(result) = sqlx::query(&query)
+                    .bind(offset)
+                    .bind(&like_pattern)
+                    .execute(pool)
+                    .await
+                {
+                    if result.rows_affected() > 0 {
+                        tracing::info!(
+                            "Stripped prefix '{}' from {} ({} rows)",
+                            prefix, col, result.rows_affected()
+                        );
+                    }
+                }
+            }
+        }
+
+        // Rename files/ → library/entries/ in stored paths
+        for col in &["file_path", "markdown_path", "thumbnail_path"] {
+            let query = format!(
+                "UPDATE attachments SET {} = 'library/entries/' || SUBSTR({}, 7) WHERE {} LIKE 'files/%'",
+                col, col, col
+            );
+            if let Ok(result) = sqlx::query(&query).execute(pool).await {
+                if result.rows_affected() > 0 {
+                    tracing::info!(
+                        "Renamed {} paths from files/ to library/entries/ ({} rows)",
+                        col, result.rows_affected()
+                    );
+                }
+            }
+        }
+    }
+
     fn get_library_path() -> Result<PathBuf> {
         let home = directories::UserDirs::new()
             .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-        Ok(home.home_dir().join("Wren"))
+        Ok(home.home_dir().join(".wren"))
     }
 
     pub async fn get_library_path_string(&self) -> String {

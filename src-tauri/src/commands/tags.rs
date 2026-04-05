@@ -1,5 +1,7 @@
 use crate::db::models::Tag;
 use crate::state::AppState;
+use crate::sync::globals::sync_tags_json;
+use crate::sync::writer::sync_entry_json;
 use sqlx::{Row, FromRow};
 use tauri::State;
 
@@ -74,6 +76,9 @@ pub async fn create_tag(
     .await
     .map_err(|e| e.to_string())?;
 
+    let lib = state.library_path.read().await;
+    sync_tags_json(&state.db, &lib).await;
+
     Ok(Tag {
         id: result.get("id"),
         name,
@@ -90,6 +95,9 @@ pub async fn delete_tag(state: State<'_, AppState>, id: i64) -> Result<(), Strin
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    let lib = state.library_path.read().await;
+    sync_tags_json(&state.db, &lib).await;
 
     Ok(())
 }
@@ -163,6 +171,9 @@ pub async fn merge_tags(
         merged_count += 1;
     }
 
+    let lib = state.library_path.read().await;
+    sync_tags_json(&state.db, &lib).await;
+
     Ok(merged_count)
 }
 
@@ -187,6 +198,9 @@ pub async fn bulk_update_tag_color(
             updated_count += 1;
         }
     }
+
+    let lib = state.library_path.read().await;
+    sync_tags_json(&state.db, &lib).await;
 
     Ok(updated_count)
 }
@@ -239,6 +253,9 @@ pub async fn add_tag_to_item(
         .await
         .map_err(|e| e.to_string())?;
 
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, entry_id).await;
+
     Ok(tag)
 }
 
@@ -254,6 +271,9 @@ pub async fn remove_tag_from_item(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, entry_id).await;
 
     Ok(())
 }
@@ -371,6 +391,9 @@ pub async fn update_tag(
     .fetch_one(&state.db)
     .await
     .map_err(|e| e.to_string())?;
+
+    let lib = state.library_path.read().await;
+    sync_tags_json(&state.db, &lib).await;
 
     Ok(Tag {
         id: tag.id,

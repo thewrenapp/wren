@@ -4,6 +4,7 @@ use crate::db::models::{
 };
 use crate::search::indexer::EntryMetadata;
 use crate::state::AppState;
+use crate::sync::writer::sync_entry_json;
 use sqlx::{FromRow, Row, Sqlite, SqlitePool, QueryBuilder};
 use std::collections::HashMap;
 use tauri::State;
@@ -1741,6 +1742,11 @@ pub async fn create_entry(
         tracing::warn!("Failed to refresh entries_fts for entry {}: {}", entry_id, e);
     }
 
+    {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, entry_id).await;
+    }
+
     get_entry(state, entry_id, None).await
 }
 
@@ -1880,6 +1886,11 @@ pub async fn update_entry(
         }
     }
 
+    {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, id).await;
+    }
+
     get_entry(state, id, None).await
 }
 
@@ -1962,7 +1973,12 @@ pub async fn sync_entry_attachment_filenames(
     for attachment_row in attachments {
         let attachment_id: i64 = attachment_row.get("id");
         let file_path_str: String = attachment_row.get("file_path");
-        let mut file_path = std::path::PathBuf::from(&file_path_str);
+        // Resolve relative paths from DB against library root
+        let mut file_path = if std::path::Path::new(&file_path_str).is_absolute() {
+            std::path::PathBuf::from(&file_path_str)
+        } else {
+            lib_path.join(&file_path_str)
+        };
 
         // Only rename files inside the library directory
         if !filename::is_in_library(&file_path, &lib_path) {
@@ -2001,8 +2017,8 @@ pub async fn sync_entry_attachment_filenames(
                         );
                         file_path = found_path.clone();
 
-                        // Update the database with the correct path
-                        let correct_path_str = found_path.to_string_lossy().to_string();
+                        // Update the database with the correct relative path
+                        let correct_path_str = crate::utils::to_relative_path(&lib_path, &found_path);
                         let _ = sqlx::query(
                             "UPDATE attachments SET file_path = ?, date_modified = datetime('now') WHERE id = ?"
                         )
@@ -2074,8 +2090,8 @@ pub async fn sync_entry_attachment_filenames(
         // Rename the file
         match std::fs::rename(&file_path, &new_path) {
             Ok(_) => {
-                // Update database with new path
-                let new_path_str = new_path.to_string_lossy().to_string();
+                // Update database with relative path
+                let new_path_str = crate::utils::to_relative_path(&lib_path, &new_path);
                 let new_title = new_path
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
@@ -2158,6 +2174,9 @@ pub async fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), Str
         serde_json::json!({ "entryId": id }),
         0,
     ).await;
+
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, id).await;
 
     Ok(())
 }
@@ -2357,6 +2376,9 @@ pub async fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), St
         }
     }
 
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, id).await;
+
     Ok(())
 }
 
@@ -2412,7 +2434,7 @@ pub async fn permanent_delete_entry(state: State<'_, AppState>, id: i64) -> Resu
     // Delete entry folder
     // Safety: entry_key is a server-generated UUID, not user input — no path traversal risk
     let library_path = state.library_path.read().await;
-    let entry_folder = library_path.join("files").join(&entry_key);
+    let entry_folder = library_path.join("library").join("entries").join(&entry_key);
     if entry_folder.exists() {
         if let Err(e) = fs::remove_dir_all(&entry_folder) {
             tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
@@ -2491,7 +2513,7 @@ pub async fn empty_trash(state: State<'_, AppState>) -> Result<i64, String> {
     // Delete entry folders
     let library_path = state.library_path.read().await;
     for key in entry_keys {
-        let entry_folder = library_path.join("files").join(&key);
+        let entry_folder = library_path.join("library").join("entries").join(&key);
         if entry_folder.exists() {
             if let Err(e) = fs::remove_dir_all(&entry_folder) {
                 tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
@@ -2540,26 +2562,32 @@ async fn get_entry_attachments_internal(
     .await
     .map_err(|e| e.to_string())?;
 
+    let library_path = state.library_path.read().await;
     Ok(attachments
         .into_iter()
-        .map(|a| Attachment {
-            id: a.id,
-            key: a.key,
-            entry_id: a.entry_id,
-            attachment_type: a.attachment_type,
-            attachment_type_display: a.attachment_type_display,
-            title: a.title,
-            file_path: a.file_path,
-            file_hash: a.file_hash,
-            file_size: a.file_size,
-            url: a.url,
-            page_count: a.page_count,
-            frontmatter: a.frontmatter,
-            thumbnail_path: a.thumbnail_path,
-            markdown_path: a.markdown_path,
-            has_parsed_content: a.has_parsed_content,
-            date_added: a.date_added,
-            date_modified: a.date_modified,
+        .map(|a| {
+            let resolve = |p: Option<String>| -> Option<String> {
+                p.map(|s| crate::utils::resolve_path(&library_path, &s))
+            };
+            Attachment {
+                id: a.id,
+                key: a.key,
+                entry_id: a.entry_id,
+                attachment_type: a.attachment_type,
+                attachment_type_display: a.attachment_type_display,
+                title: a.title,
+                file_path: resolve(a.file_path),
+                file_hash: a.file_hash,
+                file_size: a.file_size,
+                url: a.url,
+                page_count: a.page_count,
+                frontmatter: a.frontmatter,
+                thumbnail_path: resolve(a.thumbnail_path),
+                markdown_path: resolve(a.markdown_path),
+                has_parsed_content: a.has_parsed_content,
+                date_added: a.date_added,
+                date_modified: a.date_modified,
+            }
         })
         .collect())
 }
@@ -2588,6 +2616,11 @@ pub async fn get_attachment(state: State<'_, AppState>, id: i64) -> Result<Attac
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "Attachment not found".to_string())?;
 
+    let library_path = state.library_path.read().await;
+    let resolve = |p: Option<String>| -> Option<String> {
+        p.map(|s| crate::utils::resolve_path(&library_path, &s))
+    };
+
     Ok(Attachment {
         id: attachment.id,
         key: attachment.key,
@@ -2595,14 +2628,14 @@ pub async fn get_attachment(state: State<'_, AppState>, id: i64) -> Result<Attac
         attachment_type: attachment.attachment_type,
         attachment_type_display: attachment.attachment_type_display,
         title: attachment.title,
-        file_path: attachment.file_path,
+        file_path: resolve(attachment.file_path),
         file_hash: attachment.file_hash,
         file_size: attachment.file_size,
         url: attachment.url,
         page_count: attachment.page_count,
         frontmatter: attachment.frontmatter,
-        thumbnail_path: attachment.thumbnail_path,
-        markdown_path: attachment.markdown_path,
+        thumbnail_path: resolve(attachment.thumbnail_path),
+        markdown_path: resolve(attachment.markdown_path),
         has_parsed_content: attachment.has_parsed_content,
         date_added: attachment.date_added,
         date_modified: attachment.date_modified,
@@ -2642,7 +2675,12 @@ pub async fn repair_entry_attachments(
     for attachment in attachments {
         let attachment_id: i64 = attachment.get("id");
         let file_path_str: String = attachment.get("file_path");
-        let file_path = std::path::PathBuf::from(&file_path_str);
+        // Resolve relative paths from DB against library root
+        let file_path = if std::path::Path::new(&file_path_str).is_absolute() {
+            std::path::PathBuf::from(&file_path_str)
+        } else {
+            library_path.join(&file_path_str)
+        };
 
         // Skip if file exists
         if file_path.exists() {
@@ -2650,7 +2688,7 @@ pub async fn repair_entry_attachments(
         }
 
         // Try to find the file in the expected directory
-        let expected_dir = library_path.join("files").join(&entry_key);
+        let expected_dir = library_path.join("library").join("entries").join(&entry_key);
 
         if expected_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&expected_dir) {
@@ -2665,7 +2703,7 @@ pub async fn repair_entry_attachments(
 
                 if pdfs.len() == 1 {
                     let found_path = pdfs[0].path();
-                    let correct_path_str = found_path.to_string_lossy().to_string();
+                    let correct_path_str = crate::utils::to_relative_path(&library_path, &found_path);
 
                     // Update the title from the actual filename
                     let new_title = found_path
@@ -2740,15 +2778,16 @@ pub async fn create_attachment(
 pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     use std::fs;
 
-    // Get file path and markdown path before deletion
+    // Get file path, markdown path, and entry_id before deletion
     #[derive(sqlx::FromRow)]
     struct AttachmentPaths {
+        entry_id: i64,
         file_path: Option<String>,
         markdown_path: Option<String>,
     }
 
     let paths: Option<AttachmentPaths> = sqlx::query_as(
-        "SELECT file_path, markdown_path FROM attachments WHERE id = ?",
+        "SELECT entry_id, file_path, markdown_path FROM attachments WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -2770,7 +2809,7 @@ pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<()
         tracing::error!("Failed to commit search index: {}", e);
     }
 
-    if let Some(paths) = paths {
+    if let Some(ref paths) = paths {
         let library_path = state.library_path.read().await;
 
         // Delete file from disk
@@ -2799,6 +2838,11 @@ pub async fn delete_attachment(state: State<'_, AppState>, id: i64) -> Result<()
 
     for (job_id,) in pending_jobs {
         let _ = state.job_queue.cancel(&job_id, true).await;
+    }
+
+    if let Some(ref paths) = paths {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, paths.entry_id).await;
     }
 
     Ok(())
@@ -2841,7 +2885,7 @@ pub async fn add_pdf_attachment(
     // Create destination path
     let dest_dir = {
         let library_path = state.library_path.read().await;
-        library_path.join("files").join(&entry_key)
+        library_path.join("library").join("entries").join(&entry_key)
     };
 
     fs::create_dir_all(&dest_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
@@ -2930,7 +2974,11 @@ pub async fn add_pdf_attachment(
     // Copy file to library
     fs::copy(&source_path, &dest_path).map_err(|e| format!("Failed to copy file: {}", e))?;
 
-    let dest_path_str = dest_path.to_string_lossy().to_string();
+    // Store relative path in DB for portability
+    let dest_path_str = {
+        let lib = state.library_path.read().await;
+        crate::utils::to_relative_path(&lib, &dest_path)
+    };
 
     // Get attachment type ID for pdf
     let attachment_type_id: i64 =
@@ -2987,6 +3035,11 @@ pub async fn add_pdf_attachment(
         0,
     ).await {
         tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", attachment_id, e);
+    }
+
+    {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, entry_id).await;
     }
 
     get_attachment(state, attachment_id).await
@@ -3126,7 +3179,7 @@ pub async fn add_file_attachment(
     // Create destination path
     let dest_dir = {
         let library_path = state.library_path.read().await;
-        library_path.join("files").join(&entry_key)
+        library_path.join("library").join("entries").join(&entry_key)
     };
 
     fs::create_dir_all(&dest_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
@@ -3212,7 +3265,11 @@ pub async fn add_file_attachment(
     }
     cleanup(); // Remove temp zip if any
 
-    let dest_path_str = dest_path.to_string_lossy().to_string();
+    // Store relative path in DB for portability
+    let dest_path_str = {
+        let lib = state.library_path.read().await;
+        crate::utils::to_relative_path(&lib, &dest_path)
+    };
 
     // Get attachment type ID
     let attachment_type_id: i64 =
@@ -3313,6 +3370,11 @@ pub async fn add_file_attachment(
         }
     }
 
+    {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, entry_id).await;
+    }
+
     get_attachment(state, attachment_id).await
 }
 
@@ -3334,6 +3396,9 @@ pub async fn add_entry_tag(
         .await
         .map_err(|e| e.to_string())?;
 
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, entry_id).await;
+
     Ok(())
 }
 
@@ -3350,6 +3415,9 @@ pub async fn remove_entry_tag(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, entry_id).await;
 
     Ok(())
 }
@@ -3372,6 +3440,9 @@ pub async fn add_entry_to_collection(
     .await
     .map_err(|e| e.to_string())?;
 
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, entry_id).await;
+
     Ok(())
 }
 
@@ -3388,6 +3459,9 @@ pub async fn remove_entry_from_collection(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, entry_id).await;
 
     Ok(())
 }
@@ -3459,7 +3533,9 @@ pub async fn show_entry_in_finder(state: State<'_, AppState>, entry_id: i64) -> 
     .await
     .map_err(|e| e.to_string())?;
 
-    let path = file_path.ok_or_else(|| "No file attachment found for this entry".to_string())?;
+    let raw_path = file_path.ok_or_else(|| "No file attachment found for this entry".to_string())?;
+    let library_path = state.library_path.read().await;
+    let path = crate::utils::resolve_path(&library_path, &raw_path);
 
     // Reveal file in Finder (macOS) or Explorer (Windows)
     #[cfg(target_os = "macos")]
@@ -3511,12 +3587,12 @@ pub async fn show_attachment_in_finder(state: State<'_, AppState>, attachment_id
 
     let row = row.ok_or_else(|| "Attachment not found".to_string())?;
 
-    // file_path is absolute; markdown_path is relative to library
+    // Both file_path and markdown_path may be relative — resolve against library root
+    let library_path = state.library_path.read().await;
     let path = if let Some(fp) = row.file_path {
-        fp
+        crate::utils::resolve_path(&library_path, &fp)
     } else if let Some(mp) = row.markdown_path {
-        let library_path = state.library_path.read().await;
-        library_path.join(&mp).to_string_lossy().to_string()
+        crate::utils::resolve_path(&library_path, &mp)
     } else {
         return Err("No file path for this attachment".to_string());
     };
@@ -3626,10 +3702,16 @@ pub async fn show_entries_in_finder(state: State<'_, AppState>, entry_ids: Vec<i
         query_builder = query_builder.bind(id);
     }
 
-    let file_paths: Vec<String> = query_builder
+    let raw_paths: Vec<String> = query_builder
         .fetch_all(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    let library_path = state.library_path.read().await;
+    let file_paths: Vec<String> = raw_paths
+        .iter()
+        .map(|p| crate::utils::resolve_path(&library_path, p))
+        .collect();
 
     if file_paths.is_empty() {
         return Err("No file attachments found for the selected entries".to_string());
@@ -4386,6 +4468,11 @@ pub async fn duplicate_entry(state: State<'_, AppState>, id: i64) -> Result<Entr
     // Commit transaction
     tx.commit().await.map_err(|e| e.to_string())?;
 
+    {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, new_id).await;
+    }
+
     // Return the new entry
     get_entry(state, new_id, None).await
 }
@@ -4441,6 +4528,11 @@ pub async fn bulk_move_to_trash(
             serde_json::json!({ "entryId": id }),
             0,
         ).await;
+    }
+
+    let lib = state.library_path.read().await;
+    for id in &ids {
+        sync_entry_json(&state.db, &lib, *id).await;
     }
 
     let trash_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entries WHERE is_deleted = 1")
@@ -4535,6 +4627,11 @@ pub async fn bulk_restore_from_trash(
         tracing::error!("Failed to commit search index: {}", e);
     }
 
+    let lib = state.library_path.read().await;
+    for id in &ids {
+        sync_entry_json(&state.db, &lib, *id).await;
+    }
+
     Ok(())
 }
 
@@ -4612,7 +4709,7 @@ pub async fn bulk_permanent_delete(
     // Delete entry folders
     let library_path = state.library_path.read().await;
     for key in entry_keys {
-        let entry_folder = library_path.join("files").join(&key);
+        let entry_folder = library_path.join("library").join("entries").join(&key);
         if entry_folder.exists() {
             if let Err(e) = fs::remove_dir_all(&entry_folder) {
                 tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);

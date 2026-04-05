@@ -107,6 +107,15 @@ interface UIState {
     entryIds: number[];
   };
 
+  // Share dialog
+  shareDialog: {
+    open: boolean;
+    entryIds: number[];
+    entryTitles: string[];
+    collectionId: number | null;
+    collectionName: string;
+  };
+
   // Actions
   setSidebarWidth: (width: number) => void;
   setRightPaneWidth: (width: number) => void;
@@ -159,6 +168,10 @@ interface UIState {
   // Delete confirmation actions
   showDeleteConfirmation: (entryIds: number[], onConfirm: () => void) => void;
   hideDeleteConfirmation: () => void;
+
+  // Share dialog actions
+  showShareDialog: (entryIds: number[], entryTitles: string[], collectionId?: number, collectionName?: string) => void;
+  hideShareDialog: () => void;
 }
 
 // Module-level ref for delete confirmation callback to avoid storing functions in state
@@ -212,6 +225,13 @@ export const useUIStore = create<UIState>()(
       deleteConfirmation: {
         open: false,
         entryIds: [],
+      },
+      shareDialog: {
+        open: false,
+        entryIds: [],
+        entryTitles: [],
+        collectionId: null,
+        collectionName: '',
       },
 
       // Actions
@@ -375,6 +395,28 @@ export const useUIStore = create<UIState>()(
           },
         });
       },
+
+      showShareDialog: (entryIds, entryTitles, collectionId, collectionName) =>
+        set({
+          shareDialog: {
+            open: true,
+            entryIds,
+            entryTitles,
+            collectionId: collectionId ?? null,
+            collectionName: collectionName ?? '',
+          },
+        }),
+
+      hideShareDialog: () =>
+        set({
+          shareDialog: {
+            open: false,
+            entryIds: [],
+            entryTitles: [],
+            collectionId: null,
+            collectionName: '',
+          },
+        }),
     }),
     {
       name: 'wren-ui',

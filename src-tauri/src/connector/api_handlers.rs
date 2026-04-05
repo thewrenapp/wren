@@ -202,24 +202,18 @@ pub async fn get_item_attachments(
     let attachments = rows
         .iter()
         .map(|r| {
+            let file_path: Option<String> = r.get("file_path");
             let markdown_path: Option<String> = r.get("markdown_path");
-            let resolved_markdown = markdown_path.map(|p| {
-                if std::path::Path::new(&p).is_absolute() {
-                    p
-                } else {
-                    library_path.join(&p).to_string_lossy().to_string()
-                }
-            });
             ApiAttachment {
                 id: r.get("id"),
                 key: r.get("key"),
                 attachment_type: r.get("attachment_type"),
                 title: r.get("title"),
-                file_path: r.get("file_path"),
+                file_path: file_path.map(|p| crate::utils::resolve_path(&library_path, &p)),
                 url: r.get("url"),
                 page_count: r.get("page_count"),
                 file_size: r.get("file_size"),
-                markdown_path: resolved_markdown,
+                markdown_path: markdown_path.map(|p| crate::utils::resolve_path(&library_path, &p)),
             }
         })
         .collect();

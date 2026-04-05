@@ -259,7 +259,7 @@ async fn import_single_pdf_with_handle(
 
     // Create destination path
     let library_path = state.library_path.read().await;
-    let dest_dir = library_path.join("files").join(&entry_key);
+    let dest_dir = library_path.join("library").join("entries").join(&entry_key);
 
     fs::create_dir_all(&dest_dir)
         .map_err(|e| format!("Failed to create directory: {}", e))?;
@@ -483,7 +483,8 @@ async fn import_single_pdf_with_handle(
         (dest_path, title.clone())
     };
 
-    let final_dest_path_str = final_dest_path.to_string_lossy().to_string();
+    // Store relative path for portability
+    let final_dest_path_str = crate::utils::to_relative_path(&library_path, &final_dest_path);
 
     // Insert PDF attachment
     let attachment_result = sqlx::query(
@@ -2069,7 +2070,7 @@ pub async fn import_biblatex_with_files(
                 };
 
                 // Create destination directory (all attachments go under files/{entry_key}/)
-                let dest_dir = library_path.join("files").join(&entry_key);
+                let dest_dir = library_path.join("library").join("entries").join(&entry_key);
 
                 if let Err(e) = fs::create_dir_all(&dest_dir) {
                     errors.push(format!("Failed to create directory: {}", e));
@@ -2142,7 +2143,7 @@ pub async fn import_biblatex_with_files(
 
                 // Generate attachment key
                 let attachment_key = Uuid::new_v4().to_string();
-                let final_dest_path_str = final_dest_path.to_string_lossy().to_string();
+                let final_dest_path_str = crate::utils::to_relative_path(&library_path, &final_dest_path);
 
                 // Insert attachment - use renamed filename as title if file was renamed
                 let attachment_title = if auto_rename {

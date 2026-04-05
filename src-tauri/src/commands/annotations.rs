@@ -3,11 +3,41 @@ use crate::pdf::{
     HighlightAnnotation, HighlightColor,
 };
 use crate::state::AppState;
+use crate::sync::writer::sync_entry_json;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
 use std::path::PathBuf;
 use tauri::State;
 use uuid::Uuid;
+
+/// Look up entry_id for an attachment, then sync its entry.json.
+async fn sync_entry_for_attachment(state: &AppState, attachment_id: i64) {
+    if let Ok(Some(entry_id)) = sqlx::query_scalar::<_, i64>(
+        "SELECT entry_id FROM attachments WHERE id = ?"
+    )
+    .bind(attachment_id)
+    .fetch_optional(&state.db)
+    .await
+    {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, entry_id).await;
+    }
+}
+
+/// Look up entry_id for an annotation, then sync its entry.json.
+async fn sync_entry_for_annotation(state: &AppState, annotation_id: i64) {
+    if let Ok(Some(entry_id)) = sqlx::query_scalar::<_, i64>(
+        "SELECT a.entry_id FROM attachments a \
+         JOIN attachment_annotations aa ON aa.attachment_id = a.id WHERE aa.id = ?"
+    )
+    .bind(annotation_id)
+    .fetch_optional(&state.db)
+    .await
+    {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, entry_id).await;
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Annotation {
@@ -151,6 +181,8 @@ pub async fn create_annotation(
     .await
     .map_err(|e| e.to_string())?;
 
+    sync_entry_for_attachment(&state, input.attachment_id).await;
+
     Ok(Annotation {
         id: result.get("id"),
         key,
@@ -211,16 +243,34 @@ pub async fn update_annotation(
         .await
         .map_err(|e| e.to_string())?;
 
+    sync_entry_for_annotation(&state, id).await;
+
     Ok(())
 }
 
 #[tauri::command]
 pub async fn delete_annotation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    // Look up entry before deleting (the join won't work after deletion)
+    let entry_id: Option<i64> = sqlx::query_scalar(
+        "SELECT a.entry_id FROM attachments a \
+         JOIN attachment_annotations aa ON aa.attachment_id = a.id WHERE aa.id = ?"
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
     sqlx::query("DELETE FROM attachment_annotations WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    if let Some(eid) = entry_id {
+        let lib = state.library_path.read().await;
+        sync_entry_json(&state.db, &lib, eid).await;
+    }
 
     Ok(())
 }
@@ -255,7 +305,12 @@ pub async fn save_annotation_to_pdf(
     .await
     .map_err(|e| format!("Failed to get file path: {}", e))?;
 
-    let path = PathBuf::from(&file_path);
+    let library_path = state.library_path.read().await;
+    let path = if std::path::Path::new(&file_path).is_absolute() {
+        PathBuf::from(&file_path)
+    } else {
+        library_path.join(&file_path)
+    };
 
     // Load PDF to get page dimensions
     let doc = lopdf::Document::load(&path)
@@ -365,7 +420,12 @@ pub async fn remove_annotation_from_pdf(
     .await
     .map_err(|e| format!("Failed to get file path: {}", e))?;
 
-    let path = PathBuf::from(&file_path);
+    let library_path = state.library_path.read().await;
+    let path = if std::path::Path::new(&file_path).is_absolute() {
+        PathBuf::from(&file_path)
+    } else {
+        library_path.join(&file_path)
+    };
 
     // Remove from PDF
     let removed = remove_highlight_annotation(&path, &annotation_key)
@@ -389,7 +449,12 @@ pub async fn import_annotations_from_pdf(
     .await
     .map_err(|e| format!("Failed to get file path: {}", e))?;
 
-    let path = PathBuf::from(&file_path);
+    let library_path = state.library_path.read().await;
+    let path = if std::path::Path::new(&file_path).is_absolute() {
+        PathBuf::from(&file_path)
+    } else {
+        library_path.join(&file_path)
+    };
 
     // Read annotations from PDF
     let pdf_annotations = read_highlight_annotations(&path)

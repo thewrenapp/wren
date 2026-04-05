@@ -357,7 +357,7 @@ async fn save_single_item(
     // Save notes as note attachments (e.g. arXiv comments)
     if !item.notes.is_empty() {
         let library_path = state.library_path.read().await;
-        let entry_dir = library_path.join("files").join(&entry_key);
+        let entry_dir = library_path.join("library").join("entries").join(&entry_key);
         std::fs::create_dir_all(&entry_dir).ok();
 
         let note_type_id: i64 = sqlx::query_scalar(
@@ -379,10 +379,7 @@ async fn save_single_item(
                 let note_filename = if i == 0 { "Note.md".to_string() } else { format!("Note_{}.md", i + 1) };
                 let note_path = entry_dir.join(&note_filename);
                 let _ = std::fs::write(&note_path, note_text);
-                let rel_md = note_path.strip_prefix(&*library_path)
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let abs_path = note_path.to_string_lossy().to_string();
+                let rel_path = crate::utils::to_relative_path(&library_path, &note_path);
 
                 let _ = sqlx::query(
                     r#"INSERT INTO attachments (key, entry_id, attachment_type_id, title, file_path, markdown_path)
@@ -392,8 +389,8 @@ async fn save_single_item(
                 .bind(entry_id)
                 .bind(note_type_id)
                 .bind(note_text.chars().take(100).collect::<String>())
-                .bind(&abs_path)
-                .bind(&rel_md)
+                .bind(&rel_path)
+                .bind(&rel_path)
                 .execute(&state.db)
                 .await;
             }
@@ -570,7 +567,7 @@ pub async fn save_attachment(
     };
 
     let library_path = state.library_path.read().await;
-    let entry_dir = library_path.join("files").join(&entry_key);
+    let entry_dir = library_path.join("library").join("entries").join(&entry_key);
     std::fs::create_dir_all(&entry_dir).ok();
 
     // Determine file extension and attachment type
@@ -653,7 +650,10 @@ pub async fn save_attachment(
     };
 
     let att_key = uuid::Uuid::new_v4().to_string();
-    let abs_path = file_path.to_string_lossy().to_string();
+    let rel_path = {
+        let lib = state.library_path.read().await;
+        crate::utils::to_relative_path(&lib, &file_path)
+    };
 
     let att_type_id: i64 = sqlx::query_scalar("SELECT id FROM attachment_types WHERE name = ?")
         .bind(&att_type_name)
@@ -671,7 +671,7 @@ pub async fn save_attachment(
     .bind(entry_id)
     .bind(att_type_id)
     .bind(&final_title)
-    .bind(&abs_path)
+    .bind(&rel_path)
     .bind(&hash)
     .bind(body.len() as i64)
     .bind(page_count)
@@ -759,7 +759,7 @@ pub async fn save_single_file(
     };
 
     let library_path = state.library_path.read().await;
-    let entry_dir = library_path.join("files").join(&entry_key);
+    let entry_dir = library_path.join("library").join("entries").join(&entry_key);
     std::fs::create_dir_all(&entry_dir).ok();
 
     let file_path = entry_dir.join("Snapshot.html");
@@ -770,7 +770,10 @@ pub async fn save_single_file(
     use sha2::{Digest, Sha256};
     let hash = hex::encode(Sha256::digest(snapshot_content.as_bytes()));
     let att_key = uuid::Uuid::new_v4().to_string();
-    let abs_path = file_path.to_string_lossy().to_string();
+    let rel_path = {
+        let lib = state.library_path.read().await;
+        crate::utils::to_relative_path(&lib, &file_path)
+    };
 
     let att_type_id: i64 = sqlx::query_scalar("SELECT id FROM attachment_types WHERE name = 'snapshot'")
         .fetch_optional(&state.db)
@@ -787,7 +790,7 @@ pub async fn save_single_file(
     .bind(entry_id)
     .bind(att_type_id)
     .bind(title)
-    .bind(&abs_path)
+    .bind(&rel_path)
     .bind(&hash)
     .bind(snapshot_content.len() as i64)
     .fetch_one(&state.db)

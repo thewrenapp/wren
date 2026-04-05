@@ -1,5 +1,6 @@
 use crate::db::models::{CreateSavedSearchInput, SavedSearch, SavedSearchCriterion, UpdateSavedSearchInput};
 use crate::state::AppState;
+use crate::sync::globals::sync_saved_searches_json;
 use sqlx::{FromRow, Row};
 use tauri::State;
 
@@ -94,6 +95,9 @@ pub async fn create_saved_search(
     .await
     .map_err(|e| e.to_string())?;
 
+    let lib = state.library_path.read().await;
+    sync_saved_searches_json(&state.db, &lib).await;
+
     Ok(SavedSearch {
         id: result.get("id"),
         name: input.name,
@@ -175,6 +179,11 @@ pub async fn update_saved_search(
         .map_err(|e| e.to_string())?;
     }
 
+    {
+        let lib = state.library_path.read().await;
+        sync_saved_searches_json(&state.db, &lib).await;
+    }
+
     // Fetch and return updated record
     get_saved_search(state, id).await
 }
@@ -186,6 +195,9 @@ pub async fn delete_saved_search(state: State<'_, AppState>, id: i64) -> Result<
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    let lib = state.library_path.read().await;
+    sync_saved_searches_json(&state.db, &lib).await;
 
     Ok(())
 }
@@ -203,6 +215,9 @@ pub async fn reorder_saved_searches(
             .await
             .map_err(|e| e.to_string())?;
     }
+
+    let lib = state.library_path.read().await;
+    sync_saved_searches_json(&state.db, &lib).await;
 
     Ok(())
 }

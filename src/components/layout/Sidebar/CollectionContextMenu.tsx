@@ -7,6 +7,7 @@ import {
   FileCode,
   Pencil,
   Settings2,
+  Share2,
   Trash2,
 } from 'lucide-react';
 import {
@@ -128,6 +129,16 @@ export function CollectionItem({
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
+          <ContextMenuItem
+            onClick={() => {
+              useUIStore.getState().showShareDialog(
+                [], [], collection.id, collection.name
+              );
+            }}
+          >
+            <Share2 className='h-4 w-4 mr-2' />
+            Share Collection
+          </ContextMenuItem>
           <ContextMenuItem
             onClick={() => onDelete(collection.id, collection.name)}
             className='text-destructive focus:text-destructive'

@@ -88,7 +88,7 @@ export const useSettingsStore = create<SettingsState>()(
     (set, get) => ({
       theme: "system",
       codeTheme: { light: "github-light", dark: "github-dark" },
-      libraryPath: "~/Wren",
+      libraryPath: "~/.wren",
       autoRenameFiles: true,
       embeddingModel: "all-MiniLM-L6-v2",
       embeddingSource: "local",

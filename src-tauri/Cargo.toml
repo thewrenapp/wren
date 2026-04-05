@@ -27,6 +27,7 @@ tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-opener = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -67,8 +68,15 @@ arrow-schema = "57"
 # Async stream utilities
 futures = "0.3"
 
-# File watching (for later phases)
-# notify = "7"
+# File watching (for sync)
+notify = "7"
+notify-debouncer-mini = "0.5"
+
+# S3-compatible storage (for R2 relay)
+rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+
+# URL encoding
+urlencoding = "2"
 
 # BibTeX/BibLaTeX parsing and writing
 biblatex = "0.11"

@@ -1,4 +1,5 @@
 pub mod annotations;
+pub mod auth;
 pub mod collections;
 pub mod connector;
 pub mod duplicates;
@@ -14,4 +15,5 @@ pub mod saved_searches;
 pub mod schema;
 pub mod search;
 pub mod settings;
+pub mod sharing;
 pub mod tags;

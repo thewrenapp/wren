@@ -1,5 +1,7 @@
 use crate::db::models::{Collection, CreateCollectionInput};
 use crate::state::AppState;
+use crate::sync::globals::sync_collections_json;
+use crate::sync::writer::sync_entry_json;
 use sqlx::{Row, FromRow};
 use tauri::State;
 use uuid::Uuid;
@@ -80,6 +82,9 @@ pub async fn create_collection(
     .await
     .map_err(|e| e.to_string())?;
 
+    let lib = state.library_path.read().await;
+    sync_collections_json(&state.db, &lib).await;
+
     Ok(Collection {
         id: result.get("id"),
         key,
@@ -137,6 +142,9 @@ pub async fn update_collection(
             .map_err(|e| e.to_string())?;
     }
 
+    let lib = state.library_path.read().await;
+    sync_collections_json(&state.db, &lib).await;
+
     Ok(())
 }
 
@@ -147,6 +155,9 @@ pub async fn delete_collection(state: State<'_, AppState>, id: i64) -> Result<()
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    let lib = state.library_path.read().await;
+    sync_collections_json(&state.db, &lib).await;
 
     Ok(())
 }
@@ -170,6 +181,9 @@ pub async fn add_item_to_collection(
     .await
     .map_err(|e| e.to_string())?;
 
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, entry_id).await;
+
     Ok(())
 }
 
@@ -185,6 +199,9 @@ pub async fn remove_item_from_collection(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+
+    let lib = state.library_path.read().await;
+    sync_entry_json(&state.db, &lib, entry_id).await;
 
     Ok(())
 }

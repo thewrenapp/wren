@@ -6,6 +6,7 @@ import {
   Keyboard,
   Info,
   Globe,
+  Cloud,
 } from "lucide-react";
 import {
   Dialog,
@@ -21,17 +22,19 @@ import { AISearchSection } from "./sections/AISearchSection";
 import { ShortcutsSection } from "./sections/ShortcutsSection";
 import { AboutSection } from "./sections/AboutSection";
 import { ConnectorSection } from "./sections/ConnectorSection";
+import { SyncSection } from "./sections/SyncSection";
 
 interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-type SettingsSection = "general" | "storage" | "ai-search" | "connector" | "shortcuts" | "about";
+type SettingsSection = "general" | "storage" | "sync" | "ai-search" | "connector" | "shortcuts" | "about";
 
 const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
   { id: "general", label: "General", icon: <Settings className="h-4 w-4" /> },
   { id: "storage", label: "Storage", icon: <FolderOpen className="h-4 w-4" /> },
+  { id: "sync", label: "Sync", icon: <Cloud className="h-4 w-4" /> },
   { id: "ai-search", label: "AI & Search", icon: <Sparkles className="h-4 w-4" /> },
   { id: "connector", label: "Connector", icon: <Globe className="h-4 w-4" /> },
   { id: "shortcuts", label: "Shortcuts", icon: <Keyboard className="h-4 w-4" /> },
@@ -80,6 +83,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <div className="p-6">
                 {activeSection === "general" && <GeneralSection />}
                 {activeSection === "storage" && <StorageSection />}
+                {activeSection === "sync" && <SyncSection />}
                 {activeSection === "ai-search" && <AISearchSection />}
                 {activeSection === "connector" && <ConnectorSection />}
                 {activeSection === "shortcuts" && <ShortcutsSection />}

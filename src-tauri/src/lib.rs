@@ -1,8 +1,10 @@
 pub mod commands;
+pub mod config;
 pub mod connector;
 pub mod db;
 pub mod deep_link;
 pub mod filename;
+pub mod firebase;
 pub mod graph;
 pub mod jobs;
 pub mod llm;
@@ -10,6 +12,7 @@ pub mod pdf;
 pub mod rag;
 pub mod search;
 pub mod state;
+pub mod sync;
 pub mod tray;
 pub mod utils;
 
@@ -38,6 +41,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             tracing::info!("Setting up Wren application");
 
@@ -264,6 +268,9 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::update_setting,
             commands::settings::get_library_path,
+            commands::settings::get_setting_value_cmd,
+            commands::settings::setup_sync_folder,
+            commands::settings::disable_sync,
             // Import
             commands::import::import_pdf,
             commands::import::import_pdfs,
@@ -354,6 +361,15 @@ pub fn run() {
             commands::connector::start_connector_server,
             commands::connector::stop_connector_server,
             commands::connector::regenerate_connector_token,
+            // Auth
+            commands::auth::get_auth_state,
+            commands::auth::sign_in_email,
+            commands::auth::sign_up_email,
+            commands::auth::sign_in_google,
+            commands::auth::reset_password,
+            commands::auth::sign_out,
+            // Sharing / Sync
+            commands::sharing::get_shares,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Tauri application: check tauri.conf.json and plugin setup")

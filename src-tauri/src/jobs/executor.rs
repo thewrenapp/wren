@@ -1305,7 +1305,7 @@ async fn execute_rag_index(
     // Step 2: Chunking & embedding
     update_progress(app_handle, db, job_id, 1, total_steps, Some("Chunking & embedding document...".to_string())).await;
     let lib_path = library_path.read().await;
-    let lance_path = lib_path.join(".wren").join("rag_vectors");
+    let lance_path = lib_path.join(".local.nosync").join("rag_vectors");
     let store = crate::rag::store::VectorStore::new(&lance_path, dimension).await?;
 
     if cancel_flag.load(Ordering::Relaxed) { return Err("Job cancelled".to_string()); }
@@ -1343,7 +1343,7 @@ async fn execute_rag_cleanup_vectors(
 
     if !att_ids.is_empty() {
         let lib_path = library_path.read().await;
-        let lance_path = lib_path.join(".wren").join("rag_vectors");
+        let lance_path = lib_path.join(".local.nosync").join("rag_vectors");
 
         // Try to resolve embedding dimension to open the store
         if let Ok(embed_config) = crate::rag::embeddings::resolve_embedding_config(db).await {

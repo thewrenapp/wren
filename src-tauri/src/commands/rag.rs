@@ -87,7 +87,7 @@ async fn open_vector_store(
     library_path: &std::path::Path,
     dimension: usize,
 ) -> Result<crate::rag::store::VectorStore, String> {
-    let lance_path = library_path.join(".wren").join("rag_vectors");
+    let lance_path = library_path.join(".local.nosync").join("rag_vectors");
     crate::rag::store::VectorStore::new(&lance_path, dimension).await
 }
 
@@ -282,7 +282,7 @@ pub async fn rag_index_all(state: State<'_, AppState>) -> Result<String, String>
 #[tauri::command]
 pub async fn rag_rebuild(state: State<'_, AppState>) -> Result<(), String> {
     let lib_path = state.library_path.read().await;
-    let lance_path = lib_path.join(".wren").join("rag_vectors");
+    let lance_path = lib_path.join(".local.nosync").join("rag_vectors");
 
     // Drop the vector store
     if lance_path.exists() {
