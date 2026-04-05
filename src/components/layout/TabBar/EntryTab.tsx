@@ -174,6 +174,17 @@ export function EntryTab({ entryId, attachmentId, viewMode = "default", initialP
     );
   }
 
+  // Sync resolved attachmentId back to the tab store so context menu actions work
+  useEffect(() => {
+    if (targetAttachment && !attachmentId) {
+      const { tabs, updateTab } = useTabStore.getState();
+      const tab = tabs.find(t => t.type === "entry" && t.entryId === entryId);
+      if (tab) {
+        updateTab(tab.id, { attachmentId: String(targetAttachment.id) });
+      }
+    }
+  }, [targetAttachment, attachmentId, entryId]);
+
   const isStacked = libraryLayout === "stacked";
 
   // Render main content based on attachment type
