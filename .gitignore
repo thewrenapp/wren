@@ -35,3 +35,4 @@ src-tauri/target/
 
 # Removed dependencies (kreuzberg OCR cache)
 src-tauri/.kreuzberg/
+src-tauri/resources/libpdfium.dylib
