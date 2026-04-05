@@ -11,8 +11,8 @@ pub async fn enqueue_job(
     priority: Option<i32>,
     title: Option<String>,
 ) -> Result<String, String> {
-    let jt = JobType::from_str(&job_type)
-        .ok_or_else(|| format!("Unknown job type: {}", job_type))?;
+    let jt = job_type.parse::<JobType>()
+        .map_err(|e| e.to_string())?;
     state
         .job_queue
         .enqueue(jt, title, payload, priority.unwrap_or(0))

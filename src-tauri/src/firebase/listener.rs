@@ -116,8 +116,8 @@ fn extract_listen_event(buffer: &mut String) -> Option<ListenEvent> {
         }
 
         if let Ok(json) = serde_json::from_str::<Value>(&line) {
-            if let Some(doc_change) = json.get("documentChange") {
-                if let Some(doc) = doc_change.get("document") {
+            if let Some(doc_change) = json.get("documentChange")
+                && let Some(doc) = doc_change.get("document") {
                     let path = doc
                         .get("name")
                         .and_then(|n| n.as_str())
@@ -129,7 +129,6 @@ fn extract_listen_event(buffer: &mut String) -> Option<ListenEvent> {
                         .unwrap_or(Value::Null);
                     return Some(ListenEvent::DocumentChanged { path, fields });
                 }
-            }
 
             if let Some(doc_delete) = json.get("documentDelete") {
                 let path = doc_delete

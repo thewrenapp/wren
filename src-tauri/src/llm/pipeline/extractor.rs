@@ -10,6 +10,16 @@ use crate::llm::provider::{
     LlmProvider, TokenUsageSummary,
 };
 
+/// Configuration parameters shared across extraction functions.
+pub struct ExtractionConfig<'a> {
+    pub model: &'a str,
+    pub doc_type_hint: &'a str,
+    pub chunk_size_chars: usize,
+    pub overlap_chars: usize,
+    pub max_concurrent: usize,
+    pub retry_max: u32,
+}
+
 /// Result of extracting a single section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedSectionContent {
@@ -131,13 +141,12 @@ pub fn apply_noise_removals(raw_text: &str, noise_regions: &[NoiseRegion]) -> Re
     // Merge overlapping spans
     let mut merged: Vec<(usize, usize, String)> = Vec::new();
     for span in spans {
-        if let Some(last) = merged.last_mut() {
-            if span.0 <= last.1 {
+        if let Some(last) = merged.last_mut()
+            && span.0 <= last.1 {
                 // Overlapping — extend the existing span
                 last.1 = last.1.max(span.1);
                 continue;
             }
-        }
         merged.push(span);
     }
 
@@ -185,19 +194,14 @@ pub trait OnSectionExtracted: Send + Sync {
 /// Large sections are sub-chunked and cleaned independently, then concatenated.
 pub async fn extract_all(
     provider: &dyn LlmProvider,
-    model: &str,
-    doc_type_hint: &str,
+    config: &ExtractionConfig<'_>,
     section_ranges: &[SectionRange],
-    chunk_size_chars: usize,
-    overlap_chars: usize,
-    max_concurrent: usize,
-    retry_max: u32,
     already_extracted: &[String],
     progress: Option<&dyn ExtractionProgress>,
     on_extracted: Option<&dyn OnSectionExtracted>,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<(Vec<ExtractedSectionContent>, TokenUsageSummary), LlmError> {
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(config.max_concurrent));
     let provider_ref = provider;
 
     // Filter out already-extracted sections (for checkpoint resume)
@@ -229,10 +233,6 @@ pub async fn extract_all(
         let section_name = section.name.clone();
         let section_level = section.level;
         let raw_text = section.raw_text.clone();
-        let model = model.to_string();
-        let doc_type = doc_type_hint.to_string();
-        let chunk_size = chunk_size_chars;
-        let overlap = overlap_chars;
 
         // We can't move provider into async block easily since it's a trait object,
         // so we extract section content sequentially with semaphore-controlled pacing
@@ -248,13 +248,9 @@ pub async fn extract_all(
 
         let content = extract_section(
             provider_ref,
-            &model,
-            &doc_type,
+            config,
             &section_name,
             &raw_text,
-            chunk_size,
-            overlap,
-            retry_max,
             &mut total_usage,
             cancel,
         )
@@ -285,25 +281,19 @@ pub async fn extract_all(
 /// If the section is too large, sub-chunks it and cleans each independently.
 async fn extract_section(
     provider: &dyn LlmProvider,
-    model: &str,
-    doc_type_hint: &str,
+    config: &ExtractionConfig<'_>,
     section_name: &str,
     raw_text: &str,
-    chunk_size_chars: usize,
-    overlap_chars: usize,
-    retry_max: u32,
     usage: &mut TokenUsageSummary,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<String, LlmError> {
     // If section fits in one chunk, extract directly
-    if raw_text.len() <= chunk_size_chars {
+    if raw_text.len() <= config.chunk_size_chars {
         return extract_section_single(
             provider,
-            model,
-            doc_type_hint,
+            config,
             section_name,
             raw_text,
-            retry_max,
             usage,
             cancel,
         )
@@ -317,18 +307,16 @@ async fn extract_section(
         raw_text.len()
     );
 
-    let sub_chunks = chunker::chunk_text(raw_text, chunk_size_chars, overlap_chars);
+    let sub_chunks = chunker::chunk_text(raw_text, config.chunk_size_chars, config.overlap_chars);
     let mut cleaned_parts = Vec::with_capacity(sub_chunks.len());
 
     for (i, chunk) in sub_chunks.iter().enumerate() {
         let sub_name = format!("{} (part {}/{})", section_name, i + 1, sub_chunks.len());
         let cleaned = extract_section_single(
             provider,
-            model,
-            doc_type_hint,
+            config,
             &sub_name,
             &chunk.text,
-            retry_max,
             usage,
             cancel,
         )
@@ -346,17 +334,15 @@ async fn extract_section(
 /// Falls back to legacy emit_clean_content if noise detection fails.
 async fn extract_section_single(
     provider: &dyn LlmProvider,
-    model: &str,
-    doc_type_hint: &str,
+    config: &ExtractionConfig<'_>,
     section_name: &str,
     raw_text: &str,
-    retry_max: u32,
     usage: &mut TokenUsageSummary,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<String, LlmError> {
     // Try noise-detector approach first
     match extract_section_noise(
-        provider, model, doc_type_hint, section_name, raw_text, retry_max, usage, cancel,
+        provider, config, section_name, raw_text, usage, cancel,
     )
     .await
     {
@@ -373,7 +359,7 @@ async fn extract_section_single(
 
     // Legacy fallback: emit_clean_content
     extract_section_legacy(
-        provider, model, doc_type_hint, section_name, raw_text, retry_max, usage, cancel,
+        provider, config, section_name, raw_text, usage, cancel,
     )
     .await
 }
@@ -381,20 +367,18 @@ async fn extract_section_single(
 /// Noise-detector extraction: LLM identifies noise regions, we remove them locally.
 async fn extract_section_noise(
     provider: &dyn LlmProvider,
-    model: &str,
-    doc_type_hint: &str,
+    config: &ExtractionConfig<'_>,
     section_name: &str,
     raw_text: &str,
-    retry_max: u32,
     usage: &mut TokenUsageSummary,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<String, LlmError> {
     // No line numbering — noise detection uses text anchors, not line numbers.
     let (messages, tools) =
-        prompts::extraction_noise_prompt(raw_text, section_name, doc_type_hint);
+        prompts::extraction_noise_prompt(raw_text, section_name, config.doc_type_hint);
 
     let request = CompletionRequest {
-        model: model.to_string(),
+        model: config.model.to_string(),
         messages: messages.clone(),
         temperature: 0.1,
         max_tokens: Some(4000),
@@ -403,7 +387,7 @@ async fn extract_section_noise(
     };
 
     let response =
-        call_with_retry_cancellable(provider, request, retry_max, true, Some(cancel)).await;
+        call_with_retry_cancellable(provider, request, config.retry_max, true, Some(cancel)).await;
 
     match response {
         Ok(resp) => {
@@ -425,8 +409,7 @@ async fn extract_section_noise(
                         section_name
                     );
                     extract_section_noise_json(
-                        provider, model, doc_type_hint, section_name, raw_text, retry_max, usage,
-                        cancel,
+                        provider, config, section_name, raw_text, usage, cancel,
                     )
                     .await
                 }
@@ -438,7 +421,7 @@ async fn extract_section_noise(
                 section_name
             );
             extract_section_noise_json(
-                provider, model, doc_type_hint, section_name, raw_text, retry_max, usage, cancel,
+                provider, config, section_name, raw_text, usage, cancel,
             )
             .await
         }
@@ -449,20 +432,18 @@ async fn extract_section_noise(
 /// JSON-mode fallback for noise-detector extraction.
 async fn extract_section_noise_json(
     provider: &dyn LlmProvider,
-    model: &str,
-    doc_type_hint: &str,
+    config: &ExtractionConfig<'_>,
     section_name: &str,
     raw_text: &str,
-    retry_max: u32,
     usage: &mut TokenUsageSummary,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<String, LlmError> {
     // No line numbering — noise detection uses text anchors, not line numbers.
     let messages =
-        prompts::extraction_noise_prompt_json(raw_text, section_name, doc_type_hint);
+        prompts::extraction_noise_prompt_json(raw_text, section_name, config.doc_type_hint);
 
     let request = CompletionRequest {
-        model: model.to_string(),
+        model: config.model.to_string(),
         messages,
         temperature: 0.1,
         max_tokens: Some(4000),
@@ -471,7 +452,7 @@ async fn extract_section_noise_json(
     };
 
     let resp =
-        call_with_retry_cancellable(provider, request, retry_max, false, Some(cancel)).await?;
+        call_with_retry_cancellable(provider, request, config.retry_max, false, Some(cancel)).await?;
     usage.add(&resp);
 
     let content = resp.content.as_deref().ok_or_else(|| {
@@ -507,18 +488,17 @@ async fn extract_section_noise_json(
 /// Legacy extraction: LLM reproduces the cleaned text directly.
 async fn extract_section_legacy(
     provider: &dyn LlmProvider,
-    model: &str,
-    doc_type_hint: &str,
+    config: &ExtractionConfig<'_>,
     section_name: &str,
     raw_text: &str,
-    retry_max: u32,
     usage: &mut TokenUsageSummary,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<String, LlmError> {
-    let (messages, tools) = prompts::extraction_prompt(raw_text, section_name, doc_type_hint);
+    let (messages, tools) =
+        prompts::extraction_prompt(raw_text, section_name, config.doc_type_hint);
 
     let request = CompletionRequest {
-        model: model.to_string(),
+        model: config.model.to_string(),
         messages: messages.clone(),
         temperature: 0.1,
         max_tokens: None,
@@ -527,7 +507,7 @@ async fn extract_section_legacy(
     };
 
     let response =
-        call_with_retry_cancellable(provider, request, retry_max, true, Some(cancel)).await;
+        call_with_retry_cancellable(provider, request, config.retry_max, true, Some(cancel)).await;
 
     match response {
         Ok(resp) => {
@@ -542,8 +522,7 @@ async fn extract_section_legacy(
                         section_name
                     );
                     extract_section_json(
-                        provider, model, doc_type_hint, section_name, raw_text, retry_max, usage,
-                        cancel,
+                        provider, config, section_name, raw_text, usage, cancel,
                     )
                     .await
                 }
@@ -555,7 +534,7 @@ async fn extract_section_legacy(
                 section_name
             );
             extract_section_json(
-                provider, model, doc_type_hint, section_name, raw_text, retry_max, usage, cancel,
+                provider, config, section_name, raw_text, usage, cancel,
             )
             .await
         }
@@ -566,18 +545,17 @@ async fn extract_section_legacy(
 /// JSON-mode fallback for section extraction.
 async fn extract_section_json(
     provider: &dyn LlmProvider,
-    model: &str,
-    doc_type_hint: &str,
+    config: &ExtractionConfig<'_>,
     section_name: &str,
     raw_text: &str,
-    retry_max: u32,
     usage: &mut TokenUsageSummary,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<String, LlmError> {
-    let messages = prompts::extraction_prompt_json(raw_text, section_name, doc_type_hint);
+    let messages =
+        prompts::extraction_prompt_json(raw_text, section_name, config.doc_type_hint);
 
     let request = CompletionRequest {
-        model: model.to_string(),
+        model: config.model.to_string(),
         messages,
         temperature: 0.1,
         max_tokens: None,
@@ -585,7 +563,8 @@ async fn extract_section_json(
         tools: vec![],
     };
 
-    let resp = call_with_retry_cancellable(provider, request, retry_max, false, Some(cancel)).await?;
+    let resp =
+        call_with_retry_cancellable(provider, request, config.retry_max, false, Some(cancel)).await?;
     usage.add(&resp);
 
     let content = resp
@@ -696,8 +675,8 @@ fn truncate_safe(s: &str, max_bytes: usize) -> &str {
 /// applied to the original unnumbered text.
 fn strip_line_prefix(s: &str) -> String {
     let trimmed = s.trim_start();
-    if trimmed.starts_with('[') {
-        if let Some(bracket_end) = trimmed.find(']') {
+    if trimmed.starts_with('[')
+        && let Some(bracket_end) = trimmed.find(']') {
             let inside = &trimmed[1..bracket_end];
             // Only strip if the content inside brackets is a number
             if inside.chars().all(|c| c.is_ascii_digit()) && !inside.is_empty() {
@@ -707,7 +686,6 @@ fn strip_line_prefix(s: &str) -> String {
                 return after.to_string();
             }
         }
-    }
     s.to_string()
 }
 
@@ -751,17 +729,13 @@ fn strip_model_commentary(text: &str) -> String {
     let mut result = text.to_string();
 
     // Strip <function_calls>...</function_calls> blocks
-    loop {
-        if let Some(start) = result.find("<function_calls>") {
-            if let Some(end_rel) = result[start..].find("</function_calls>") {
-                let end = start + end_rel + "</function_calls>".len();
-                result.replace_range(start..end, "");
-            } else {
-                // Unclosed — strip from <function_calls> to end
-                result.truncate(start);
-                break;
-            }
+    while let Some(start) = result.find("<function_calls>") {
+        if let Some(end_rel) = result[start..].find("</function_calls>") {
+            let end = start + end_rel + "</function_calls>".len();
+            result.replace_range(start..end, "");
         } else {
+            // Unclosed — strip from <function_calls> to end
+            result.truncate(start);
             break;
         }
     }
@@ -873,12 +847,11 @@ fn parse_noise_response(response: &CompletionResponse) -> Result<Vec<NoiseRegion
         }
 
         // Try extracting from fake XML tool calls (models like DeepSeek output these as text)
-        if let Some(json_str) = extract_fake_xml_param(content, "report_noise", "noise_regions") {
-            if let Ok(regions) = parse_llm_json::<Vec<NoiseRegion>>(&json_str) {
+        if let Some(json_str) = extract_fake_xml_param(content, "report_noise", "noise_regions")
+            && let Ok(regions) = parse_llm_json::<Vec<NoiseRegion>>(&json_str) {
                 tracing::info!("Extracted noise regions from fake XML tool call");
                 return Ok(sanitize_noise_regions(regions));
             }
-        }
     }
 
     Err(LlmError::ParseError(

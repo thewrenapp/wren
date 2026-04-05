@@ -42,44 +42,54 @@ pub trait DiscoveryProgress: Send + Sync {
     fn on_chunk(&self, chunk_index: usize, total_chunks: usize);
 }
 
+/// Configuration parameters for the discovery stage.
+pub struct DiscoveryParams<'a> {
+    pub model: &'a str,
+    pub doc_type_hint: &'a str,
+    pub chunk_size_chars: usize,
+    pub overlap_chars: usize,
+    pub needs_chunking: bool,
+    pub retry_max: u32,
+    pub checkpoint: Option<&'a DiscoveryCheckpoint>,
+    pub progress: Option<&'a dyn DiscoveryProgress>,
+}
+
 /// Run Stage 2: Discover document structure.
 ///
 /// If the text fits in one effective chunk, makes 1 LLM call.
 /// If it needs chunking, makes N sequential calls with compact carry-forward.
 pub async fn discover(
     provider: &dyn LlmProvider,
-    model: &str,
     full_text: &str,
-    doc_type_hint: &str,
-    chunk_size_chars: usize,
-    overlap_chars: usize,
-    needs_chunking: bool,
-    retry_max: u32,
+    params: &DiscoveryParams<'_>,
     usage: &mut TokenUsageSummary,
-    checkpoint: Option<&DiscoveryCheckpoint>,
-    progress: Option<&dyn DiscoveryProgress>,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<DiscoveryResult, LlmError> {
-    if !needs_chunking {
+    if !params.needs_chunking {
         // Single call — full text fits in one effective chunk
-        return discover_single(provider, model, full_text, doc_type_hint, retry_max, usage, cancel).await;
+        return discover_single(
+            provider,
+            params.model,
+            full_text,
+            params.doc_type_hint,
+            params.retry_max,
+            usage,
+            cancel,
+        )
+        .await;
     }
 
     // Chunked discovery
-    let result = discover_chunked(
-        provider,
-        model,
-        full_text,
-        doc_type_hint,
-        chunk_size_chars,
-        overlap_chars,
-        retry_max,
-        usage,
-        checkpoint,
-        progress,
-        cancel,
-    )
-    .await?;
+    let chunked_params = ChunkedDiscoveryParams {
+        model: params.model,
+        doc_type_hint: params.doc_type_hint,
+        chunk_size_chars: params.chunk_size_chars,
+        overlap_chars: params.overlap_chars,
+        retry_max: params.retry_max,
+        checkpoint: params.checkpoint,
+        progress: params.progress,
+    };
+    let result = discover_chunked(provider, full_text, &chunked_params, usage, cancel).await?;
 
     // If chunked tool-based discovery found nothing, the model likely can't do
     // tool calling. Fall back to single-call JSON mode over the full text.
@@ -88,7 +98,16 @@ pub async fn discover(
             "Chunked discovery returned 0 sections across {} chunks, falling back to JSON mode",
             result.chunks_processed
         );
-        return discover_single_json(provider, model, full_text, doc_type_hint, retry_max, usage, cancel).await;
+        return discover_single_json(
+            provider,
+            params.model,
+            full_text,
+            params.doc_type_hint,
+            params.retry_max,
+            usage,
+            cancel,
+        )
+        .await;
     }
 
     Ok(result)
@@ -115,7 +134,8 @@ async fn discover_single(
         tools: tools.clone(),
     };
 
-    let response = call_with_retry_cancellable(provider, request, retry_max, true, Some(cancel)).await;
+    let response =
+        call_with_retry_cancellable(provider, request, retry_max, true, Some(cancel)).await;
 
     match response {
         Ok(resp) => {
@@ -133,10 +153,22 @@ async fn discover_single(
                 tracing::warn!(
                     "Tool-based discovery returned 0 sections, falling back to JSON mode. \
                      Tool calls: {:?}, content preview: {:?}",
-                    resp.tool_calls.iter().map(|tc| &tc.name).collect::<Vec<_>>(),
+                    resp.tool_calls
+                        .iter()
+                        .map(|tc| &tc.name)
+                        .collect::<Vec<_>>(),
                     resp.content.as_deref().map(|c| &c[..c.len().min(300)]),
                 );
-                discover_single_json(provider, model, full_text, doc_type_hint, retry_max, usage, cancel).await
+                discover_single_json(
+                    provider,
+                    model,
+                    full_text,
+                    doc_type_hint,
+                    retry_max,
+                    usage,
+                    cancel,
+                )
+                .await
             } else {
                 tracing::info!("Discovery found {} section(s) via tool calls", sections.len());
                 Ok(DiscoveryResult {
@@ -149,7 +181,16 @@ async fn discover_single(
             tracing::info!(
                 "Tool calling not supported, falling back to JSON mode for discovery"
             );
-            discover_single_json(provider, model, full_text, doc_type_hint, retry_max, usage, cancel).await
+            discover_single_json(
+                provider,
+                model,
+                full_text,
+                doc_type_hint,
+                retry_max,
+                usage,
+                cancel,
+            )
+            .await
         }
         Err(e) => Err(e),
     }
@@ -176,62 +217,61 @@ async fn discover_single_json(
         tools: vec![],
     };
 
-    let resp = call_with_retry_cancellable(provider, request, retry_max, false, Some(cancel)).await?;
+    let resp =
+        call_with_retry_cancellable(provider, request, retry_max, false, Some(cancel)).await?;
     usage.add(&resp);
 
-    let content = resp
-        .content
-        .as_deref()
-        .ok_or_else(|| {
-            tracing::error!(
-                "[discoverer] No content in JSON discovery response! tool_calls={}, tokens={}/{}",
-                resp.tool_calls.len(),
-                resp.prompt_tokens,
-                resp.completion_tokens,
-            );
-            LlmError::ParseError("No content in JSON discovery response".to_string())
-        })?;
+    let content = resp.content.as_deref().ok_or_else(|| {
+        tracing::error!(
+            "[discoverer] No content in JSON discovery response! tool_calls={}, tokens={}/{}",
+            resp.tool_calls.len(),
+            resp.prompt_tokens,
+            resp.completion_tokens,
+        );
+        LlmError::ParseError("No content in JSON discovery response".to_string())
+    })?;
 
     let result = parse_discovery_json(content);
     match &result {
-        Ok(r) => tracing::info!(
-            "JSON discovery found {} section(s)",
-            r.sections.len()
-        ),
-        Err(e) => tracing::warn!(
-            "JSON discovery parse failed: {e}"
-        ),
+        Ok(r) => tracing::info!("JSON discovery found {} section(s)", r.sections.len()),
+        Err(e) => tracing::warn!("JSON discovery parse failed: {e}"),
     }
     result
+}
+
+/// Parameters for chunked discovery processing.
+struct ChunkedDiscoveryParams<'a> {
+    model: &'a str,
+    doc_type_hint: &'a str,
+    chunk_size_chars: usize,
+    overlap_chars: usize,
+    retry_max: u32,
+    checkpoint: Option<&'a DiscoveryCheckpoint>,
+    progress: Option<&'a dyn DiscoveryProgress>,
 }
 
 /// Chunked discovery: process text in N sequential chunks with carry-forward.
 async fn discover_chunked(
     provider: &dyn LlmProvider,
-    model: &str,
     full_text: &str,
-    doc_type_hint: &str,
-    chunk_size_chars: usize,
-    overlap_chars: usize,
-    retry_max: u32,
+    params: &ChunkedDiscoveryParams<'_>,
     usage: &mut TokenUsageSummary,
-    checkpoint: Option<&DiscoveryCheckpoint>,
-    progress: Option<&dyn DiscoveryProgress>,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<DiscoveryResult, LlmError> {
-    let chunks = chunker::chunk_text(full_text, chunk_size_chars, overlap_chars);
+    let chunks = chunker::chunk_text(full_text, params.chunk_size_chars, params.overlap_chars);
     let total_chunks = chunks.len();
 
     // Resume from checkpoint if available
-    let (mut all_sections, start_chunk, mut carry_forward_text) = if let Some(cp) = checkpoint {
-        (
-            cp.sections_so_far.clone(),
-            cp.chunks_completed,
-            cp.carry_forward.clone(),
-        )
-    } else {
-        (vec![], 0, None)
-    };
+    let (mut all_sections, start_chunk, mut carry_forward_text) =
+        if let Some(cp) = params.checkpoint {
+            (
+                cp.sections_so_far.clone(),
+                cp.chunks_completed,
+                cp.carry_forward.clone(),
+            )
+        } else {
+            (vec![], 0, None)
+        };
 
     for (i, chunk) in chunks.iter().enumerate().skip(start_chunk) {
         // Check cancellation between chunks
@@ -240,21 +280,18 @@ async fn discover_chunked(
             return Err(LlmError::Cancelled);
         }
 
-        if let Some(p) = progress {
+        if let Some(p) = params.progress {
             p.on_chunk(i + 1, total_chunks);
         }
 
-        let chunk_sections = discover_chunk(
-            provider,
-            model,
-            &chunk.text,
-            doc_type_hint,
-            carry_forward_text.as_deref(),
-            retry_max,
-            usage,
-            cancel,
-        )
-        .await?;
+        let chunk_params = ChunkDiscoveryParams {
+            model: params.model,
+            doc_type_hint: params.doc_type_hint,
+            carry_forward: carry_forward_text.as_deref(),
+            retry_max: params.retry_max,
+        };
+        let chunk_sections =
+            discover_chunk(provider, &chunk.text, &chunk_params, usage, cancel).await?;
 
         // Build carry-forward for next chunk
         carry_forward_text = Some(build_carry_forward(&all_sections, &chunk_sections));
@@ -269,22 +306,27 @@ async fn discover_chunked(
     })
 }
 
+/// Parameters for processing a single discovery chunk.
+struct ChunkDiscoveryParams<'a> {
+    model: &'a str,
+    doc_type_hint: &'a str,
+    carry_forward: Option<&'a str>,
+    retry_max: u32,
+}
+
 /// Process a single chunk for discovery.
 async fn discover_chunk(
     provider: &dyn LlmProvider,
-    model: &str,
     chunk_text: &str,
-    doc_type_hint: &str,
-    carry_forward: Option<&str>,
-    retry_max: u32,
+    params: &ChunkDiscoveryParams<'_>,
     usage: &mut TokenUsageSummary,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<Vec<DiscoveredSection>, LlmError> {
     let (messages, tools) =
-        prompts::discovery_prompt_chunk(chunk_text, doc_type_hint, carry_forward);
+        prompts::discovery_prompt_chunk(chunk_text, params.doc_type_hint, params.carry_forward);
 
     let request = CompletionRequest {
-        model: model.to_string(),
+        model: params.model.to_string(),
         messages: messages.clone(),
         temperature: 0.0,
         max_tokens: Some(4000),
@@ -292,7 +334,8 @@ async fn discover_chunk(
         tools: tools.clone(),
     };
 
-    let response = call_with_retry_cancellable(provider, request, retry_max, true, Some(cancel)).await;
+    let response =
+        call_with_retry_cancellable(provider, request, params.retry_max, true, Some(cancel)).await;
 
     match response {
         Ok(resp) => {
@@ -303,11 +346,15 @@ async fn discover_chunk(
             tracing::info!(
                 "Tool calling not supported, falling back to JSON mode for chunk discovery"
             );
-            let messages =
-                prompts::discovery_prompt_json(chunk_text, doc_type_hint, carry_forward, false);
+            let messages = prompts::discovery_prompt_json(
+                chunk_text,
+                params.doc_type_hint,
+                params.carry_forward,
+                false,
+            );
 
             let request = CompletionRequest {
-                model: model.to_string(),
+                model: params.model.to_string(),
                 messages,
                 temperature: 0.0,
                 max_tokens: Some(4000),
@@ -315,7 +362,14 @@ async fn discover_chunk(
                 tools: vec![],
             };
 
-            let resp = call_with_retry_cancellable(provider, request, retry_max, false, Some(cancel)).await?;
+            let resp = call_with_retry_cancellable(
+                provider,
+                request,
+                params.retry_max,
+                false,
+                Some(cancel),
+            )
+            .await?;
             usage.add(&resp);
 
             let content = resp.content.as_deref().ok_or_else(|| {
@@ -325,7 +379,9 @@ async fn discover_chunk(
                     resp.prompt_tokens,
                     resp.completion_tokens,
                 );
-                LlmError::ParseError("No content in JSON chunk discovery response".to_string())
+                LlmError::ParseError(
+                    "No content in JSON chunk discovery response".to_string(),
+                )
             })?;
 
             let result = parse_discovery_json(content)?;
@@ -362,13 +418,11 @@ fn parse_discovery_response(
     // If tool calls produced no valid sections, try parsing content as JSON fallback.
     // This covers: (1) no tool calls at all, (2) all tool calls were malformed,
     // (3) model returned sections in text content instead of tool calls.
-    if sections.is_empty() {
-        if let Some(ref content) = response.content {
-            if let Ok(result) = parse_discovery_json(content) {
+    if sections.is_empty()
+        && let Some(ref content) = response.content
+            && let Ok(result) = parse_discovery_json(content) {
                 return Ok(result.sections);
             }
-        }
-    }
 
     // It's valid to have 0 sections in a chunk (chunk might be all within one section)
     Ok(sections)
@@ -398,26 +452,24 @@ fn parse_discovery_json(content: &str) -> Result<DiscoveryResult, LlmError> {
 
     // Fallback: find embedded JSON object in the text (model may have output
     // reasoning text before/after the JSON)
-    if let Some(json_str) = extract_json_object(content) {
-        if let Ok(parsed) = parse_llm_json::<JsonDiscoveryResponse>(json_str) {
+    if let Some(json_str) = extract_json_object(content)
+        && let Ok(parsed) = parse_llm_json::<JsonDiscoveryResponse>(json_str) {
             tracing::debug!("Extracted discovery JSON from mixed text/JSON response");
             return Ok(DiscoveryResult {
                 sections: parsed.sections,
                 chunks_processed: 1,
             });
         }
-    }
 
     // Last resort: try to find a JSON array of sections directly
-    if let Some(arr_str) = extract_json_array(content) {
-        if let Ok(sections) = parse_llm_json::<Vec<DiscoveredSection>>(arr_str) {
+    if let Some(arr_str) = extract_json_array(content)
+        && let Ok(sections) = parse_llm_json::<Vec<DiscoveredSection>>(arr_str) {
             tracing::debug!("Extracted discovery sections array from mixed response");
             return Ok(DiscoveryResult {
                 sections,
                 chunks_processed: 1,
             });
         }
-    }
 
     Err(LlmError::ParseError(format!(
         "Failed to parse discovery JSON (tried strict, embedded object, embedded array)\nContent: {}",

@@ -175,26 +175,35 @@ pub struct AdvancedSearch {
     pub criteria: Vec<AdvancedCriterion>,
 }
 
-fn apply_entry_filters(
-    qb: &mut QueryBuilder<Sqlite>,
+struct EntryFilterParams<'a> {
     collection_id: Option<i64>,
     tag_ids: Option<Vec<i64>>,
-    tag_mode: &str,
+    tag_mode: &'a str,
     attachment_type: Option<String>,
     search_query: Option<String>,
-    search_scope: Option<&str>,
-    advanced_search: Option<&AdvancedSearch>,
-    filter_type: Option<&str>,
-    saved_searches: &[SavedSearch],
+    search_scope: Option<&'a str>,
+    advanced_search: Option<&'a AdvancedSearch>,
+    filter_type: Option<&'a str>,
+    saved_searches: &'a [SavedSearch],
+}
+
+fn apply_entry_filters<'a>(
+    qb: &mut QueryBuilder<'a, Sqlite>,
+    params: &'a EntryFilterParams<'a>,
 ) {
+    let EntryFilterParams {
+        collection_id, ref tag_ids, tag_mode, ref attachment_type,
+        ref search_query, search_scope, advanced_search, filter_type,
+        saved_searches,
+    } = *params;
     if let Some(coll_id) = collection_id {
         qb.push(" AND e.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
         qb.push_bind(coll_id);
         qb.push(")");
     }
 
-    if let Some(t_ids) = tag_ids {
-        if !t_ids.is_empty() {
+    if let Some(t_ids) = tag_ids
+        && !t_ids.is_empty() {
             if t_ids.len() == 1 {
                 let only_id = t_ids[0];
                 qb.push(" AND e.id IN (SELECT entry_id FROM entry_tags WHERE tag_id = ");
@@ -215,7 +224,6 @@ fn apply_entry_filters(
                 qb.push(")");
             }
         }
-    }
 
     if let Some(att_type) = attachment_type {
         qb.push(" AND e.id IN (SELECT a.entry_id FROM attachments a JOIN attachment_types at ON a.attachment_type_id = at.id WHERE at.name = ");
@@ -608,13 +616,12 @@ fn apply_saved_search_match(
     qb.push(")");
 
     // Handle collection scope
-    if saved_search.scope == "collection" {
-        if let Some(coll_id) = saved_search.collection_id {
+    if saved_search.scope == "collection"
+        && let Some(coll_id) = saved_search.collection_id {
             qb.push(" AND e2.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
             qb.push_bind(coll_id);
             qb.push(")");
         }
-    }
 
     qb.push(")");
 }
@@ -711,13 +718,12 @@ fn apply_nested_saved_search(
 
     qb.push(")");
 
-    if saved_search.scope == "collection" {
-        if let Some(coll_id) = saved_search.collection_id {
+    if saved_search.scope == "collection"
+        && let Some(coll_id) = saved_search.collection_id {
             qb.push(" AND e3.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ");
             qb.push_bind(coll_id);
             qb.push(")");
         }
-    }
 
     qb.push(")");
 }
@@ -761,12 +767,11 @@ fn apply_nested_criterion(
         "collection" => apply_nested_collection(qb, op_kind, &value, has_value),
         "saved_search" => {
             // Prevent deeper recursion - no saved_search references at this level
-            if let Ok(ref_id) = value.parse::<i64>() {
-                if ref_id == exclude_search_id || ref_id == current_search_id {
+            if let Ok(ref_id) = value.parse::<i64>()
+                && (ref_id == exclude_search_id || ref_id == current_search_id) {
                     qb.push("1=0");
                     return;
                 }
-            }
             // Don't allow deeper nesting - would be too complex
             qb.push("1=0");
         }
@@ -1178,36 +1183,30 @@ fn apply_nested_collection(qb: &mut QueryBuilder<Sqlite>, op_kind: &str, raw_val
 // GET ENTRIES (List View)
 // =====================================================
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetEntriesOptions {
+    pub collection_id: Option<i64>,
+    pub tag_ids: Option<Vec<i64>>,
+    pub tag_mode: Option<String>,
+    pub attachment_type: Option<String>,
+    pub search_query: Option<String>,
+    pub search_scope: Option<String>,
+    pub advanced_search: Option<AdvancedSearch>,
+    pub filter_type: Option<String>,
+}
+
 /// Get all entries with optional filtering
 #[tauri::command]
-#[allow(non_snake_case)]
 pub async fn get_entries(
     state: State<'_, AppState>,
-    collection_id: Option<i64>,
-    tag_ids: Option<Vec<i64>>,
-    tag_mode: Option<String>,
-    attachment_type: Option<String>,
-    search_query: Option<String>,
-    search_scope: Option<String>,
-    advanced_search: Option<AdvancedSearch>,
-    filter_type: Option<String>,
-    collectionId: Option<i64>,
-    tagIds: Option<Vec<i64>>,
-    tagMode: Option<String>,
-    attachmentType: Option<String>,
-    searchQuery: Option<String>,
-    searchScope: Option<String>,
-    advancedSearch: Option<AdvancedSearch>,
-    filterType: Option<String>,
+    options: GetEntriesOptions,
 ) -> Result<Vec<EntrySummary>, String> {
-    let collection_id = collection_id.or(collectionId);
-    let tag_ids = tag_ids.or(tagIds);
-    let tag_mode = tag_mode.or(tagMode).unwrap_or_else(|| "or".to_string());
-    let attachment_type = attachment_type.or(attachmentType);
-    let search_query = search_query.or(searchQuery);
-    let search_scope = search_scope.or(searchScope);
-    let advanced_search = advanced_search.or(advancedSearch);
-    let filter_type = filter_type.or(filterType);
+    let GetEntriesOptions {
+        collection_id, tag_ids, tag_mode, attachment_type,
+        search_query, search_scope, advanced_search, filter_type,
+    } = options;
+    let tag_mode = tag_mode.unwrap_or_else(|| "or".to_string());
 
     let mut effective_attachment_type = attachment_type;
     let filter_type_str = filter_type.as_deref();
@@ -1253,18 +1252,18 @@ pub async fn get_entries(
         "#,
     );
 
-    apply_entry_filters(
-        &mut qb,
+    let filter_params = EntryFilterParams {
         collection_id,
-        tag_ids.clone(),
-        &tag_mode,
-        effective_attachment_type.clone(),
-        search_query.clone(),
-        search_scope.as_deref(),
-        advanced_search.as_ref(),
-        filter_type_str,
-        &saved_searches,
-    );
+        tag_ids: tag_ids.clone(),
+        tag_mode: &tag_mode,
+        attachment_type: effective_attachment_type.clone(),
+        search_query: search_query.clone(),
+        search_scope: search_scope.as_deref(),
+        advanced_search: advanced_search.as_ref(),
+        filter_type: filter_type_str,
+        saved_searches: &saved_searches,
+    };
+    apply_entry_filters(&mut qb, &filter_params);
 
     qb.push(" ORDER BY e.date_added DESC");
 
@@ -1323,54 +1322,43 @@ pub async fn get_entries(
     Ok(result)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetEntriesPagedOptions {
+    pub collection_id: Option<i64>,
+    pub tag_ids: Option<Vec<i64>>,
+    pub tag_mode: Option<String>,
+    pub attachment_type: Option<String>,
+    pub search_query: Option<String>,
+    pub search_scope: Option<String>,
+    pub advanced_search: Option<AdvancedSearch>,
+    pub filter_type: Option<String>,
+    pub sort_field: Option<String>,
+    pub sort_direction: Option<String>,
+    pub secondary_sort_field: Option<String>,
+    pub secondary_sort_direction: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
 /// Get entries with pagination (lazy loading)
 #[tauri::command]
-#[allow(non_snake_case)]
 pub async fn get_entries_paged(
     state: State<'_, AppState>,
-    collection_id: Option<i64>,
-    tag_ids: Option<Vec<i64>>,
-    tag_mode: Option<String>,
-    attachment_type: Option<String>,
-    search_query: Option<String>,
-    search_scope: Option<String>,
-    advanced_search: Option<AdvancedSearch>,
-    filter_type: Option<String>,
-    sort_field: Option<String>,
-    sort_direction: Option<String>,
-    secondary_sort_field: Option<String>,
-    secondary_sort_direction: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-    collectionId: Option<i64>,
-    tagIds: Option<Vec<i64>>,
-    tagMode: Option<String>,
-    attachmentType: Option<String>,
-    searchQuery: Option<String>,
-    searchScope: Option<String>,
-    advancedSearch: Option<AdvancedSearch>,
-    filterType: Option<String>,
-    sortField: Option<String>,
-    sortDirection: Option<String>,
-    secondarySortField: Option<String>,
-    secondarySortDirection: Option<String>,
-    limitValue: Option<i64>,
-    offsetValue: Option<i64>,
+    options: GetEntriesPagedOptions,
 ) -> Result<EntriesPage, String> {
-    let collection_id = collection_id.or(collectionId);
-    let tag_ids = tag_ids.or(tagIds);
-    let tag_mode = tag_mode.or(tagMode).unwrap_or_else(|| "or".to_string());
-    let attachment_type = attachment_type.or(attachmentType);
-    let search_query = search_query.or(searchQuery);
-    let search_scope = search_scope.or(searchScope);
-    let advanced_search = advanced_search.or(advancedSearch);
-    let filter_type = filter_type.or(filterType);
-    let sort_field = sort_field.or(sortField).unwrap_or_else(|| "dateAdded".to_string());
-    let sort_direction = sort_direction.or(sortDirection).unwrap_or_else(|| "desc".to_string());
-    let secondary_sort_field = secondary_sort_field.or(secondarySortField);
-    let secondary_sort_direction = secondary_sort_direction.or(secondarySortDirection).unwrap_or_else(|| "asc".to_string());
-    let limit = limit.or(limitValue).unwrap_or(20);
-    let offset = offset.or(offsetValue).unwrap_or(0);
+    let GetEntriesPagedOptions {
+        collection_id, tag_ids, tag_mode, attachment_type,
+        search_query, search_scope, advanced_search, filter_type,
+        sort_field, sort_direction, secondary_sort_field, secondary_sort_direction,
+        limit, offset,
+    } = options;
+    let tag_mode = tag_mode.unwrap_or_else(|| "or".to_string());
+    let sort_field = sort_field.unwrap_or_else(|| "dateAdded".to_string());
+    let sort_direction = sort_direction.unwrap_or_else(|| "desc".to_string());
+    let secondary_sort_direction = secondary_sort_direction.unwrap_or_else(|| "asc".to_string());
+    let limit = limit.unwrap_or(20);
+    let offset = offset.unwrap_or(0);
 
     let mut effective_attachment_type = attachment_type;
     let filter_type_str = filter_type.as_deref();
@@ -1388,18 +1376,18 @@ pub async fn get_entries_paged(
     let mut count_qb = QueryBuilder::<Sqlite>::new(
         "SELECT COUNT(*) FROM entries e JOIN item_types it ON e.item_type_id = it.id WHERE e.is_deleted = 0",
     );
-    apply_entry_filters(
-        &mut count_qb,
+    let count_filter_params = EntryFilterParams {
         collection_id,
-        tag_ids.clone(),
-        &tag_mode,
-        effective_attachment_type.clone(),
-        search_query.clone(),
-        search_scope.as_deref(),
-        advanced_search.as_ref(),
-        filter_type_str,
-        &saved_searches,
-    );
+        tag_ids: tag_ids.clone(),
+        tag_mode: &tag_mode,
+        attachment_type: effective_attachment_type.clone(),
+        search_query: search_query.clone(),
+        search_scope: search_scope.as_deref(),
+        advanced_search: advanced_search.as_ref(),
+        filter_type: filter_type_str,
+        saved_searches: &saved_searches,
+    };
+    apply_entry_filters(&mut count_qb, &count_filter_params);
 
     let total: i64 = count_qb
         .build_query_scalar()
@@ -1438,18 +1426,18 @@ pub async fn get_entries_paged(
         "#,
     );
 
-    apply_entry_filters(
-        &mut qb,
+    let filter_params = EntryFilterParams {
         collection_id,
-        tag_ids.clone(),
-        &tag_mode,
-        effective_attachment_type.clone(),
-        search_query.clone(),
-        search_scope.as_deref(),
-        advanced_search.as_ref(),
-        filter_type_str,
-        &saved_searches,
-    );
+        tag_ids: tag_ids.clone(),
+        tag_mode: &tag_mode,
+        attachment_type: effective_attachment_type.clone(),
+        search_query: search_query.clone(),
+        search_scope: search_scope.as_deref(),
+        advanced_search: advanced_search.as_ref(),
+        filter_type: filter_type_str,
+        saved_searches: &saved_searches,
+    };
+    apply_entry_filters(&mut qb, &filter_params);
 
     let sort_dir = if sort_direction.to_lowercase() == "asc" { "ASC" } else { "DESC" };
     let secondary_dir = if secondary_sort_direction.to_lowercase() == "desc" { "DESC" } else { "ASC" };
@@ -1460,7 +1448,7 @@ pub async fn get_entries_paged(
         "year" => "SUBSTR(COALESCE(e.date, ''), 1, 4)",
         "dateModified" => "e.date_modified",
         "itemType" => "it.display_name",
-        "dateAdded" | _ => "e.date_added",
+        _ => "e.date_added",
     };
 
     qb.push(" ORDER BY ");
@@ -1475,7 +1463,7 @@ pub async fn get_entries_paged(
             "year" => "SUBSTR(COALESCE(e.date, ''), 1, 4)",
             "dateModified" => "e.date_modified",
             "itemType" => "it.display_name",
-            "dateAdded" | _ => "e.date_added",
+            _ => "e.date_added",
         };
         qb.push(", ");
         qb.push(secondary_sort);
@@ -1866,25 +1854,22 @@ pub async fn update_entry(
     // Commit transaction
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    if input.creators.is_some() {
-        if let Err(e) = refresh_entry_creators_sort(&state.db, id).await {
+    if input.creators.is_some()
+        && let Err(e) = refresh_entry_creators_sort(&state.db, id).await {
             tracing::warn!("Failed to refresh creators_sort for entry {}: {}", id, e);
         }
-    }
-    if input.title.is_some() || input.fields.is_some() {
-        if let Err(e) = refresh_entry_fts(&state.db, id).await {
+    if (input.title.is_some() || input.fields.is_some())
+        && let Err(e) = refresh_entry_fts(&state.db, id).await {
             tracing::warn!("Failed to refresh entries_fts for entry {}: {}", id, e);
         }
-    }
 
     // Sync attachment filenames if relevant fields changed and auto-rename is enabled
     // Run synchronously so the updated attachment data is included in the response
     let renamed_files = input.title.is_some() || input.date.is_some() || input.creators.is_some();
-    if renamed_files {
-        if let Err(e) = sync_entry_attachment_filenames(&state.db, &state.library_path, id).await {
+    if renamed_files
+        && let Err(e) = sync_entry_attachment_filenames(&state.db, &state.library_path, id).await {
             tracing::warn!("Failed to sync attachment filenames for entry {}: {}", id, e);
         }
-    }
 
     {
         let lib = state.library_path.read().await;
@@ -2359,8 +2344,8 @@ pub async fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), St
 
         // Enqueue background OCR extraction jobs for each attachment
         for att in attachments {
-            if att.file_path.is_some() && att.attachment_type != "note" {
-                if let Err(e) = state.job_queue.enqueue(
+            if att.file_path.is_some() && att.attachment_type != "note"
+                && let Err(e) = state.job_queue.enqueue(
                     crate::jobs::types::JobType::OcrExtract,
                     Some(format!("Extract: {}", att.title.as_deref().unwrap_or("attachment"))),
                     serde_json::json!({ "attachmentId": att.id }),
@@ -2368,7 +2353,6 @@ pub async fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), St
                 ).await {
                     tracing::warn!("Failed to enqueue OCR job for attachment {}: {}", att.id, e);
                 }
-            }
         }
 
         if let Err(e) = state.search_index.commit().await {
@@ -2435,11 +2419,10 @@ pub async fn permanent_delete_entry(state: State<'_, AppState>, id: i64) -> Resu
     // Safety: entry_key is a server-generated UUID, not user input — no path traversal risk
     let library_path = state.library_path.read().await;
     let entry_folder = library_path.join("library").join("entries").join(&entry_key);
-    if entry_folder.exists() {
-        if let Err(e) = fs::remove_dir_all(&entry_folder) {
+    if entry_folder.exists()
+        && let Err(e) = fs::remove_dir_all(&entry_folder) {
             tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
         }
-    }
 
     Ok(())
 }
@@ -2514,11 +2497,10 @@ pub async fn empty_trash(state: State<'_, AppState>) -> Result<i64, String> {
     let library_path = state.library_path.read().await;
     for key in entry_keys {
         let entry_folder = library_path.join("library").join("entries").join(&key);
-        if entry_folder.exists() {
-            if let Err(e) = fs::remove_dir_all(&entry_folder) {
+        if entry_folder.exists()
+            && let Err(e) = fs::remove_dir_all(&entry_folder) {
                 tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
             }
-        }
     }
 
     Ok(count)
@@ -2690,8 +2672,8 @@ pub async fn repair_entry_attachments(
         // Try to find the file in the expected directory
         let expected_dir = library_path.join("library").join("entries").join(&entry_key);
 
-        if expected_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&expected_dir) {
+        if expected_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&expected_dir) {
                 let pdfs: Vec<_> = entries
                     .filter_map(|e| e.ok())
                     .filter(|e| {
@@ -2729,7 +2711,6 @@ pub async fn repair_entry_attachments(
                     ));
                 }
             }
-        }
     }
 
     Ok(repaired)
@@ -4710,11 +4691,10 @@ pub async fn bulk_permanent_delete(
     let library_path = state.library_path.read().await;
     for key in entry_keys {
         let entry_folder = library_path.join("library").join("entries").join(&key);
-        if entry_folder.exists() {
-            if let Err(e) = fs::remove_dir_all(&entry_folder) {
+        if entry_folder.exists()
+            && let Err(e) = fs::remove_dir_all(&entry_folder) {
                 tracing::warn!("Failed to delete folder {:?}: {}", entry_folder, e);
             }
-        }
     }
 
     Ok(())

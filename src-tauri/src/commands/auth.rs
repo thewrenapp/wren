@@ -44,7 +44,7 @@ pub async fn sign_in_email(
     email: String,
     password: String,
 ) -> Result<AuthState, String> {
-    let auth = FirebaseAuth::new(config::FIREBASE_API_KEY);
+    let auth = FirebaseAuth::new(&config::firebase_api_key());
     let user = auth.sign_in_email(&email, &password).await.map_err(|e| e.to_string())?;
     save_auth(&state, &user).await?;
     Ok(auth_state_from(&user))
@@ -56,7 +56,7 @@ pub async fn sign_up_email(
     email: String,
     password: String,
 ) -> Result<AuthState, String> {
-    let auth = FirebaseAuth::new(config::FIREBASE_API_KEY);
+    let auth = FirebaseAuth::new(&config::firebase_api_key());
     let user = auth.sign_up_email(&email, &password).await.map_err(|e| e.to_string())?;
     save_auth(&state, &user).await?;
     Ok(auth_state_from(&user))
@@ -70,7 +70,7 @@ pub async fn sign_in_google(
 ) -> Result<AuthState, String> {
     let (code, redirect_uri) = run_oauth_flow(&app_handle, "google").await?;
 
-    let auth = FirebaseAuth::new(config::FIREBASE_API_KEY);
+    let auth = FirebaseAuth::new(&config::firebase_api_key());
     let user = auth
         .exchange_google_code(
             &code,
@@ -87,7 +87,7 @@ pub async fn sign_in_google(
 
 #[tauri::command]
 pub async fn reset_password(email: String) -> Result<(), String> {
-    let auth = FirebaseAuth::new(config::FIREBASE_API_KEY);
+    let auth = FirebaseAuth::new(&config::firebase_api_key());
     auth.send_password_reset(&email).await.map_err(|e| e.to_string())
 }
 
@@ -107,7 +107,7 @@ pub async fn handle_oauth_callback(
     provider_id: &str,
     id_token: &str,
 ) -> Result<(), String> {
-    let auth = FirebaseAuth::new(config::FIREBASE_API_KEY);
+    let auth = FirebaseAuth::new(&config::firebase_api_key());
     let user = auth
         .sign_in_with_credential(provider_id, id_token)
         .await
@@ -199,6 +199,84 @@ async fn run_oauth_flow(
     Ok((code, redirect_uri))
 }
 
+// ── Token management ────────────────────────────────────────────────
+
+/// Get a valid Firebase ID token, refreshing if expired.
+/// Returns (id_token, uid, email).
+pub async fn get_valid_id_token(db: &sqlx::SqlitePool) -> Result<(String, String, String), String> {
+    #[derive(sqlx::FromRow)]
+    struct TokenRow {
+        uid: String,
+        email: Option<String>,
+        id_token: String,
+        refresh_token: String,
+        token_expires_at: String,
+    }
+
+    let row: TokenRow = sqlx::query_as(
+        "SELECT uid, email, id_token, refresh_token, token_expires_at FROM user_account LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "Not signed in".to_string())?;
+
+    // Check if token is expired (with 60s buffer)
+    let is_expired = chrono::NaiveDateTime::parse_from_str(&row.token_expires_at, "%Y-%m-%d %H:%M:%S")
+        .map(|expires| {
+            let expires_utc = expires.and_utc();
+            expires_utc <= chrono::Utc::now() + chrono::Duration::seconds(60)
+        })
+        .unwrap_or(true);
+
+    if !is_expired {
+        return Ok((row.id_token, row.uid, row.email.unwrap_or_default()));
+    }
+
+    // Token expired — refresh it
+    let auth = FirebaseAuth::new(&config::firebase_api_key());
+    let refreshed = auth
+        .refresh_token(&row.refresh_token)
+        .await
+        .map_err(|e| format!("Token refresh failed: {}", e))?;
+
+    // Save new token
+    sqlx::query(
+        "UPDATE user_account SET id_token = ?, refresh_token = ?, \
+         token_expires_at = datetime('now', '+' || ? || ' seconds') WHERE uid = ?",
+    )
+    .bind(&refreshed.id_token)
+    .bind(&refreshed.refresh_token)
+    .bind(&refreshed.expires_in)
+    .bind(&row.uid)
+    .execute(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok((refreshed.id_token, row.uid, row.email.unwrap_or_default()))
+}
+
+/// Write user profile to Firestore (called after sign-in).
+async fn write_user_profile(_db: &sqlx::SqlitePool, user: &AuthUser) {
+    let firestore = crate::firebase::firestore::FirestoreClient::new(config::FIREBASE_PROJECT_ID);
+    let fields = serde_json::json!({
+        "email": crate::firebase::firestore::to_firestore_string(&user.email),
+        "displayName": crate::firebase::firestore::to_firestore_string(
+            user.display_name.as_deref().unwrap_or("")
+        ),
+        "createdAt": crate::firebase::firestore::to_firestore_timestamp(
+            &chrono::Utc::now().to_rfc3339()
+        ),
+    });
+
+    if let Err(e) = firestore
+        .set_document("users", &user.uid, &fields, &user.id_token)
+        .await
+    {
+        tracing::warn!("Failed to write user profile to Firestore: {}", e);
+    }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn auth_state_from(user: &AuthUser) -> AuthState {
@@ -211,7 +289,9 @@ fn auth_state_from(user: &AuthUser) -> AuthState {
 }
 
 async fn save_auth(state: &State<'_, AppState>, user: &AuthUser) -> Result<(), String> {
-    save_auth_direct(&state.db, user).await
+    save_auth_direct(&state.db, user).await?;
+    write_user_profile(&state.db, user).await;
+    Ok(())
 }
 
 async fn save_auth_direct(db: &sqlx::SqlitePool, user: &AuthUser) -> Result<(), String> {

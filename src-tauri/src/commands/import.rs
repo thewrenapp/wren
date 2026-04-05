@@ -610,11 +610,10 @@ fn chunks_to_string(chunks: &[Spanned<Chunk>]) -> String {
 /// Check if an entry is an arXiv preprint based on various fields
 fn is_arxiv_entry(entry: &Entry) -> bool {
     // Check eprint field (returns String directly)
-    if let Ok(eprint) = entry.eprint() {
-        if eprint.contains("arxiv") || eprint.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if let Ok(eprint) = entry.eprint()
+        && (eprint.contains("arxiv") || eprint.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)) {
             return true;
         }
-    }
 
     // Check eprint_type field
     if let Ok(eprinttype) = entry.eprint_type() {
@@ -625,18 +624,16 @@ fn is_arxiv_entry(entry: &Entry) -> bool {
     }
 
     // Check URL field
-    if let Ok(url) = entry.url() {
-        if url.contains("arxiv.org") {
+    if let Ok(url) = entry.url()
+        && url.contains("arxiv.org") {
             return true;
         }
-    }
 
     // Check DOI field
-    if let Ok(doi) = entry.doi() {
-        if doi.to_lowercase().contains("arxiv") {
+    if let Ok(doi) = entry.doi()
+        && doi.to_lowercase().contains("arxiv") {
             return true;
         }
-    }
 
     // Check publisher field - returns Vec<Vec<Spanned<Chunk>>>
     if let Ok(publishers) = entry.publisher() {
@@ -849,8 +846,8 @@ pub async fn import_bibtex(
         ];
 
         for (bibtex_field, wren_field) in field_mappings {
-            if let Some(value) = get_field_string(entry, bibtex_field) {
-                if let Ok(Some(field_id)) = sqlx::query_scalar::<_, i64>(
+            if let Some(value) = get_field_string(entry, bibtex_field)
+                && let Ok(Some(field_id)) = sqlx::query_scalar::<_, i64>(
                     "SELECT id FROM fields WHERE name = ?"
                 )
                 .bind(wren_field)
@@ -866,7 +863,6 @@ pub async fn import_bibtex(
                     .execute(&state.db)
                     .await;
                 }
-            }
         }
 
         // Index entry metadata for full-text search
@@ -977,11 +973,11 @@ enum StringOrNumber {
     Number(i64),
 }
 
-impl StringOrNumber {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for StringOrNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StringOrNumber::String(s) => s.clone(),
-            StringOrNumber::Number(n) => n.to_string(),
+            StringOrNumber::String(s) => f.write_str(s),
+            StringOrNumber::Number(n) => write!(f, "{}", n),
         }
     }
 }
@@ -1107,15 +1103,14 @@ pub async fn import_csl_json(
 
         // Extract date from issued
         let date = item.issued.as_ref().and_then(|d| {
-            if let Some(parts) = &d.date_parts {
-                if let Some(first) = parts.first() {
+            if let Some(parts) = &d.date_parts
+                && let Some(first) = parts.first() {
                     return Some(match first.len() {
                         1 => first[0].to_string(),
                         2 => format!("{}-{:02}", first[0], first[1]),
                         _ => format!("{}-{:02}-{:02}", first[0], first.get(1).unwrap_or(&1), first.get(2).unwrap_or(&1)),
                     });
                 }
-            }
             d.raw.clone()
         });
 
@@ -1228,9 +1223,9 @@ pub async fn import_csl_json(
         ];
 
         for (field_name, value) in field_values {
-            if let Some(val) = value {
-                if !val.is_empty() {
-                    if let Ok(Some(field_id)) = sqlx::query_scalar::<_, i64>(
+            if let Some(val) = value
+                && !val.is_empty()
+                    && let Ok(Some(field_id)) = sqlx::query_scalar::<_, i64>(
                         "SELECT id FROM fields WHERE name = ?"
                     )
                     .bind(field_name)
@@ -1246,8 +1241,6 @@ pub async fn import_csl_json(
                         .execute(&state.db)
                         .await;
                     }
-                }
-            }
         }
 
         if let Err(e) = crate::commands::entries::refresh_entry_fts(&state.db, entry_id).await {
@@ -1608,17 +1601,27 @@ fn get_attachment_type_from_mimetype(mimetype: &str, path: &str) -> &'static str
 /// - `import_tags`: Whether to import tags (default true)
 /// - `excluded_files`: Map from bibtex key to list of file indices to exclude
 /// - `collection_id`: Optional collection to add imported entries to
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiblatexImportOptions {
+    pub biblatex_path: String,
+    pub files_base_path: Option<String>,
+    pub selected_keys: Option<Vec<String>>,
+    pub import_tags: Option<bool>,
+    pub excluded_files: Option<std::collections::HashMap<String, Vec<usize>>>,
+    pub collection_id: Option<i64>,
+}
+
 #[tauri::command]
 pub async fn import_biblatex_with_files(
     state: State<'_, AppState>,
     app_handle: AppHandle,
-    biblatex_path: String,
-    files_base_path: Option<String>,
-    selected_keys: Option<Vec<String>>,
-    import_tags: Option<bool>,
-    excluded_files: Option<std::collections::HashMap<String, Vec<usize>>>,
-    collection_id: Option<i64>,
+    options: BiblatexImportOptions,
 ) -> Result<BiblatexImportResult, String> {
+    let BiblatexImportOptions {
+        biblatex_path, files_base_path, selected_keys,
+        import_tags, excluded_files, collection_id,
+    } = options;
     let selected_keys_set: Option<std::collections::HashSet<String>> = selected_keys
         .map(|keys| keys.into_iter().collect());
     let should_import_tags = import_tags.unwrap_or(true);
@@ -1713,12 +1716,11 @@ pub async fn import_biblatex_with_files(
         tracing::info!("BibLaTeX import: '{}' -> entry_type='{}' -> item_type='{}'", bibtex_key, entry_type_str, item_type);
 
         // If selected_keys is provided, skip entries not in the set
-        if let Some(ref keys_set) = selected_keys_set {
-            if !keys_set.contains(&bibtex_key) {
+        if let Some(ref keys_set) = selected_keys_set
+            && !keys_set.contains(&bibtex_key) {
                 skipped += 1;
                 continue;
             }
-        }
 
         // Get title - biblatex crate handles brace stripping automatically
         let title = match entry.title() {
@@ -1920,8 +1922,8 @@ pub async fn import_biblatex_with_files(
         }
 
         // Handle keywords field - create tags (if enabled)
-        if should_import_tags {
-            if let Some(keywords_str) = get_field_string(entry, "keywords") {
+        if should_import_tags
+            && let Some(keywords_str) = get_field_string(entry, "keywords") {
                 let keywords: Vec<&str> = keywords_str.split(',')
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
@@ -1976,7 +1978,6 @@ pub async fn import_biblatex_with_files(
                     .await;
                 }
             }
-        }
 
         // Handle file field - import associated files
         if let Some(file_field) = get_field_string(entry, "file") {
@@ -2021,11 +2022,10 @@ pub async fn import_biblatex_with_files(
 
             for (file_index, (file_title, file_path, mimetype)) in files.into_iter().enumerate() {
                 // Skip excluded files
-                if let Some(indices) = excluded_indices {
-                    if indices.contains(&file_index) {
+                if let Some(indices) = excluded_indices
+                    && indices.contains(&file_index) {
                         continue;
                     }
-                }
                 // Resolve file path relative to base path
                 // Validate path stays within base_path (file_path is parsed from BibTeX
                 // file content and could contain path traversal sequences)

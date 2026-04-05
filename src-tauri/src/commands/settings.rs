@@ -109,7 +109,16 @@ pub async fn setup_sync_folder(state: State<'_, AppState>, sync_folder: String) 
                 for entry in dirs.flatten() {
                     let dst = dst_entries.join(entry.file_name());
                     if !dst.exists() {
-                        let _ = fs::rename(entry.path(), &dst);
+                        if let Err(e) = fs::rename(entry.path(), &dst) {
+                            // rename fails across filesystems — fall back to copy + delete
+                            tracing::warn!("rename failed, trying copy: {}", e);
+                            if entry.path().is_dir() {
+                                let _ = copy_dir_all(&entry.path(), &dst);
+                            } else {
+                                let _ = fs::copy(entry.path(), &dst);
+                            }
+                            let _ = fs::remove_dir_all(entry.path());
+                        }
                     }
                 }
             }
@@ -184,7 +193,7 @@ pub async fn disable_sync(state: State<'_, AppState>) -> Result<(), String> {
     let dst_entries = library_dir.join("entries");
     if src_entries.exists() {
         // Try rename first, fall back to per-entry move
-        if let Err(_) = fs::rename(&src_entries, &dst_entries) {
+        if fs::rename(&src_entries, &dst_entries).is_err() {
             fs::create_dir_all(&dst_entries).ok();
             if let Ok(dirs) = fs::read_dir(&src_entries) {
                 for entry in dirs.flatten() {
@@ -205,11 +214,10 @@ pub async fn disable_sync(state: State<'_, AppState>) -> Result<(), String> {
     }
 
     // Clean up the old sync folder (now empty or nearly empty)
-    if sync_target.exists() {
-        if let Err(e) = fs::remove_dir_all(&sync_target) {
+    if sync_target.exists()
+        && let Err(e) = fs::remove_dir_all(&sync_target) {
             tracing::warn!("Failed to clean up old sync folder {:?}: {}", sync_target, e);
         }
-    }
 
     // Clear setting
     sqlx::query("DELETE FROM settings WHERE key = 'sync_folder'")
@@ -219,6 +227,22 @@ pub async fn disable_sync(state: State<'_, AppState>) -> Result<(), String> {
 
     tracing::info!("Sync disabled, files moved back to {:?}, old sync folder removed", library_dir);
 
+    Ok(())
+}
+
+/// Recursively copy a directory (fallback when rename fails across filesystems).
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    use std::fs;
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &dst_path)?;
+        } else {
+            fs::copy(entry.path(), &dst_path)?;
+        }
+    }
     Ok(())
 }
 

@@ -7,11 +7,13 @@ import {
   Check,
   Loader2,
   LogOut,
+  Share2,
   User,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { getLibraryPath } from "@/services/tauri";
+import { useUIStore } from "@/stores/uiStore";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "@/stores/toastStore";
@@ -342,6 +344,17 @@ export function SyncSection() {
                 Sign Out
               </Button>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const { showShareDialog } = useUIStore.getState();
+                showShareDialog('library', [], []);
+              }}
+            >
+              <Share2 className="h-4 w-4 mr-2" />
+              Share Entire Library
+            </Button>
           </div>
         ) : (
           <div className="space-y-3">

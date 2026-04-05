@@ -22,7 +22,7 @@ interface AuthState {
 
 export function ShareDialog() {
   const { shareDialog, hideShareDialog } = useUIStore();
-  const { open, entryIds, entryTitles, collectionName } = shareDialog;
+  const { open, shareType, entryIds, entryTitles, collectionName } = shareDialog;
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"editor" | "viewer">("editor");
@@ -49,8 +49,14 @@ export function ShareDialog() {
     if (!email) return;
     setLoading(true);
     try {
-      // TODO: Wire to create_share backend when sharing transport is ready
-      toast.info("Sharing will be available once connected to Firebase. Entry data is ready for sync.");
+      await invoke("create_share", {
+        email: email.toLowerCase(),
+        role,
+        shareType,
+        collectionId: shareDialog.collectionId,
+        entryIds: entryIds.length > 0 ? entryIds : null,
+      });
+      toast.success(`Shared with ${email}`);
       handleClose();
     } catch (err) {
       toast.error(`${err}`);
@@ -59,11 +65,13 @@ export function ShareDialog() {
     }
   };
 
-  const title = collectionName
-    ? `Share "${collectionName}"`
-    : entryTitles.length === 1
-      ? `Share "${entryTitles[0]}"`
-      : `Share ${entryIds.length} entries`;
+  const title = shareType === "library"
+    ? "Share your library"
+    : shareType === "collection"
+      ? `Share "${collectionName}"`
+      : entryTitles.length === 1
+        ? `Share "${entryTitles[0]}"`
+        : `Share ${entryIds.length} entries`;
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && handleClose()}>

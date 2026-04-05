@@ -55,9 +55,7 @@ pub fn from_override(context_window: usize) -> ModelContext {
 
 fn openai_context(model: &str) -> usize {
     let m = model.to_lowercase();
-    if m.contains("gpt-4o") || m.contains("gpt-4.1") || m.contains("chatgpt-4o") {
-        128_000
-    } else if m.contains("gpt-4-turbo") {
+    if m.contains("gpt-4o") || m.contains("gpt-4.1") || m.contains("chatgpt-4o") || m.contains("gpt-4-turbo") {
         128_000
     } else if m.contains("gpt-4") {
         8_192

@@ -28,9 +28,9 @@ pub fn extract_metadata(path: &Path) -> Result<PdfMetadata> {
     };
 
     // Get trailer reference to info dictionary
-    if let Ok(info_ref) = doc.trailer.get(b"Info") {
-        if let Ok(info_ref) = info_ref.as_reference() {
-            if let Ok(info) = doc.get_dictionary(info_ref) {
+    if let Ok(info_ref) = doc.trailer.get(b"Info")
+        && let Ok(info_ref) = info_ref.as_reference()
+            && let Ok(info) = doc.get_dictionary(info_ref) {
                 metadata.title = get_text_string(info, b"Title");
                 metadata.author = get_text_string(info, b"Author");
                 metadata.subject = get_text_string(info, b"Subject");
@@ -38,8 +38,6 @@ pub fn extract_metadata(path: &Path) -> Result<PdfMetadata> {
                 metadata.creator = get_text_string(info, b"Creator");
                 metadata.producer = get_text_string(info, b"Producer");
             }
-        }
-    }
 
     Ok(metadata)
 }
@@ -69,7 +67,7 @@ fn get_text_string(dict: &lopdf::Dictionary, key: &[u8]) -> Option<String> {
 
 /// Decode UTF-16BE bytes to a String
 fn decode_utf16be(bytes: &[u8]) -> Option<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
 

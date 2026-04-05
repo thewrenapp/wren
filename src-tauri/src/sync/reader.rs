@@ -123,11 +123,10 @@ pub async fn upsert_entry_from_json(pool: &SqlitePool, entry: &EntryJson) -> Res
 
     for (tag_name, tag_entry) in &entry.tags {
         // Skip removed tags
-        if let Some(ref removed) = tag_entry.removed {
-            if removed >= &tag_entry.added {
+        if let Some(ref removed) = tag_entry.removed
+            && removed >= &tag_entry.added {
                 continue;
             }
-        }
         // Get or create tag
         let tag_id: i64 = match sqlx::query_scalar::<_, i64>(
             "SELECT id FROM tags WHERE name = ? COLLATE NOCASE",
@@ -163,11 +162,10 @@ pub async fn upsert_entry_from_json(pool: &SqlitePool, entry: &EntryJson) -> Res
         .await?;
 
     for (coll_key, coll_entry) in &entry.collections {
-        if let Some(ref removed) = coll_entry.removed {
-            if removed >= &coll_entry.added {
+        if let Some(ref removed) = coll_entry.removed
+            && removed >= &coll_entry.added {
                 continue;
             }
-        }
         let coll_id: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM collections WHERE key = ?",
         )
@@ -183,6 +181,8 @@ pub async fn upsert_entry_from_json(pool: &SqlitePool, entry: &EntryJson) -> Res
             .bind(entry_id)
             .execute(&mut *tx)
             .await?;
+        } else {
+            tracing::debug!("Sync: collection key {} not found locally, skipping for entry {}", coll_key, entry.key);
         }
     }
 
@@ -264,7 +264,7 @@ async fn refresh_fts(pool: &SqlitePool, entry_id: i64) -> Result<()> {
         )
         .bind(entry_id)
         .bind(&t)
-        .bind(&abstract_note.unwrap_or_default())
+        .bind(abstract_note.unwrap_or_default())
         .execute(pool)
         .await?;
     }

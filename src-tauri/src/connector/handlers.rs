@@ -89,12 +89,11 @@ pub async fn save_items(
     }
 
     // Track session → entry IDs mapping
-    if let Some(session_id) = &request.session_id {
-        if !session_id.is_empty() {
+    if let Some(session_id) = &request.session_id
+        && !session_id.is_empty() {
             let entry_ids: Vec<i64> = saved.iter().map(|e| e.id).collect();
             state.sessions.lock().await.insert(session_id.clone(), entry_ids);
         }
-    }
 
     // Emit event to frontend for each saved entry
     for entry in &saved {
@@ -239,9 +238,9 @@ async fn save_single_item(
     ];
 
     for (field_name, value) in field_values {
-        if let Some(val) = value {
-            if !val.is_empty() {
-                if let Ok(Some(field_id)) =
+        if let Some(val) = value
+            && !val.is_empty()
+                && let Ok(Some(field_id)) =
                     sqlx::query_scalar::<_, i64>("SELECT id FROM fields WHERE name = ?")
                         .bind(field_name)
                         .fetch_optional(&state.db)
@@ -256,8 +255,6 @@ async fn save_single_item(
                     .execute(&state.db)
                     .await;
                 }
-            }
-        }
     }
 
     // Insert tags
@@ -417,11 +414,7 @@ pub async fn update_session(
     let target = request.get("target").and_then(|v| v.as_str()).unwrap_or("");
 
     // Parse target: "C123" → collection ID 123, "L1" → library (no collection)
-    let collection_id: Option<i64> = if target.starts_with('C') {
-        target[1..].parse().ok()
-    } else {
-        None
-    };
+    let collection_id: Option<i64> = target.strip_prefix('C').and_then(|s| s.parse().ok());
 
     // Get entry IDs for this session
     let entry_ids = {
@@ -625,7 +618,7 @@ pub async fn save_attachment(
         if let Some(meta) = entry_meta {
             let entry_title = meta.title.as_deref().unwrap_or("Untitled");
             let year = meta.date.as_deref().and_then(|d| d.get(..4));
-            let generated = crate::filename::generate_filename(entry_title, &creators, year, &ext);
+            let generated = crate::filename::generate_filename(entry_title, &creators, year, ext);
             if !generated.is_empty() {
                 let new_path = crate::filename::resolve_conflict(&entry_dir, &generated);
                 if std::fs::rename(&file_path, &new_path).is_ok() {
@@ -808,7 +801,7 @@ pub async fn save_single_file(
     // Enqueue extraction for the snapshot
     let _ = state.job_queue.enqueue(
         crate::jobs::types::JobType::OcrExtract,
-        Some(format!("Extract: Snapshot.html")),
+        Some("Extract: Snapshot.html".to_string()),
         serde_json::json!({ "attachmentId": attachment_id }),
         0,
     ).await;

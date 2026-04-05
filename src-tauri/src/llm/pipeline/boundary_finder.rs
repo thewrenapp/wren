@@ -1,6 +1,6 @@
-/// Finds section boundaries in raw text using `starts_with` markers from discovery.
-///
-/// Pure Rust — no LLM calls, no regex.
+// Finds section boundaries in raw text using `starts_with` markers from discovery.
+//
+// Pure Rust — no LLM calls, no regex.
 
 use super::utf8::{ceil_char_boundary, floor_char_boundary};
 
@@ -58,7 +58,7 @@ pub fn find_section_ranges_with_lines(
     let mut ranges: Vec<SectionRange> = Vec::with_capacity(sections.len());
     let mut search_from = 0;
 
-    for (_i, section) in sections.iter().enumerate() {
+    for section in sections.iter() {
         // Try line-number-based resolution first
         let found_offset = resolve_section_offset(section, full_text, line_offsets, search_from);
 
@@ -118,15 +118,14 @@ pub fn find_section_ranges_with_lines(
     // Any text before the first discovered section (title pages, author info, etc.)
     // is intentionally dropped — the LLM discovers meaningful sections, and pre-section
     // content (addresses, affiliations) doesn't warrant its own section.
-    if let Some(first) = ranges.first() {
-        if first.start_offset > 0 {
+    if let Some(first) = ranges.first()
+        && first.start_offset > 0 {
             tracing::debug!(
                 "Dropping {} chars of pre-section content before '{}'",
                 first.start_offset,
                 first.name,
             );
         }
-    }
 
     ranges
 }
@@ -139,8 +138,8 @@ fn resolve_section_offset(
     search_from: usize,
 ) -> Option<usize> {
     // Try line number first if available
-    if let (Some(line), Some(offsets)) = (section.line, line_offsets) {
-        if let Some(&offset) = offsets.get((line.saturating_sub(1)) as usize) {
+    if let (Some(line), Some(offsets)) = (section.line, line_offsets)
+        && let Some(&offset) = offsets.get((line.saturating_sub(1)) as usize) {
             // Validate: the text at this offset should plausibly contain the section name.
             // Check first 100 chars at the offset for a case-insensitive match of a significant
             // part of the section name (first word or first 10 chars).
@@ -165,7 +164,6 @@ fn resolve_section_offset(
                 &full_text[offset..log_end],
             );
         }
-    }
 
     // Fall back to starts_with fuzzy matching
     find_boundary(full_text, &section.starts_with, search_from)
@@ -199,13 +197,12 @@ pub(crate) fn find_boundary(text: &str, marker: &str, search_from: usize) -> Opt
     // Fuzzy match: strip control characters + case-insensitive
     // PDF extraction often inserts control chars (e.g. \x02) for hyphenated line breaks
     let search_stripped = strip_control_chars(&search_lower);
-    if search_stripped != search_lower {
-        if let Some(pos) = search_stripped.find(&marker_lower) {
+    if search_stripped != search_lower
+        && let Some(pos) = search_stripped.find(&marker_lower) {
             // Map position back to original text
             let approx_pos = map_stripped_pos(search_text, pos);
             return Some(sf + approx_pos);
         }
-    }
 
     // Fuzzy match: whitespace-normalized + control-chars-stripped + case-insensitive
     let marker_normalized = normalize_whitespace(&marker_lower);
@@ -293,10 +290,8 @@ fn normalize_to_ascii(s: &str) -> String {
                 } else {
                     ' ' // punctuation → space to preserve word boundaries
                 }
-            } else if let Some(ascii) = math_unicode_to_ascii(c) {
-                ascii
             } else {
-                ' '
+                math_unicode_to_ascii(c).unwrap_or(' ')
             }
         })
         .collect()
@@ -356,7 +351,7 @@ fn math_unicode_to_ascii(c: char) -> Option<char> {
     }
 
     // Subscript digits (₀-₉)
-    if cp >= 0x2080 && cp <= 0x2089 {
+    if (0x2080..=0x2089).contains(&cp) {
         return Some((b'0' + (cp - 0x2080) as u8) as char);
     }
 
@@ -406,7 +401,7 @@ fn math_unicode_to_ascii(c: char) -> Option<char> {
         0x210D => Some('H'), // DOUBLE-STRUCK CAPITAL H (ℍ)
         0x2115 => Some('N'), // DOUBLE-STRUCK CAPITAL N (ℕ)
         0x2119 => Some('P'), // DOUBLE-STRUCK CAPITAL P (ℙ)
-        0x211A => return Some('Q'), // DOUBLE-STRUCK CAPITAL Q (ℚ)
+        0x211A => Some('Q'), // DOUBLE-STRUCK CAPITAL Q (ℚ)
         0x211D => Some('R'), // DOUBLE-STRUCK CAPITAL R (ℝ)
         0x2124 => Some('Z'), // DOUBLE-STRUCK CAPITAL Z (ℤ)
         _ => None,

@@ -148,8 +148,8 @@ impl JobQueue {
                     queue.emit_job_update(&job_id).await;
 
                     // Determine if this job type is CPU-bound
-                    let is_cpu_bound = JobType::from_str(&job_type_str)
-                        .map_or(false, |jt| jt.is_cpu_bound());
+                    let is_cpu_bound = job_type_str.parse::<JobType>()
+                        .is_ok_and(|jt| jt.is_cpu_bound());
 
                     // Spawn the job execution
                     let q = Arc::clone(&queue);
@@ -166,12 +166,15 @@ impl JobQueue {
                             let cf = cancel_flag.clone();
                             let handle = tokio::runtime::Handle::current();
                             tokio::task::spawn_blocking(move || {
+                                let ctx = super::executor::JobContext {
+                                    db: &q2.db,
+                                    app_handle: &q2.app_handle,
+                                    search_index: &q2.search_index,
+                                    library_path: &q2.library_path,
+                                    pdf_parser: &q2.pdf_parser,
+                                };
                                 handle.block_on(super::executor::run_job(
-                                    &q2.db,
-                                    &q2.app_handle,
-                                    &q2.search_index,
-                                    &q2.library_path,
-                                    &q2.pdf_parser,
+                                    &ctx,
                                     &jid2,
                                     &jts,
                                     &pj,
@@ -182,12 +185,15 @@ impl JobQueue {
                             .unwrap_or_else(|e| Err(format!("Job task panicked: {}", e)))
                         } else {
                             // I/O-bound jobs run directly on the async pool
+                            let ctx = super::executor::JobContext {
+                                db: &q.db,
+                                app_handle: &q.app_handle,
+                                search_index: &q.search_index,
+                                library_path: &q.library_path,
+                                pdf_parser: &q.pdf_parser,
+                            };
                             super::executor::run_job(
-                                &q.db,
-                                &q.app_handle,
-                                &q.search_index,
-                                &q.library_path,
-                                &q.pdf_parser,
+                                &ctx,
                                 &jid,
                                 &job_type_str,
                                 &payload_json,
@@ -220,8 +226,8 @@ impl JobQueue {
 
                                     if was_force {
                                         // Hard cancel: clear checkpoint so job can't be resumed
-                                        if job_type_str == "llm_parse" {
-                                            if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&payload_json) {
+                                        if job_type_str == "llm_parse"
+                                            && let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&payload_json) {
                                                 let att_id = payload.attachment_id;
                                                 if let Err(e) = sqlx::query(
                                                     "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
@@ -233,7 +239,6 @@ impl JobQueue {
                                                     tracing::warn!("Failed to clear checkpoint for attachment {}: {}", att_id, e);
                                                 }
                                             }
-                                        }
                                     }
 
                                     let msg = if was_force { "Cancelled" } else { "Paused" };
@@ -319,10 +324,10 @@ impl JobQueue {
 
             // Force cancel on a running job: clear checkpoint immediately so a new
             // job on a different concurrency slot can't read stale resume data.
-            if force {
-                if let Ok(job) = self.get_job(job_id).await {
-                    if job.job_type == "llm_parse" {
-                        if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&job.payload_json) {
+            if force
+                && let Ok(job) = self.get_job(job_id).await
+                    && job.job_type == "llm_parse"
+                        && let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&job.payload_json) {
                             let att_id = payload.attachment_id;
                             if let Err(e) = sqlx::query(
                                 "UPDATE parsed_content SET status = 'failed', checkpoint_json = NULL WHERE attachment_id = ?",
@@ -334,9 +339,6 @@ impl JobQueue {
                                 tracing::warn!("Failed to clear checkpoint for attachment {} on cancel: {}", att_id, e);
                             }
                         }
-                    }
-                }
-            }
 
             tx.commit().await.map_err(|e| e.to_string())?;
 
@@ -356,9 +358,9 @@ impl JobQueue {
         // Force-cancel a paused job: clear checkpoint so it can't be resumed.
         // Use a transaction so the job read + checkpoint clear + message clear
         // are atomic and cannot interleave with other operations.
-        if force {
-            if let Ok(job) = self.get_job(job_id).await {
-                if job.status == "cancelled" && job.job_type == "llm_parse" {
+        if force
+            && let Ok(job) = self.get_job(job_id).await
+                && job.status == "cancelled" && job.job_type == "llm_parse" {
                     let mut tx = self.db.begin().await.map_err(|e| e.to_string())?;
                     if let Ok(payload) = serde_json::from_str::<super::types::LlmParsePayload>(&job.payload_json) {
                         let att_id = payload.attachment_id;
@@ -386,8 +388,6 @@ impl JobQueue {
                         tracing::warn!("Failed to commit force-cancel transaction for job {}: {}", job_id, e);
                     }
                 }
-            }
-        }
 
         self.emit_job_update(job_id).await;
         Ok(())
@@ -538,11 +538,11 @@ impl JobQueue {
         .unwrap_or_default();
 
         for (job_id, job_type_str) in &running_jobs {
-            let is_restartable = JobType::from_str(job_type_str)
-                .map_or(false, |jt| jt.is_restartable());
+            let is_restartable = job_type_str.parse::<JobType>()
+                .is_ok_and(|jt| jt.is_restartable());
 
-            if !is_restartable {
-                if let Err(e) = sqlx::query(
+            if !is_restartable
+                && let Err(e) = sqlx::query(
                     "UPDATE jobs SET status = 'failed', error_message = 'App shutdown', completed_at = datetime('now') WHERE id = ?",
                 )
                 .bind(job_id)
@@ -551,7 +551,6 @@ impl JobQueue {
                 {
                     tracing::warn!("Failed to mark non-restartable job {} as failed during shutdown: {}", job_id, e);
                 }
-            }
             // Restartable jobs: left as 'running' → recover_interrupted_jobs()
             // will reset them to 'pending' on next startup
         }
@@ -562,10 +561,9 @@ impl JobQueue {
     /// Emit a job update event to the frontend
     async fn emit_job_update(&self, job_id: &str) {
         use tauri::Emitter;
-        if let Ok(job) = self.get_job(job_id).await {
-            if let Err(e) = self.app_handle.emit("job:updated", &job) {
+        if let Ok(job) = self.get_job(job_id).await
+            && let Err(e) = self.app_handle.emit("job:updated", &job) {
                 tracing::warn!("Failed to emit job:updated event for {}: {}", job_id, e);
             }
-        }
     }
 }

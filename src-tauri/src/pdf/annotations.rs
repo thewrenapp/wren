@@ -166,8 +166,8 @@ pub fn remove_highlight_annotation(path: &Path, annotation_id: &str) -> Result<b
     let page_ids: Vec<ObjectId> = doc.page_iter().collect();
 
     for page_id in page_ids {
-        if let Ok(page) = doc.get_dictionary(page_id) {
-            if let Ok(annots_obj) = page.get(b"Annots") {
+        if let Ok(page) = doc.get_dictionary(page_id)
+            && let Ok(annots_obj) = page.get(b"Annots") {
                 let annot_refs: Vec<ObjectId> = match annots_obj {
                     Object::Array(arr) => arr
                         .iter()
@@ -187,34 +187,29 @@ pub fn remove_highlight_annotation(path: &Path, annotation_id: &str) -> Result<b
 
                 // Find and remove the annotation
                 for annot_ref in &annot_refs {
-                    if let Ok(annot) = doc.get_dictionary(*annot_ref) {
-                        if let Ok(nm) = annot.get(b"NM") {
-                            if let Object::String(nm_bytes, _) = nm {
-                                if String::from_utf8_lossy(nm_bytes) == annotation_id {
+                    if let Ok(annot) = doc.get_dictionary(*annot_ref)
+                        && let Ok(nm) = annot.get(b"NM")
+                            && let Object::String(nm_bytes, _) = nm
+                                && String::from_utf8_lossy(nm_bytes) == annotation_id {
                                     // Remove from page's Annots array
                                     let page_mut = doc.get_dictionary_mut(page_id)?;
-                                    if let Ok(annots_obj) = page_mut.get_mut(b"Annots") {
-                                        if let Object::Array(arr) = annots_obj {
-                                            arr.retain(|o| {
-                                                o.as_reference()
-                                                    .map(|r| r != *annot_ref)
-                                                    .unwrap_or(true)
-                                            });
-                                        }
+                                    if let Ok(annots_obj) = page_mut.get_mut(b"Annots")
+                                        && let Object::Array(arr) = annots_obj {
+                                        arr.retain(|o| {
+                                            o.as_reference()
+                                                .map(|r| r != *annot_ref)
+                                                .unwrap_or(true)
+                                        });
                                     }
                                     found = true;
                                     break;
                                 }
-                            }
-                        }
-                    }
                 }
 
                 if found {
                     break;
                 }
             }
-        }
     }
 
     if found {
@@ -238,8 +233,8 @@ pub fn read_highlight_annotations(path: &Path) -> Result<Vec<HighlightAnnotation
         .collect();
 
     for (page_num, page_id) in page_ids {
-        if let Ok(page) = doc.get_dictionary(page_id) {
-            if let Ok(annots_obj) = page.get(b"Annots") {
+        if let Ok(page) = doc.get_dictionary(page_id)
+            && let Ok(annots_obj) = page.get(b"Annots") {
                 let annot_refs: Vec<ObjectId> = match annots_obj {
                     Object::Array(arr) => arr
                         .iter()
@@ -260,12 +255,10 @@ pub fn read_highlight_annotations(path: &Path) -> Result<Vec<HighlightAnnotation
                 for annot_ref in annot_refs {
                     if let Ok(annot) = doc.get_dictionary(annot_ref) {
                         // Check if it's a highlight annotation
-                        if let Ok(subtype) = annot.get(b"Subtype") {
-                            if let Object::Name(name) = subtype {
-                                if name != b"Highlight" {
-                                    continue;
-                                }
-                            }
+                        if let Ok(subtype) = annot.get(b"Subtype")
+                            && let Object::Name(name) = subtype
+                            && name != b"Highlight" {
+                            continue;
                         }
 
                         // Extract annotation data
@@ -275,7 +268,6 @@ pub fn read_highlight_annotations(path: &Path) -> Result<Vec<HighlightAnnotation
                     }
                 }
             }
-        }
     }
 
     Ok(annotations)
@@ -334,38 +326,21 @@ fn parse_highlight_annotation(
     };
 
     // Get quad points
-    let quad_points = if let Ok(qp) = annot.get(b"QuadPoints") {
-        if let Object::Array(arr) = qp {
-            arr.iter().filter_map(get_float).collect()
-        } else {
-            vec![]
-        }
+    let quad_points = if let Ok(qp) = annot.get(b"QuadPoints")
+        && let Object::Array(arr) = qp {
+        arr.iter().filter_map(get_float).collect()
     } else {
         vec![]
     };
 
     // Get color
-    let color = if let Ok(c) = annot.get(b"C") {
-        if let Object::Array(arr) = c {
-            if arr.len() >= 3 {
-                HighlightColor {
-                    r: get_float(&arr[0]).unwrap_or(1.0),
-                    g: get_float(&arr[1]).unwrap_or(1.0),
-                    b: get_float(&arr[2]).unwrap_or(0.0),
-                }
-            } else {
-                HighlightColor {
-                    r: 1.0,
-                    g: 1.0,
-                    b: 0.0,
-                }
-            }
-        } else {
-            HighlightColor {
-                r: 1.0,
-                g: 1.0,
-                b: 0.0,
-            }
+    let color = if let Ok(c) = annot.get(b"C")
+        && let Object::Array(arr) = c
+        && arr.len() >= 3 {
+        HighlightColor {
+            r: get_float(&arr[0]).unwrap_or(1.0),
+            g: get_float(&arr[1]).unwrap_or(1.0),
+            b: get_float(&arr[2]).unwrap_or(0.0),
         }
     } else {
         HighlightColor {

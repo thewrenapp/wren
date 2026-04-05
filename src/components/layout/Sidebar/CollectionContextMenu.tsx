@@ -132,7 +132,7 @@ export function CollectionItem({
           <ContextMenuItem
             onClick={() => {
               useUIStore.getState().showShareDialog(
-                [], [], collection.id, collection.name
+                'collection', [], [], collection.id, collection.name
               );
             }}
           >

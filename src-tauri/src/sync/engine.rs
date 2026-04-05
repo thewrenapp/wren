@@ -47,6 +47,21 @@ pub async fn reconcile_on_startup(
                     match entry_to_json(pool, db_info.id).await {
                         Ok(local_json) => {
                             let result = merge_entries(&local_json, disk_entry);
+                            // Store any conflicts in DB for user review
+                            for conflict in &result.conflicts {
+                                let _ = sqlx::query(
+                                    "INSERT INTO sync_conflicts (entry_key, field_name, local_value, remote_value, \
+                                     local_timestamp, remote_timestamp) VALUES (?, ?, ?, ?, ?, ?)"
+                                )
+                                .bind(key)
+                                .bind(&conflict.field_name)
+                                .bind(&conflict.local_value)
+                                .bind(&conflict.remote_value)
+                                .bind(&conflict.local_timestamp)
+                                .bind(&conflict.remote_timestamp)
+                                .execute(pool)
+                                .await;
+                            }
                             if result.changed {
                                 match upsert_entry_from_json(pool, &result.merged).await {
                                     Ok(_) => {
@@ -229,7 +244,7 @@ fn gc_tombstones(files_dir: &Path, max_age_days: i64) -> Result<usize> {
     let mut cleaned = 0;
 
     let entries = scan_entry_json_files(files_dir)?;
-    for (_key, entry) in &entries {
+    for entry in entries.values() {
         let old_len = entry.tombstones.len();
         let mut updated = entry.clone();
         updated
@@ -330,11 +345,10 @@ fn get_entry_json_modified(entry: &EntryJson) -> String {
             latest = ann.color.t.clone();
         }
     }
-    if let Some(ref pc) = entry.parsed_content {
-        if pc.t > latest {
+    if let Some(ref pc) = entry.parsed_content
+        && pc.t > latest {
             latest = pc.t.clone();
         }
-    }
 
     latest
 }

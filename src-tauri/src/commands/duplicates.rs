@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row, Sqlite, QueryBuilder};
 use tauri::State;
 
+type CreatorRow = (i64, String, Option<String>, Option<String>, Option<String>);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DuplicateEntry {
     pub id: i64,
@@ -149,7 +151,7 @@ pub async fn find_duplicates(
     let all_title_entry_ids: Vec<i64> = title_entries.iter().map(|e| e.id).collect();
     let title_creators = fetch_creators_display(&state, &all_title_entry_ids).await?;
 
-    for (_ltitle, entries) in &title_groups_map {
+    for entries in title_groups_map.values() {
         // Skip if all entries in this group were already processed (by DOI)
         let unprocessed: Vec<&&EntryWithDoi> = entries.iter()
             .filter(|e| !processed_ids.contains(&e.id))
@@ -299,7 +301,7 @@ pub async fn merge_entries(
         let next_order = max_order.unwrap_or(-1) + 1;
 
         // Get source creators that don't exist in target (by name)
-        let source_creators: Vec<(i64, String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        let source_creators: Vec<CreatorRow> = sqlx::query_as(
             r#"
             SELECT ec.creator_type_id, ec.first_name, ec.last_name, ec.name, ec.first_name || ' ' || ec.last_name as full_name
             FROM entry_creators ec

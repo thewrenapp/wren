@@ -50,7 +50,7 @@ pub fn analyze(text: &str, model_ctx: &ModelContext) -> PreAnalysisResult {
     let estimated_discovery_chunks = if discovery_needs_chunking {
         // Account for overlap when estimating chunks
         let step = chunk_size_chars.saturating_sub(overlap_chars).max(1);
-        (char_count + step - 1) / step
+        char_count.div_ceil(step)
     } else {
         1
     };

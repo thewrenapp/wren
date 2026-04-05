@@ -16,7 +16,7 @@ use crate::llm::context_windows;
 use crate::llm::pipeline::assembler::ExtractedSection;
 use crate::llm::pipeline::boundary_finder::DiscoveredSection;
 use crate::llm::pipeline::classifier::{ClassificationResult, EntryMetadata};
-use crate::llm::pipeline::discoverer::DiscoveryCheckpoint;
+use crate::llm::pipeline::discoverer::{DiscoveryCheckpoint, DiscoveryParams};
 use crate::llm::pipeline::extractor::ExtractedSectionContent;
 use crate::llm::provider::{LlmError, LlmProvider, TokenUsageSummary};
 use crate::search::extractor::sanitize_extracted_text;
@@ -100,7 +100,7 @@ pub enum PipelineError {
     Llm(LlmError),
     TooShort,
     Cancelled,
-    BudgetExceeded(PipelineCheckpoint),
+    BudgetExceeded(Box<PipelineCheckpoint>),
     /// Pre-analysis indicates too many calls — frontend should confirm.
     TooManyCalls { estimated_calls: usize },
 }
@@ -128,23 +128,39 @@ impl std::fmt::Display for PipelineError {
     }
 }
 
+// ── Pipeline parameters ────────────────────────────────────────────
+
+/// Groups the parameters for [`run_pipeline`] to keep the signature concise.
+pub struct PipelineParams<'a> {
+    pub provider: &'a dyn LlmProvider,
+    pub config: &'a PipelineConfig,
+    pub extracted_text: &'a str,
+    pub entry_metadata: &'a EntryMetadata,
+    pub checkpoint: Option<PipelineCheckpoint>,
+    pub progress: &'a dyn ProgressCallback,
+    pub cancel: &'a AtomicBool,
+    pub checkpoint_saver: &'a dyn CheckpointSaver,
+}
+
 // ── Main pipeline entry point ──────────────────────────────────────
 
 /// Run the full parsing pipeline.
 ///
-/// Stages: Pre-Analysis → Classify → Discover → Extract → Assemble.
+/// Stages: Pre-Analysis -> Classify -> Discover -> Extract -> Assemble.
 ///
 /// Accepts an optional checkpoint to resume from a previous interrupted run.
-pub async fn run_pipeline(
-    provider: &dyn LlmProvider,
-    config: &PipelineConfig,
-    extracted_text: &str,
-    entry_metadata: &EntryMetadata,
-    checkpoint: Option<PipelineCheckpoint>,
-    progress: &dyn ProgressCallback,
-    cancel: &AtomicBool,
-    checkpoint_saver: &dyn CheckpointSaver,
-) -> Result<ParsedDocument, PipelineError> {
+pub async fn run_pipeline(params: PipelineParams<'_>) -> Result<ParsedDocument, PipelineError> {
+    let PipelineParams {
+        provider,
+        config,
+        extracted_text,
+        entry_metadata,
+        checkpoint,
+        progress,
+        cancel,
+        checkpoint_saver,
+    } = params;
+
     let mut stages: Vec<StageInfo> = Vec::new();
     let mut total_usage = TokenUsageSummary::default();
 
@@ -159,11 +175,6 @@ pub async fn run_pipeline(
     if analysis.should_skip {
         return Err(PipelineError::TooShort);
     }
-
-    // We don't know the real total work until after discovery (when section count
-    // is known), so classification and discovery show indeterminate progress (0,0).
-    // total_work is set after discovery to: sections + 1 (assemble).
-    let total_work: u32;
 
     // Determine which stage to start from
     let start_stage = checkpoint
@@ -272,18 +283,21 @@ pub async fn run_pipeline(
 
         let disc_progress = DiscoveryProgressAdapter { progress };
 
+        let discovery_params = DiscoveryParams {
+            model: &config.model,
+            doc_type_hint: &classification.document_type,
+            chunk_size_chars: analysis.chunk_size_chars,
+            overlap_chars: analysis.overlap_chars,
+            needs_chunking: analysis.discovery_needs_chunking,
+            retry_max: config.retry_max,
+            checkpoint: discovery_cp,
+            progress: Some(&disc_progress),
+        };
         let result = discoverer::discover(
             provider,
-            &config.model,
             &numbered_text,
-            &classification.document_type,
-            analysis.chunk_size_chars,
-            analysis.overlap_chars,
-            analysis.discovery_needs_chunking,
-            config.retry_max,
+            &discovery_params,
             &mut stage_usage,
-            discovery_cp,
-            Some(&disc_progress),
             cancel,
         )
         .await?;
@@ -333,7 +347,7 @@ pub async fn run_pipeline(
         boundary_finder::find_section_ranges_with_lines(&discovered_sections, extracted_text, Some(&line_offsets));
 
     // Now that discovery is done, total_work = sections to extract + 1 (assemble)
-    total_work = (section_ranges.len() + 1) as u32;
+    let total_work = (section_ranges.len() + 1) as u32;
 
     if section_ranges.is_empty() {
         tracing::warn!("No section boundaries could be resolved — returning minimal result");
@@ -428,15 +442,19 @@ pub async fn run_pipeline(
             tokens_used: std::sync::atomic::AtomicU32::new(total_usage.total_tokens),
         };
 
+        let extraction_config = extractor::ExtractionConfig {
+            model: &config.model,
+            doc_type_hint: &classification.document_type,
+            chunk_size_chars: analysis.chunk_size_chars,
+            overlap_chars: analysis.overlap_chars,
+            max_concurrent: config.max_concurrent_extractions,
+            retry_max: config.retry_max,
+        };
+
         let (mut extracted_contents, extraction_usage) = extractor::extract_all(
             provider,
-            &config.model,
-            &classification.document_type,
+            &extraction_config,
             &section_ranges,
-            analysis.chunk_size_chars,
-            analysis.overlap_chars,
-            config.max_concurrent_extractions,
-            config.retry_max,
             &already_extracted,
             Some(&extract_progress),
             Some(&section_checkpoint),
@@ -557,7 +575,7 @@ fn check_budget(
             usage.total_tokens,
             config.max_token_budget
         );
-        Err(PipelineError::BudgetExceeded(checkpoint.clone()))
+        Err(PipelineError::BudgetExceeded(Box::new(checkpoint.clone())))
     } else {
         Ok(())
     }

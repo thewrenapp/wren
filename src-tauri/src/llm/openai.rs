@@ -295,14 +295,14 @@ async fn send_request(
         .tool_calls
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|tc| {
+        .map(|tc| {
             let args: serde_json::Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
-            Some(ToolCall {
+            ToolCall {
                 id: tc.id,
                 name: tc.function.name,
                 arguments: args,
-            })
+            }
         })
         .collect();
 

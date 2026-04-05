@@ -110,6 +110,7 @@ interface UIState {
   // Share dialog
   shareDialog: {
     open: boolean;
+    shareType: 'library' | 'collection' | 'entries';
     entryIds: number[];
     entryTitles: string[];
     collectionId: number | null;
@@ -170,7 +171,7 @@ interface UIState {
   hideDeleteConfirmation: () => void;
 
   // Share dialog actions
-  showShareDialog: (entryIds: number[], entryTitles: string[], collectionId?: number, collectionName?: string) => void;
+  showShareDialog: (shareType: 'library' | 'collection' | 'entries', entryIds: number[], entryTitles: string[], collectionId?: number, collectionName?: string) => void;
   hideShareDialog: () => void;
 }
 
@@ -228,6 +229,7 @@ export const useUIStore = create<UIState>()(
       },
       shareDialog: {
         open: false,
+        shareType: 'entries' as const,
         entryIds: [],
         entryTitles: [],
         collectionId: null,
@@ -396,10 +398,11 @@ export const useUIStore = create<UIState>()(
         });
       },
 
-      showShareDialog: (entryIds, entryTitles, collectionId, collectionName) =>
+      showShareDialog: (shareType, entryIds, entryTitles, collectionId, collectionName) =>
         set({
           shareDialog: {
             open: true,
+            shareType,
             entryIds,
             entryTitles,
             collectionId: collectionId ?? null,
@@ -411,6 +414,7 @@ export const useUIStore = create<UIState>()(
         set({
           shareDialog: {
             open: false,
+            shareType: 'entries' as const,
             entryIds: [],
             entryTitles: [],
             collectionId: null,

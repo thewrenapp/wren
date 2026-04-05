@@ -1,10 +1,14 @@
-/// Cloud service configuration.
-/// Firebase keys are public (same as any web app — security rules protect data).
-/// R2 keys are obfuscated at compile time and decoded at runtime.
-
+// Cloud service configuration.
+// Firebase keys are public (same as any web app — security rules protect data).
+// R2 keys are obfuscated at compile time and decoded at runtime.
 // ── Firebase (public keys — safe to embed) ──────────────────────────
 
-pub const FIREBASE_API_KEY: &str = "REDACTED";
+const FIREBASE_KEY_OBF: [u8; 39] = obfuscate(b"REDACTED");
+
+pub fn firebase_api_key() -> String {
+    deobfuscate(&FIREBASE_KEY_OBF)
+}
+
 pub const FIREBASE_PROJECT_ID: &str = "wren-sync";
 pub const FIREBASE_AUTH_DOMAIN: &str = "wren-sync.firebaseapp.com";
 

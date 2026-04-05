@@ -1,9 +1,9 @@
-/// UTF-8 char boundary helpers for safe string slicing.
-///
-/// All pipeline code that computes byte positions via arithmetic (byte offsets,
-/// chunk sizes, overlap steps, etc.) MUST snap those positions to valid char
-/// boundaries before slicing. These helpers make that a one-liner instead of
-/// scattered inline `while !is_char_boundary` loops.
+// UTF-8 char boundary helpers for safe string slicing.
+//
+// All pipeline code that computes byte positions via arithmetic (byte offsets,
+// chunk sizes, overlap steps, etc.) MUST snap those positions to valid char
+// boundaries before slicing. These helpers make that a one-liner instead of
+// scattered inline `while !is_char_boundary` loops.
 
 /// Snap a byte position backwards to the nearest valid UTF-8 char boundary.
 /// Returns a position <= `pos` that is safe to use in `&text[..pos]` or `&text[start..pos]`.

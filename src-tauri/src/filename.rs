@@ -84,13 +84,13 @@ pub fn format_first_creator(creators: &[Creator]) -> String {
 
     match creators_to_use.len() {
         0 => String::new(),
-        1 => short_name(&creators_to_use[0]),
+        1 => short_name(creators_to_use[0]),
         2 => format!(
             "{} & {}",
-            short_name(&creators_to_use[0]),
-            short_name(&creators_to_use[1])
+            short_name(creators_to_use[0]),
+            short_name(creators_to_use[1])
         ),
-        _ => format!("{} et al.", short_name(&creators_to_use[0])),
+        _ => format!("{} et al.", short_name(creators_to_use[0])),
     }
 }
 
@@ -147,12 +147,11 @@ fn truncate_string(s: &str, max_len: usize) -> String {
 
     // Find the last space before max_len
     let truncated = &s[..max_len];
-    if let Some(last_space) = truncated.rfind(' ') {
-        if last_space > max_len / 2 {
+    if let Some(last_space) = truncated.rfind(' ')
+        && last_space > max_len / 2 {
             // Only break at word if it's not too early
             return s[..last_space].trim_end().to_string();
         }
-    }
 
     // No good word break, just truncate
     truncated.trim_end().to_string()
@@ -216,11 +215,10 @@ pub fn resolve_conflict(dir: &Path, filename: &str) -> PathBuf {
 
 /// Split a filename into base name and extension
 fn split_filename(filename: &str) -> (&str, &str) {
-    if let Some(dot_pos) = filename.rfind('.') {
-        if dot_pos > 0 && dot_pos < filename.len() - 1 {
+    if let Some(dot_pos) = filename.rfind('.')
+        && dot_pos > 0 && dot_pos < filename.len() - 1 {
             return (&filename[..dot_pos], &filename[dot_pos + 1..]);
         }
-    }
     (filename, "")
 }
 
@@ -260,23 +258,20 @@ pub fn extract_year(date: &str) -> Option<String> {
 
     // Try to find a 4-digit year
     for word in date.split(|c: char| !c.is_ascii_digit()) {
-        if word.len() == 4 {
-            if let Ok(year) = word.parse::<u32>() {
-                if (1000..=2100).contains(&year) {
+        if word.len() == 4
+            && let Ok(year) = word.parse::<u32>()
+                && (1000..=2100).contains(&year) {
                     return Some(word.to_string());
                 }
-            }
-        }
     }
 
     // If date starts with year (YYYY-MM-DD format)
     if date.len() >= 4 {
         let first_four = &date[..4];
-        if let Ok(year) = first_four.parse::<u32>() {
-            if (1000..=2100).contains(&year) {
+        if let Ok(year) = first_four.parse::<u32>()
+            && (1000..=2100).contains(&year) {
                 return Some(first_four.to_string());
             }
-        }
     }
 
     None

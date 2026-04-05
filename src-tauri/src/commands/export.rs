@@ -7,6 +7,14 @@ use std::path::Path;
 use tauri::State;
 
 // =====================================================
+// TYPE ALIASES
+// =====================================================
+
+type CreatorRow = (String, Option<String>, Option<String>, Option<String>, i32);
+type AttachmentRow = (i64, String, String, Option<String>, Option<String>);
+type AnnotationRow = (i64, String, i32, Option<String>, Option<String>, String);
+
+// =====================================================
 // CSL JSON TYPES (Citation Style Language)
 // =====================================================
 
@@ -255,7 +263,7 @@ pub async fn build_csl_json_for_entry(
         fields.insert(name, value);
     }
 
-    let creator_rows: Vec<(String, Option<String>, Option<String>, Option<String>, i32)> = sqlx::query_as(
+    let creator_rows: Vec<CreatorRow> = sqlx::query_as(
         r#"
         SELECT ct.name as creator_type, ec.first_name, ec.last_name, ec.name, ec.sort_order
         FROM entry_creators ec
@@ -369,7 +377,7 @@ pub async fn build_bibtex_for_entry(
         fields.insert(name, value);
     }
 
-    let creator_rows: Vec<(String, Option<String>, Option<String>, Option<String>, i32)> = sqlx::query_as(
+    let creator_rows: Vec<CreatorRow> = sqlx::query_as(
         r#"
         SELECT ct.name as creator_type, ec.first_name, ec.last_name, ec.name, ec.sort_order
         FROM entry_creators ec
@@ -516,7 +524,7 @@ pub async fn build_citation_for_entry(
     let mut cite = String::new();
     if !authors_str.is_empty() {
         cite.push_str(&authors_str);
-        cite.push_str(" ");
+        cite.push(' ');
     }
     cite.push_str(&format!("({}). ", year));
     cite.push_str(&title);
@@ -717,7 +725,7 @@ pub async fn export_to_biblatex_with_files(
         }
 
         // Get creators
-        let creator_rows: Vec<(String, Option<String>, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        let creator_rows: Vec<CreatorRow> = sqlx::query_as(
             r#"
             SELECT ct.name as creator_type, ec.first_name, ec.last_name, ec.name, ec.sort_order
             FROM entry_creators ec
@@ -747,7 +755,7 @@ pub async fn export_to_biblatex_with_files(
         .map_err(|e| e.to_string())?;
 
         // Get attachments for file field
-        let attachments: Vec<(i64, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        let attachments: Vec<AttachmentRow> = sqlx::query_as(
             r#"
             SELECT a.id, at.name as attachment_type, a.title, a.file_path, a.url
             FROM attachments a
@@ -930,7 +938,7 @@ pub async fn export_to_biblatex_with_files(
 
         // Handle annotations if requested
         if options.include_annotations {
-            let annotations: Vec<(i64, String, i32, Option<String>, Option<String>, String)> = sqlx::query_as(
+            let annotations: Vec<AnnotationRow> = sqlx::query_as(
                 r#"
                 SELECT aa.id, at.name as annotation_type, aa.page_number, aa.selected_text, aa.comment, aa.color
                 FROM attachment_annotations aa

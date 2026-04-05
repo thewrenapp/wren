@@ -291,12 +291,12 @@ async fn send_request(
         .tool_calls
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|tc| {
-            Some(ToolCall {
+        .map(|tc| {
+            ToolCall {
                 id: tc.function.name.clone(), // Ollama native API doesn't provide tool call IDs
                 name: tc.function.name,
                 arguments: tc.function.arguments.unwrap_or(serde_json::Value::Null),
-            })
+            }
         })
         .collect();
 

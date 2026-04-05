@@ -127,17 +127,16 @@ pub async fn get_markdown_content(
     if let Some(ref md_path) = row.markdown_path {
         let full_path = library_path.join(md_path);
         // Validate path stays within library (markdown_path is a DB value from user imports)
-        if let Ok(validated) = validate_library_path(&library_path, &full_path) {
-            if validated.exists() {
+        if let Ok(validated) = validate_library_path(&library_path, &full_path)
+            && validated.exists() {
                 let content = std::fs::read_to_string(&validated).map_err(|e| e.to_string())?;
                 return Ok(Some(content));
             }
-        }
     }
 
     // For notes: try file_path if markdown_path was missing/broken (imported .md files)
-    if row.attachment_type == "note" && row.markdown_path.is_none() {
-        if let Some(ref fp) = row.file_path {
+    if row.attachment_type == "note" && row.markdown_path.is_none()
+        && let Some(ref fp) = row.file_path {
             let fp_path = std::path::PathBuf::from(fp);
             let full_path = if fp_path.is_absolute() {
                 fp_path
@@ -145,14 +144,12 @@ pub async fn get_markdown_content(
                 library_path.join(fp)
             };
             // Validate path stays within library (file_path is a DB value from user imports)
-            if let Ok(validated) = validate_library_path(&library_path, &full_path) {
-                if validated.exists() {
+            if let Ok(validated) = validate_library_path(&library_path, &full_path)
+                && validated.exists() {
                     let content = std::fs::read_to_string(&validated).map_err(|e| e.to_string())?;
                     return Ok(Some(content));
                 }
-            }
         }
-    }
 
     // Fallback: try parsed_content table (notes store content there as backup)
     let fallback: Option<(String,)> = sqlx::query_as(
@@ -666,8 +663,8 @@ async fn expand_inline_tables(db: &sqlx::SqlitePool, content: &str) -> String {
     let mut result = String::with_capacity(content.len());
     for line in content.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("<!-- wren-table:") {
-            if let Some(uuid) = rest.strip_suffix("-->") {
+        if let Some(rest) = trimmed.strip_prefix("<!-- wren-table:")
+            && let Some(uuid) = rest.strip_suffix("-->") {
                 let uuid = uuid.trim();
                 if !uuid.is_empty() {
                     // Fetch table data
@@ -730,7 +727,6 @@ async fn expand_inline_tables(db: &sqlx::SqlitePool, content: &str) -> String {
                     }
                 }
             }
-        }
         result.push_str(line);
         result.push('\n');
     }
@@ -743,14 +739,13 @@ fn extract_table_uuids(content: &str) -> Vec<String> {
     let mut uuids = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("<!-- wren-table:") {
-            if let Some(uuid) = rest.strip_suffix("-->") {
+        if let Some(rest) = trimmed.strip_prefix("<!-- wren-table:")
+            && let Some(uuid) = rest.strip_suffix("-->") {
                 let uuid = uuid.trim();
                 if !uuid.is_empty() {
                     uuids.push(uuid.to_string());
                 }
             }
-        }
     }
     uuids
 }

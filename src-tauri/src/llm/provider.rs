@@ -189,11 +189,10 @@ pub async fn call_with_retry_cancellable(
         }
 
         // Check cancel before starting the call
-        if let Some(flag) = cancel {
-            if flag.load(Ordering::Relaxed) {
+        if let Some(flag) = cancel
+            && flag.load(Ordering::Relaxed) {
                 return Err(LlmError::Cancelled);
             }
-        }
 
         tracing::debug!(
             "[llm] Call attempt {}/{} | provider={} | model={} | tools={} | json_mode={}",

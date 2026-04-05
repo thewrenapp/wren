@@ -203,12 +203,11 @@ fn merge_tags(local: &mut HashMap<String, TagEntry>, remote: &HashMap<String, Ta
                     }
                 }
                 // Also merge color if remote has one and local doesn't
-                if let Some(local_mut) = local.get_mut(name) {
-                    if local_mut.color.is_none() && remote_entry.color.is_some() {
+                if let Some(local_mut) = local.get_mut(name)
+                    && local_mut.color.is_none() && remote_entry.color.is_some() {
                         local_mut.color = remote_entry.color.clone();
                         changed = true;
                     }
-                }
             }
             None => {
                 local.insert(name.clone(), remote_entry.clone());

@@ -5,7 +5,7 @@ description = "A reference manager for Research papers"
 authors = ["Sadanand Singh"]
 license = "MIT"
 repository = ""
-edition = "2021"
+edition = "2024"
 
 [lints.rust]
 unexpected_cfgs = "allow"

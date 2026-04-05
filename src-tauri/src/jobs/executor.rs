@@ -10,6 +10,14 @@ use super::types::*;
 use crate::search::extractor::{is_worth_saving, markdown_path_for, save_markdown, ExtractionConfig};
 use crate::search::SearchIndex;
 
+pub struct JobContext<'a> {
+    pub db: &'a SqlitePool,
+    pub app_handle: &'a AppHandle,
+    pub search_index: &'a Arc<SearchIndex>,
+    pub library_path: &'a Arc<tokio::sync::RwLock<PathBuf>>,
+    pub pdf_parser: &'a Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
+}
+
 /// Eagerly initialize the Ferrules PDF parser (lazy on first call, cached after).
 async fn ensure_pdf_parser(
     cell: &tokio::sync::OnceCell<ferrules_core::FerrulesParser>,
@@ -50,11 +58,7 @@ async fn ensure_pdf_parser(
 
 /// Dispatch a job to the appropriate handler
 pub async fn run_job(
-    db: &SqlitePool,
-    app_handle: &AppHandle,
-    search_index: &Arc<SearchIndex>,
-    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
-    pdf_parser: &Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
+    ctx: &JobContext<'_>,
     job_id: &str,
     job_type_str: &str,
     payload_json: &str,
@@ -64,47 +68,43 @@ pub async fn run_job(
         "reindex_library" => {
             let payload: ReindexPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_reindex(db, app_handle, search_index, library_path, pdf_parser, job_id, &payload, cancel_flag)
-                .await
+            execute_reindex(ctx, job_id, &payload, cancel_flag).await
         }
         "bulk_import_pdfs" => {
             let payload: BulkImportPdfsPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_bulk_import_pdfs(db, app_handle, search_index, library_path, job_id, &payload, cancel_flag)
-                .await
+            execute_bulk_import_pdfs(ctx, job_id, &payload, cancel_flag).await
         }
         "bulk_import_folder" => {
             let payload: BulkImportFolderPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_bulk_import_folder(db, app_handle, search_index, library_path, job_id, &payload, cancel_flag)
-                .await
+            execute_bulk_import_folder(ctx, job_id, &payload, cancel_flag).await
         }
         "ocr_extract" => {
             let payload: OcrExtractPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_ocr_extract(db, app_handle, search_index, library_path, pdf_parser, job_id, &payload, cancel_flag)
-                .await
+            execute_ocr_extract(ctx, job_id, &payload, cancel_flag).await
         }
         "llm_parse" => {
             let payload: LlmParsePayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_llm_parse(db, app_handle, library_path, job_id, &payload, cancel_flag)
+            execute_llm_parse(ctx.db, ctx.app_handle, ctx.library_path, job_id, &payload, cancel_flag)
                 .await
         }
         "rag_cleanup_vectors" => {
             let payload: RagCleanupVectorsPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_rag_cleanup_vectors(db, app_handle, library_path, job_id, &payload).await
+            execute_rag_cleanup_vectors(ctx.db, ctx.app_handle, ctx.library_path, job_id, &payload).await
         }
         "rag_index" => {
             let payload: RagIndexPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_rag_index(db, app_handle, library_path, job_id, &payload, cancel_flag).await
+            execute_rag_index(ctx.db, ctx.app_handle, ctx.library_path, job_id, &payload, cancel_flag).await
         }
         "metadata_extract" => {
             let payload: MetadataExtractPayload =
                 serde_json::from_str(payload_json).map_err(|e| format!("Invalid payload: {}", e))?;
-            execute_metadata_extract(db, app_handle, library_path, job_id, &payload).await
+            execute_metadata_extract(ctx.db, ctx.app_handle, ctx.library_path, job_id, &payload).await
         }
         // Graph RAG jobs removed
         "graph_index" | "graph_index_all" | "graph_relate" | "graph_reembed" => {
@@ -144,11 +144,9 @@ async fn update_progress(
     .bind(job_id)
     .fetch_one(db)
     .await
-    {
-        if let Err(e) = app_handle.emit("job:updated", &job) {
+        && let Err(e) = app_handle.emit("job:updated", &job) {
             tracing::warn!("Failed to emit job:updated event for {}: {}", job_id, e);
         }
-    }
 }
 
 // Row types for queries
@@ -185,15 +183,13 @@ struct AnnotationRow {
 
 /// Execute a full library reindex
 async fn execute_reindex(
-    db: &SqlitePool,
-    app_handle: &AppHandle,
-    search_index: &Arc<SearchIndex>,
-    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
-    pdf_parser: &Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
+    ctx: &JobContext<'_>,
     job_id: &str,
     _payload: &ReindexPayload,
     cancel_flag: CancelFlag,
 ) -> Result<Option<String>, String> {
+    let (db, app_handle, search_index, library_path, pdf_parser) =
+        (ctx.db, ctx.app_handle, ctx.search_index, ctx.library_path, ctx.pdf_parser);
     let config = ExtractionConfig;
 
     // Get all entries
@@ -321,23 +317,23 @@ async fn execute_reindex(
                     };
 
                     match search_index
-                        .index_attachment_content(&attachment_data, &config, ensure_pdf_parser(&pdf_parser).await)
+                        .index_attachment_content(&attachment_data, &config, ensure_pdf_parser(pdf_parser).await)
                         .await
                     {
                         Ok(result) => {
                             let worth_saving = result
                                 .extracted_text
                                 .as_ref()
-                                .map_or(false, |t| is_worth_saving(t));
+                                .is_some_and(|t| is_worth_saving(t));
                             if worth_saving {
-                                if let Some(ref text) = result.extracted_text {
-                                    if let Ok(md_path) = save_markdown(&full_path, text) {
+                                if let Some(ref text) = result.extracted_text
+                                    && let Ok(md_path) = save_markdown(&full_path, text) {
                                         let relative_md = md_path
                                             .strip_prefix(&lib_path)
                                             .ok()
                                             .map(|p| p.to_string_lossy().to_string());
-                                        if let Some(rel) = relative_md {
-                                            if let Err(e) = sqlx::query(
+                                        if let Some(rel) = relative_md
+                                            && let Err(e) = sqlx::query(
                                                 "UPDATE attachments SET markdown_path = ? WHERE id = ?",
                                             )
                                             .bind(&rel)
@@ -347,9 +343,7 @@ async fn execute_reindex(
                                             {
                                                 tracing::warn!("Failed to update markdown_path for attachment {}: {}", attachment.id, e);
                                             }
-                                        }
                                     }
-                                }
                             } else {
                                 let stale_md = markdown_path_for(&full_path);
                                 if let Err(e) = std::fs::remove_file(&stale_md) {
@@ -429,11 +423,10 @@ async fn execute_reindex(
         }
 
         // Commit every 100 entries
-        if (i + 1) % 100 == 0 {
-            if let Err(e) = search_index.commit().await {
+        if (i + 1) % 100 == 0
+            && let Err(e) = search_index.commit().await {
                 tracing::error!("Failed to commit search index at batch {}: {}", i + 1, e);
             }
-        }
     }
 
     // Final commit
@@ -469,10 +462,7 @@ async fn execute_reindex(
 
 /// Execute bulk PDF import (placeholder — will be wired to import system later)
 async fn execute_bulk_import_pdfs(
-    _db: &SqlitePool,
-    _app_handle: &AppHandle,
-    _search_index: &Arc<SearchIndex>,
-    _library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+    _ctx: &JobContext<'_>,
     _job_id: &str,
     _payload: &BulkImportPdfsPayload,
     _cancel_flag: CancelFlag,
@@ -483,10 +473,7 @@ async fn execute_bulk_import_pdfs(
 
 /// Execute folder import (placeholder — will be wired to import system later)
 async fn execute_bulk_import_folder(
-    _db: &SqlitePool,
-    _app_handle: &AppHandle,
-    _search_index: &Arc<SearchIndex>,
-    _library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
+    _ctx: &JobContext<'_>,
     _job_id: &str,
     _payload: &BulkImportFolderPayload,
     _cancel_flag: CancelFlag,
@@ -498,15 +485,13 @@ async fn execute_bulk_import_folder(
 /// Extract text from a single attachment, index it, and save markdown.
 /// This is the core OCR/extraction job enqueued by import commands.
 async fn execute_ocr_extract(
-    db: &SqlitePool,
-    app_handle: &AppHandle,
-    search_index: &Arc<SearchIndex>,
-    library_path: &Arc<tokio::sync::RwLock<PathBuf>>,
-    pdf_parser: &Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
+    ctx: &JobContext<'_>,
     job_id: &str,
     payload: &OcrExtractPayload,
     cancel_flag: CancelFlag,
 ) -> Result<Option<String>, String> {
+    let (db, app_handle, search_index, library_path, pdf_parser) =
+        (ctx.db, ctx.app_handle, ctx.search_index, ctx.library_path, ctx.pdf_parser);
     // Look up attachment + entry info from DB
     #[derive(Debug, FromRow)]
     struct OcrAttachmentInfo {
@@ -575,23 +560,23 @@ async fn execute_ocr_extract(
 
     // Extract text, index, and save markdown
     match search_index
-        .index_attachment_content(&attachment_data, &config, ensure_pdf_parser(&pdf_parser).await)
+        .index_attachment_content(&attachment_data, &config, ensure_pdf_parser(pdf_parser).await)
         .await
     {
         Ok(result) => {
             let worth_saving = result
                 .extracted_text
                 .as_ref()
-                .map_or(false, |t| is_worth_saving(t));
+                .is_some_and(|t| is_worth_saving(t));
             if worth_saving {
-                if let Some(ref text) = result.extracted_text {
-                    if let Ok(md_path) = save_markdown(&full_path, text) {
+                if let Some(ref text) = result.extracted_text
+                    && let Ok(md_path) = save_markdown(&full_path, text) {
                         let relative_md = md_path
                             .strip_prefix(&lib_path)
                             .ok()
                             .map(|p| p.to_string_lossy().to_string());
-                        if let Some(rel) = relative_md {
-                            if let Err(e) = sqlx::query(
+                        if let Some(rel) = relative_md
+                            && let Err(e) = sqlx::query(
                                 "UPDATE attachments SET markdown_path = ? WHERE id = ?",
                             )
                             .bind(&rel)
@@ -601,9 +586,7 @@ async fn execute_ocr_extract(
                             {
                                 tracing::warn!("Failed to update markdown_path for attachment {}: {}", payload.attachment_id, e);
                             }
-                        }
                     }
-                }
             } else {
                 // Clear stale markdown
                 let stale_md = markdown_path_for(&full_path);
@@ -988,16 +971,16 @@ async fn execute_llm_parse(
     };
 
     // ── Run pipeline ───────────────────────────────────────────────
-    let result = pipeline::run_pipeline(
-        provider.as_ref(),
-        &config,
-        &extracted_text,
-        &entry_metadata,
+    let result = pipeline::run_pipeline(pipeline::PipelineParams {
+        provider: provider.as_ref(),
+        config: &config,
+        extracted_text: &extracted_text,
+        entry_metadata: &entry_metadata,
         checkpoint,
-        &progress_adapter,
-        &cancel_flag,
-        &checkpoint_saver,
-    )
+        progress: &progress_adapter,
+        cancel: &cancel_flag,
+        checkpoint_saver: &checkpoint_saver,
+    })
     .await;
 
     match result {
@@ -1091,7 +1074,8 @@ async fn execute_llm_parse(
             }
             Err("Document too short to parse (< 500 characters)".to_string())
         }
-        Err(pipeline::PipelineError::BudgetExceeded(cp)) => {
+        Err(pipeline::PipelineError::BudgetExceeded(boxed_cp)) => {
+            let cp = *boxed_cp;
             // Save checkpoint for resume
             let cp_json = serde_json::to_string(&cp).unwrap_or_default();
             if let Err(e) = sqlx::query(
@@ -1172,15 +1156,13 @@ async fn auto_extract_metadata(
 
     // Apply to DB (reuse the same logic as the command)
     // Update title
-    if let Some(ref title) = metadata.title {
-        if !title.is_empty() {
-            if let Err(e) = sqlx::query("UPDATE entries SET title = ?, date_modified = datetime('now') WHERE id = ?")
+    if let Some(ref title) = metadata.title
+        && !title.is_empty()
+            && let Err(e) = sqlx::query("UPDATE entries SET title = ?, date_modified = datetime('now') WHERE id = ?")
                 .bind(title).bind(entry_id).execute(db).await
             {
                 tracing::warn!("Failed to update title for entry {}: {}", entry_id, e);
             }
-        }
-    }
     // Update creators
     if !metadata.authors.is_empty() {
         if let Err(e) = sqlx::query("DELETE FROM entry_creators WHERE entry_id = ?")
@@ -1201,26 +1183,22 @@ async fn auto_extract_metadata(
     }
 
     // Update fields (year, abstract, journal, DOI)
-    if let Some(ref year) = metadata.year {
-        if !year.is_empty() {
+    if let Some(ref year) = metadata.year
+        && !year.is_empty() {
             upsert_entry_field(db, entry_id, "date", year).await;
         }
-    }
-    if let Some(ref abs) = metadata.abstract_text {
-        if !abs.is_empty() {
+    if let Some(ref abs) = metadata.abstract_text
+        && !abs.is_empty() {
             upsert_entry_field(db, entry_id, "abstractNote", abs).await;
         }
-    }
-    if let Some(ref journal) = metadata.journal {
-        if !journal.is_empty() {
+    if let Some(ref journal) = metadata.journal
+        && !journal.is_empty() {
             upsert_entry_field(db, entry_id, "publicationTitle", journal).await;
         }
-    }
-    if let Some(ref doi) = metadata.doi {
-        if !doi.is_empty() {
+    if let Some(ref doi) = metadata.doi
+        && !doi.is_empty() {
             upsert_entry_field(db, entry_id, "DOI", doi).await;
         }
-    }
 
     // Auto-rename attachments if setting enabled
     if let Err(e) = crate::commands::entries::sync_entry_attachment_filenames(
@@ -1351,13 +1329,12 @@ async fn execute_rag_cleanup_vectors(
                 .or_else(|_| crate::rag::embeddings::known_dimension(&embed_config.provider_type, &embed_config.model)
                     .ok_or_else(|| "Unknown dimension".to_string()));
 
-            if let Ok(dim) = dimension {
-                if let Ok(store) = crate::rag::store::VectorStore::new(&lance_path, dim).await {
+            if let Ok(dim) = dimension
+                && let Ok(store) = crate::rag::store::VectorStore::new(&lance_path, dim).await {
                     for att_id in &att_ids {
                         let _ = store.delete_document(&att_id.to_string()).await;
                     }
                 }
-            }
         }
     }
 

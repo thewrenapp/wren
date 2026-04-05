@@ -43,7 +43,6 @@ pub struct VectorStore {
 
 impl VectorStore {
     /// Create or open a vector store at the given path.
-    
     pub async fn new(store_path: &std::path::Path, dimension: usize) -> Result<Self, String> {
         std::fs::create_dir_all(store_path)
             .map_err(|e| format!("Failed to create vector dir: {}", e))?;
@@ -157,8 +156,8 @@ impl VectorStore {
             return Ok(0);
         }
         // Validate embedding dimensions match the store's expected dimension
-        if let Some(first) = embeddings.first() {
-            if first.len() != self.dimension {
+        if let Some(first) = embeddings.first()
+            && first.len() != self.dimension {
                 return Err(format!(
                     "Embedding dimension mismatch: store expects {} but got {} from the model. \
                      This usually means the dimension probe failed and fell back to a wrong default. \
@@ -166,7 +165,6 @@ impl VectorStore {
                     self.dimension, first.len()
                 ));
             }
-        }
 
         let schema = self.schema();
         let n = chunks.len();
@@ -259,8 +257,8 @@ impl VectorStore {
             .limit(top_k);
 
         // Apply document filter if provided
-        if let Some(doc_ids) = document_filter {
-            if !doc_ids.is_empty() {
+        if let Some(doc_ids) = document_filter
+            && !doc_ids.is_empty() {
                 let valid_ids: Vec<_> = doc_ids
                     .iter()
                     .filter(|id| is_valid_uuid(id))
@@ -276,7 +274,6 @@ impl VectorStore {
                     .join(" OR ");
                 query = query.only_if(filter);
             }
-        }
 
         let results = query
             .execute()

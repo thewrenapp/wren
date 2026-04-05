@@ -158,11 +158,10 @@ fn parse_classification_response(
     }
 
     // Fallback: try parsing content as JSON (also covers malformed tool calls)
-    if let Some(ref content) = response.content {
-        if let Ok(result) = parse_llm_json::<ClassificationResult>(content) {
+    if let Some(ref content) = response.content
+        && let Ok(result) = parse_llm_json::<ClassificationResult>(content) {
             return Ok(result);
         }
-    }
 
     Err(LlmError::ParseError(
         "No classify_document tool call or parseable JSON in response".to_string(),

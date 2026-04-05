@@ -40,6 +40,8 @@ pub struct DocumentChunk {
 }
 use super::store::VectorStore;
 
+type ProgressCallback<'a> = Option<&'a (dyn Fn(usize, usize, &str) + Send + Sync)>;
+
 /// Index a single entry's attachments into the RAG vector store.
 ///
 /// Flow: read extracted text -> chunk -> embed -> upsert into LanceDB.
@@ -173,7 +175,7 @@ pub async fn index_all_entries(
     store: &VectorStore,
     embed_config: &EmbeddingConfig,
     library_path: &Path,
-    progress_callback: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+    progress_callback: ProgressCallback<'_>,
 ) -> Result<usize, String> {
     // Find entries with extracted text but not yet RAG-indexed
     let entry_ids: Vec<(i64, Option<String>)> = sqlx::query_as(

@@ -21,6 +21,7 @@ import {
   Sparkles,
   CircleCheck,
   Cpu,
+  Share2,
 } from 'lucide-react';
 import { IconTagOff } from '@tabler/icons-react';
 import {
@@ -50,6 +51,7 @@ import {
 import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
 import { open } from '@tauri-apps/plugin-dialog';
 import { toast } from '@/stores/toastStore';
+import { useUIStore } from '@/stores/uiStore';
 import { useEntryActions } from './useEntryActions';
 
 interface EntryContextMenuProps {
@@ -297,6 +299,16 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
       </DropdownMenuSub>
 
       <DropdownMenuSeparator />
+
+      <DropdownMenuItem onClick={() => {
+        const { showShareDialog } = useUIStore.getState();
+        const titles = entry ? [entry.title] : [];
+        showShareDialog('entries', targetIds, titles);
+        onClose?.();
+      }}>
+        <Share2 className='h-4 w-4 mr-2' />
+        {isMultiSelect ? `Share ${targetIds.length} Entries` : 'Share Entry'}
+      </DropdownMenuItem>
 
       <DropdownMenuItem onClick={handleDelete} className='text-destructive focus:text-destructive'>
         <Trash2 className='h-4 w-4 mr-2' />
@@ -569,6 +581,17 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
         </ContextMenuSub>
 
         <ContextMenuSeparator />
+
+        <ContextMenuItem
+          onClick={() => {
+            const { showShareDialog } = useUIStore.getState();
+            const titles = targetIds.length === 1 && entry ? [entry.title] : [];
+            showShareDialog('entries', targetIds, titles);
+          }}
+        >
+          <Share2 className='h-4 w-4 mr-2' />
+          {isMultiSelect ? `Share ${targetIds.length} Entries` : 'Share Entry'}
+        </ContextMenuItem>
 
         <ContextMenuItem
           onClick={handleDelete}

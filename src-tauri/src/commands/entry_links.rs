@@ -112,21 +112,19 @@ pub async fn sync_note_entry_links(
 
     // Direct entry links
     for cap in entry_re.captures_iter(&markdown_content) {
-        if let Ok(id) = cap[1].parse::<i64>() {
-            if id != source_entry_id && !target_ids.contains(&id) {
+        if let Ok(id) = cap[1].parse::<i64>()
+            && id != source_entry_id && !target_ids.contains(&id) {
                 target_ids.push(id);
             }
-        }
     }
 
     // Attachment links — resolve to parent entry
     let mut attachment_ids: Vec<i64> = Vec::new();
     for cap in attachment_re.captures_iter(&markdown_content) {
-        if let Ok(id) = cap[1].parse::<i64>() {
-            if !attachment_ids.contains(&id) {
+        if let Ok(id) = cap[1].parse::<i64>()
+            && !attachment_ids.contains(&id) {
                 attachment_ids.push(id);
             }
-        }
     }
     if !attachment_ids.is_empty() {
         for att_id in &attachment_ids {

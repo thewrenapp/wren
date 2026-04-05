@@ -94,8 +94,15 @@ impl AppState {
         job_queue.start_scheduler();
         tracing::info!("Job queue initialized");
 
-        // Start file watcher for sync (watches files/ for entry.json changes)
+        // Start file watcher for sync (watches library/entries/ for entry.json changes)
         crate::sync::watcher::start_watcher(
+            db.clone(),
+            library_path.clone(),
+            app_handle.clone(),
+        );
+
+        // Start share sync loop (flushes outbox + consumes incoming changes)
+        crate::sync::sharing::start_share_sync_loop(
             db.clone(),
             library_path.clone(),
             app_handle.clone(),
@@ -204,13 +211,11 @@ impl AppState {
         }
 
         // Check if new dir already has entry folders
-        if new_dir.exists() {
-            if let Ok(mut entries) = std::fs::read_dir(&new_dir) {
-                if entries.next().is_some() {
+        if new_dir.exists()
+            && let Ok(mut entries) = std::fs::read_dir(&new_dir)
+                && entries.next().is_some() {
                     return; // Already migrated
                 }
-            }
-        }
 
         tracing::info!("Migrating {:?} → {:?}", old_dir, new_dir);
 
@@ -309,14 +314,12 @@ impl AppState {
                     .bind(&like_pattern)
                     .execute(pool)
                     .await
-                {
-                    if result.rows_affected() > 0 {
+                    && result.rows_affected() > 0 {
                         tracing::info!(
                             "Stripped prefix '{}' from {} ({} rows)",
                             prefix, col, result.rows_affected()
                         );
                     }
-                }
             }
         }
 
@@ -326,14 +329,13 @@ impl AppState {
                 "UPDATE attachments SET {} = 'library/entries/' || SUBSTR({}, 7) WHERE {} LIKE 'files/%'",
                 col, col, col
             );
-            if let Ok(result) = sqlx::query(&query).execute(pool).await {
-                if result.rows_affected() > 0 {
+            if let Ok(result) = sqlx::query(&query).execute(pool).await
+                && result.rows_affected() > 0 {
                     tracing::info!(
                         "Renamed {} paths from files/ to library/entries/ ({} rows)",
                         col, result.rows_affected()
                     );
                 }
-            }
         }
     }
 
@@ -391,8 +393,8 @@ impl AppState {
             };
 
             if let Ok(content) = std::fs::read_to_string(&full_path) {
-                if needs_markdown_path_fix {
-                    if let Ok(relative) = full_path.strip_prefix(library_path) {
+                if needs_markdown_path_fix
+                    && let Ok(relative) = full_path.strip_prefix(library_path) {
                         let rel_str = relative.to_string_lossy().to_string();
                         if let Err(e) = sqlx::query(
                             "UPDATE attachments SET markdown_path = ? WHERE id = ?",
@@ -405,7 +407,6 @@ impl AppState {
                             tracing::error!("Failed to update markdown_path for attachment {}: {}", note.id, e);
                         }
                     }
-                }
 
                 if let Err(e) = sqlx::query(
                     r#"INSERT INTO parsed_content (attachment_id, entry_id, structured_markdown, model_used, provider, status, date_started, date_completed)

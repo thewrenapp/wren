@@ -185,14 +185,16 @@ export async function getEntries(params?: {
   filterType?: string;
 }): Promise<EntrySummary[]> {
   return invoke('get_entries', {
-    collectionId: params?.collectionId ?? null,
-    tagIds: params?.tagIds ?? null,
-    tagMode: params?.tagMode ?? null,
-    attachmentType: params?.attachmentType ?? null,
-    searchQuery: params?.searchQuery ?? null,
-    searchScope: params?.searchScope ?? null,
-    advancedSearch: params?.advancedSearch ?? null,
-    filterType: params?.filterType ?? null,
+    options: {
+      collectionId: params?.collectionId ?? null,
+      tagIds: params?.tagIds ?? null,
+      tagMode: params?.tagMode ?? null,
+      attachmentType: params?.attachmentType ?? null,
+      searchQuery: params?.searchQuery ?? null,
+      searchScope: params?.searchScope ?? null,
+      advancedSearch: params?.advancedSearch ?? null,
+      filterType: params?.filterType ?? null,
+    },
   });
 }
 
@@ -225,20 +227,22 @@ export async function getEntriesPaged(params?: {
   offset?: number;
 }): Promise<EntriesPage> {
   return invoke('get_entries_paged', {
-    collectionId: params?.collectionId ?? null,
-    tagIds: params?.tagIds ?? null,
-    tagMode: params?.tagMode ?? null,
-    attachmentType: params?.attachmentType ?? null,
-    searchQuery: params?.searchQuery ?? null,
-    searchScope: params?.searchScope ?? null,
-    advancedSearch: params?.advancedSearch ?? null,
-    filterType: params?.filterType ?? null,
-    sortField: params?.sortField ?? null,
-    sortDirection: params?.sortDirection ?? null,
-    secondarySortField: params?.secondarySortField ?? null,
-    secondarySortDirection: params?.secondarySortDirection ?? null,
-    limitValue: params?.limit ?? null,
-    offsetValue: params?.offset ?? null,
+    options: {
+      collectionId: params?.collectionId ?? null,
+      tagIds: params?.tagIds ?? null,
+      tagMode: params?.tagMode ?? null,
+      attachmentType: params?.attachmentType ?? null,
+      searchQuery: params?.searchQuery ?? null,
+      searchScope: params?.searchScope ?? null,
+      advancedSearch: params?.advancedSearch ?? null,
+      filterType: params?.filterType ?? null,
+      sortField: params?.sortField ?? null,
+      sortDirection: params?.sortDirection ?? null,
+      secondarySortField: params?.secondarySortField ?? null,
+      secondarySortDirection: params?.secondarySortDirection ?? null,
+      limit: params?.limit ?? null,
+      offset: params?.offset ?? null,
+    },
   });
 }
 
@@ -540,12 +544,14 @@ export async function importBiblatexWithFiles(
   collectionId?: number,
 ): Promise<BiblatexImportResult> {
   return invoke('import_biblatex_with_files', {
-    biblatexPath,
-    filesBasePath: filesBasePath ?? null,
-    selectedKeys: selectedKeys ?? null,
-    importTags: importTags ?? null,
-    excludedFiles: excludedFiles ?? null,
-    collectionId: collectionId ?? null,
+    options: {
+      biblatexPath,
+      filesBasePath: filesBasePath ?? null,
+      selectedKeys: selectedKeys ?? null,
+      importTags: importTags ?? null,
+      excludedFiles: excludedFiles ?? null,
+      collectionId: collectionId ?? null,
+    },
   });
 }
 

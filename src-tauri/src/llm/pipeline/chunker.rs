@@ -68,11 +68,10 @@ pub fn chunk_text(
             start = ceil_char_boundary(text, start + step);
             // Don't start a new chunk inside a code block (overlap may push
             // into a code block that the previous chunk extended past)
-            if start < text.len() && is_inside_code_block(text, start) {
-                if let Some(fence_end) = find_code_block_end(text, start) {
+            if start < text.len() && is_inside_code_block(text, start)
+                && let Some(fence_end) = find_code_block_end(text, start) {
                     start = fence_end;
                 }
-            }
         }
     }
 
@@ -87,13 +86,12 @@ fn find_split_point(text: &str, _start: usize, target_end: usize, chunk_size: us
     let search_range = &text[search_start..search_end];
 
     // Check if we're inside a fenced code block — if so, extend past it
-    if is_inside_code_block(text, search_end) {
-        if let Some(fence_end) = find_code_block_end(text, search_end) {
+    if is_inside_code_block(text, search_end)
+        && let Some(fence_end) = find_code_block_end(text, search_end) {
             // Extend to the end of the code block (but cap at 100% extra)
             let max_extend = search_end + chunk_size;
             return fence_end.min(max_extend).min(text.len());
         }
-    }
 
     // Preference 1: Split at paragraph boundary (\n\n)
     if let Some(pos) = search_range.rfind("\n\n") {

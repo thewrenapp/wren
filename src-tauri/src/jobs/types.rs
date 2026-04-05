@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -21,15 +22,19 @@ impl JobStatus {
             JobStatus::Cancelled => "cancelled",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl FromStr for JobStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "running" => JobStatus::Running,
             "completed" => JobStatus::Completed,
             "failed" => JobStatus::Failed,
             "cancelled" => JobStatus::Cancelled,
             _ => JobStatus::Pending,
-        }
+        })
     }
 }
 
@@ -73,20 +78,6 @@ impl JobType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "reindex_library" => Some(JobType::ReindexLibrary),
-            "bulk_import_pdfs" => Some(JobType::BulkImportPdfs),
-            "bulk_import_folder" => Some(JobType::BulkImportFolder),
-            "ocr_extract" => Some(JobType::OcrExtract),
-            "llm_parse" => Some(JobType::LlmParse),
-            "metadata_extract" => Some(JobType::MetadataExtract),
-            "rag_index" => Some(JobType::RagIndex),
-            "rag_cleanup_vectors" => Some(JobType::RagCleanupVectors),
-            _ => None,
-        }
-    }
-
     /// Whether this job type is safe to restart from scratch after interruption.
     /// Idempotent jobs (reindex, import with dedup) can safely restart.
     pub fn is_restartable(&self) -> bool {
@@ -112,6 +103,24 @@ impl JobType {
             JobType::MetadataExtract => false,
             JobType::RagIndex => false,
             JobType::RagCleanupVectors => false,
+        }
+    }
+}
+
+impl FromStr for JobType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "reindex_library" => Ok(JobType::ReindexLibrary),
+            "bulk_import_pdfs" => Ok(JobType::BulkImportPdfs),
+            "bulk_import_folder" => Ok(JobType::BulkImportFolder),
+            "ocr_extract" => Ok(JobType::OcrExtract),
+            "llm_parse" => Ok(JobType::LlmParse),
+            "metadata_extract" => Ok(JobType::MetadataExtract),
+            "rag_index" => Ok(JobType::RagIndex),
+            "rag_cleanup_vectors" => Ok(JobType::RagCleanupVectors),
+            _ => Err(format!("Unknown job type: {}", s)),
         }
     }
 }

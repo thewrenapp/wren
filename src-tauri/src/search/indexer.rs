@@ -178,16 +178,14 @@ pub fn index_annotations(
 ) -> Result<()> {
     // Combine selected text and comments into searchable content
     let mut content_parts = Vec::new();
-    if let Some(ref text) = data.selected_text {
-        if !text.trim().is_empty() {
+    if let Some(ref text) = data.selected_text
+        && !text.trim().is_empty() {
             content_parts.push(text.clone());
         }
-    }
-    if let Some(ref comment) = data.comment {
-        if !comment.trim().is_empty() {
+    if let Some(ref comment) = data.comment
+        && !comment.trim().is_empty() {
             content_parts.push(comment.clone());
         }
-    }
 
     if content_parts.is_empty() {
         return Ok(());

@@ -70,7 +70,7 @@ pub fn full_text_search(
         }
 
         // Helper function to extract str from OwnedValue
-        fn get_str<'a>(doc: &'a TantivyDocument, field: tantivy::schema::Field) -> Option<&'a str> {
+        fn get_str(doc: &TantivyDocument, field: tantivy::schema::Field) -> Option<&str> {
             doc.get_first(field).and_then(|v: &OwnedValue| v.as_str())
         }
 
