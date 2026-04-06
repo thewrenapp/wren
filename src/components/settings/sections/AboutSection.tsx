@@ -1,11 +1,14 @@
+import { useState } from "react";
 import { AppLogo } from "@/components/ui/AppLogo";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { exportLibraryArchive, importLibraryArchive, importEntriesArchive } from "@/services/tauri";
 import { toast } from "@/stores/toastStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { BackupImportModeDialog } from "@/components/dialogs/BackupImportModeDialog";
 
 export function AboutSection() {
   const refreshLibrary = useLibraryStore((s) => s.refreshLibrary);
+  const [pendingImportPath, setPendingImportPath] = useState<string | null>(null);
 
   const handleExportBackup = async () => {
     try {
@@ -37,25 +40,33 @@ export function AboutSection() {
         filters: [{ name: "Wren Archive", extensions: ["wrenitem", "wren"] }],
       });
       if (selected && typeof selected === "string") {
-        const isLibrary = selected.endsWith(".wren");
-        const loadingId = toast.loading("Importing archive...");
-        try {
-          const result = isLibrary
-            ? await importLibraryArchive(selected, "merge")
-            : await importEntriesArchive(selected);
-          toast.dismiss(loadingId);
-          if (result.entriesImported > 0) {
-            toast.success(`Imported ${result.entriesImported} entries (${result.filesImported} files)`);
-            await refreshLibrary();
-          } else {
-            toast.info("No new entries to import");
-          }
-        } catch (err) {
-          toast.dismiss(loadingId);
-          throw err;
+        if (selected.endsWith(".wren")) {
+          setPendingImportPath(selected);
+        } else {
+          await doImport(selected, false);
         }
       }
     } catch (err) {
+      console.error("Backup import error:", err);
+      toast.error("Failed to import archive");
+    }
+  };
+
+  const doImport = async (filePath: string, isLibrary: boolean, mode: "merge" | "replace" = "merge") => {
+    const loadingId = toast.loading("Importing archive...");
+    try {
+      const result = isLibrary
+        ? await importLibraryArchive(filePath, mode)
+        : await importEntriesArchive(filePath);
+      toast.dismiss(loadingId);
+      if (result.entriesImported > 0) {
+        toast.success(`Imported ${result.entriesImported} entries (${result.filesImported} files)`);
+        await refreshLibrary();
+      } else {
+        toast.info("No new entries to import");
+      }
+    } catch (err) {
+      toast.dismiss(loadingId);
       console.error("Backup import error:", err);
       toast.error("Failed to import archive");
     }
@@ -102,6 +113,16 @@ export function AboutSection() {
           Export your entire library as a .wren file, or import from a .wren/.wrenitem archive.
         </p>
       </div>
+
+      <BackupImportModeDialog
+        open={pendingImportPath !== null}
+        onOpenChange={(open) => { if (!open) setPendingImportPath(null); }}
+        onConfirm={async (mode) => {
+          const path = pendingImportPath!;
+          setPendingImportPath(null);
+          await doImport(path, true, mode);
+        }}
+      />
     </div>
   );
 }

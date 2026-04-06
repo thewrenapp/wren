@@ -71,6 +71,7 @@ export interface CommandHandlers {
   handleExportTagAsArchive: (tagId: number, name: string) => void;
   handleExportLibraryAsArchive: () => void;
   handleImportArchive: () => void;
+  doArchiveImport: (filePath: string, isLibrary: boolean, mode?: "merge" | "replace") => Promise<void>;
   handleRenameCollection: (collectionId: number) => void;
   handleDeleteCollection: (collectionId: number, name: string) => void;
   handleRenameTag: (tagId: number) => void;

@@ -8,6 +8,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSchemaStore } from "@/stores/schemaStore";
 import { ExportOptionsDialog } from "@/components/dialogs/ExportOptionsDialog";
 import { ImportPreviewDialog } from "@/components/dialogs/ImportPreviewDialog";
+import { BackupImportModeDialog } from "@/components/dialogs/BackupImportModeDialog";
 import { toast } from "@/stores/toastStore";
 import {
   importBiblatexWithFiles,
@@ -68,6 +69,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
   const [showImportPreview, setShowImportPreview] = useState(false);
   const [importPreviewData, setImportPreviewData] = useState<BiblatexPreviewResult | null>(null);
   const [importFolderPath, setImportFolderPath] = useState<string | null>(null);
+  const [pendingArchiveImportPath, setPendingArchiveImportPath] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isLoadingMoreResults, setIsLoadingMoreResults] = useState(false);
 
@@ -110,7 +112,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     entryAttachments, setEntryAttachments, newTagName, setNewTagName,
     renameInput, setRenameInput, selectedItemId, setSelectedItemId,
     exportMode, setExportMode, setShowExportDialog, setIsExporting,
-    setExportContext, setShowImportPreview, setImportPreviewData, setImportFolderPath,
+    setExportContext, setShowImportPreview, setImportPreviewData, setImportFolderPath, setPendingArchiveImportPath,
   });
 
   const handleConfirmBiblatexImport = async (options: import('@/components/dialogs/ImportPreviewDialog').ImportOptions) => {
@@ -206,8 +208,18 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
     isImporting,
   };
 
+  const backupModeDialogProps = {
+    open: pendingArchiveImportPath !== null,
+    onOpenChange: (open: boolean) => { if (!open) setPendingArchiveImportPath(null); },
+    onConfirm: async (mode: "merge" | "replace") => {
+      const path = pendingArchiveImportPath!;
+      setPendingArchiveImportPath(null);
+      await handlers.doArchiveImport(path, true, mode);
+    },
+  };
+
   if (!commandPaletteOpen) {
-    return (<><ExportOptionsDialog {...exportDialogProps} /><ImportPreviewDialog {...importDialogProps} /></>);
+    return (<><ExportOptionsDialog {...exportDialogProps} /><ImportPreviewDialog {...importDialogProps} /><BackupImportModeDialog {...backupModeDialogProps} /></>);
   }
 
   if (subMenu) {
@@ -247,6 +259,7 @@ export function CommandPalette({ openMode }: { openMode?: "full" | "advanced" | 
       </div>
       <ExportOptionsDialog {...exportDialogProps} />
       <ImportPreviewDialog {...importDialogProps} />
+      <BackupImportModeDialog {...backupModeDialogProps} />
     </div>
   );
 }

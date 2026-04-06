@@ -35,6 +35,7 @@ interface ImportExportDeps {
   setShowImportPreview: (open: boolean) => void;
   setImportPreviewData: (data: BiblatexPreviewResult | null) => void;
   setImportFolderPath: (path: string | null) => void;
+  setPendingArchiveImportPath: (path: string | null) => void;
 }
 
 export function createImportExportActions(deps: ImportExportDeps) {
@@ -43,6 +44,7 @@ export function createImportExportActions(deps: ImportExportDeps) {
     invalidateAttachments, refreshLibrary, importFiles, importFolder,
     setSubMenu, setExportMode, setShowExportDialog, setExportContext,
     setShowImportPreview, setImportPreviewData, setImportFolderPath,
+    setPendingArchiveImportPath,
   } = deps;
 
   const handleImportPdf = async () => {
@@ -274,29 +276,37 @@ export function createImportExportActions(deps: ImportExportDeps) {
         filters: [{ name: "Wren Archive", extensions: ["wrenitem", "wren"] }],
       });
       if (selected && typeof selected === "string") {
-        const isLibrary = selected.endsWith(".wren");
-        const loadingId = toast.loading("Importing archive...");
-        try {
-          const result = isLibrary
-            ? await importLibraryArchive(selected, "merge")
-            : await importEntriesArchive(selected);
-          toast.dismiss(loadingId);
-          if (result.entriesImported > 0) {
-            toast.success(`Imported ${result.entriesImported} entries (${result.filesImported} files)`);
-            invalidateAttachments();
-            await refreshLibrary();
-          } else {
-            toast.info("No new entries to import");
-          }
-          if (result.errors.length > 0) {
-            console.error("Archive import errors:", result.errors);
-          }
-        } catch (err) {
-          toast.dismiss(loadingId);
-          throw err;
+        if (selected.endsWith(".wren")) {
+          setPendingArchiveImportPath(selected);
+        } else {
+          await doArchiveImport(selected, false);
         }
       }
     } catch (err) { console.error("Archive import error:", err); toast.error("Failed to import archive"); }
+  };
+
+  const doArchiveImport = async (filePath: string, isLibrary: boolean, mode: "merge" | "replace" = "merge") => {
+    const loadingId = toast.loading("Importing archive...");
+    try {
+      const result = isLibrary
+        ? await importLibraryArchive(filePath, mode)
+        : await importEntriesArchive(filePath);
+      toast.dismiss(loadingId);
+      if (result.entriesImported > 0) {
+        toast.success(`Imported ${result.entriesImported} entries (${result.filesImported} files)`);
+        invalidateAttachments();
+        await refreshLibrary();
+      } else {
+        toast.info("No new entries to import");
+      }
+      if (result.errors.length > 0) {
+        console.error("Archive import errors:", result.errors);
+      }
+    } catch (err) {
+      toast.dismiss(loadingId);
+      console.error("Archive import error:", err);
+      toast.error("Failed to import archive");
+    }
   };
 
   return {
@@ -309,6 +319,6 @@ export function createImportExportActions(deps: ImportExportDeps) {
     handleExportCollectionWithFiles, handleExportTagWithFiles,
     openExportDialog,
     handleExportSelectedAsArchive, handleExportCollectionAsArchive,
-    handleExportTagAsArchive, handleExportLibraryAsArchive, handleImportArchive,
+    handleExportTagAsArchive, handleExportLibraryAsArchive, handleImportArchive, doArchiveImport,
   };
 }

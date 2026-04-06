@@ -28,6 +28,7 @@ interface ActionDeps {
   setShowImportPreview: (open: boolean) => void;
   setImportPreviewData: (data: BiblatexPreviewResult | null) => void;
   setImportFolderPath: (path: string | null) => void;
+  setPendingArchiveImportPath: (path: string | null) => void;
 }
 
 export function useCommandPaletteActions(deps: ActionDeps): CommandHandlers {
@@ -51,7 +52,7 @@ export function useCommandPaletteActions(deps: ActionDeps): CommandHandlers {
     setSelectedItemId, setExportMode,
     setShowExportDialog, setExportContext,
     setShowImportPreview, setImportPreviewData, setImportFolderPath,
-    setEntryAttachments,
+    setPendingArchiveImportPath, setEntryAttachments,
   } = deps;
 
   const handleSelect = useCallback(
@@ -69,6 +70,7 @@ export function useCommandPaletteActions(deps: ActionDeps): CommandHandlers {
     invalidateAttachments, refreshLibrary, importFiles, importFolder,
     setSubMenu, setExportMode, setShowExportDialog, setExportContext,
     setShowImportPreview, setImportPreviewData, setImportFolderPath,
+    setPendingArchiveImportPath,
   });
 
   const entryActions = createEntryActions({
