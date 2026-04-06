@@ -17,6 +17,7 @@ import {
   bulkRemoveFromCollection,
   bulkRemoveTags,
   bulkMoveToTrash,
+  exportEntriesArchive,
 } from '@/services/tauri';
 import { parseEntries } from '@/services/tauri/commands';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -380,6 +381,24 @@ export function useEntryActions({ entry, onClose }: UseEntryActionsParams) {
     onClose?.();
   };
 
+  const handleExportAsArchive = async () => {
+    try {
+      const defaultName = isMultiSelect ? 'export' : entry.key || 'export';
+      const filePath = await save({
+        defaultPath: `${defaultName}.wrenitem`,
+        filters: [{ name: 'Wren Archive', extensions: ['wrenitem'] }],
+      });
+      if (filePath) {
+        const result = await exportEntriesArchive(targetIds, filePath);
+        toast.success(`Exported ${result.entriesExported} entries (${result.filesExported} files)`);
+      }
+    } catch (err) {
+      console.error('Failed to export as archive:', err);
+      toast.error('Failed to export archive');
+    }
+    onClose?.();
+  };
+
   const handleCopyWrenLink = async () => {
     try {
       const link = buildEntryLink(entry.key);
@@ -420,6 +439,7 @@ export function useEntryActions({ entry, onClose }: UseEntryActionsParams) {
     handleExportBibtex,
     handleCopyCslJson,
     handleCopyBibtex,
+    handleExportAsArchive,
     handleCopyWrenLink,
   };
 }

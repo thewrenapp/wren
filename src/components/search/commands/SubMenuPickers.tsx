@@ -185,6 +185,9 @@ export function ExportCollectionPicker({ props }: { props: CommandsProps }) {
               <Command.Item onSelect={() => handlers.handleExportCollectionWithFiles(collection.id, collection.name)} className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4">
                 <span className="text-sm">Export with Files...</span>
               </Command.Item>
+              <Command.Item onSelect={() => handlers.handleExportCollectionAsArchive(collection.id, collection.name)} className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4">
+                <span className="text-sm">Export as Wren Archive</span>
+              </Command.Item>
             </div>
           ))
         )}
@@ -220,6 +223,9 @@ export function ExportTagPicker({ props }: { props: CommandsProps }) {
               </Command.Item>
               <Command.Item onSelect={() => handlers.handleExportTagWithFiles(tag.id, tag.name)} className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4">
                 <span className="text-sm">Export with Files...</span>
+              </Command.Item>
+              <Command.Item onSelect={() => handlers.handleExportTagAsArchive(tag.id, tag.name)} className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30 ml-4">
+                <span className="text-sm">Export as Wren Archive</span>
               </Command.Item>
             </div>
           ))

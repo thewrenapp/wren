@@ -118,24 +118,8 @@ impl AppState {
                     .unwrap_or_else(|| "1289".to_string());
                 let port: u16 = port_str.parse().unwrap_or(1289);
 
-                // Get or generate token
-                let token = match crate::commands::settings::get_setting_value(&db, "connector_token").await {
-                    Some(t) if !t.is_empty() => t,
-                    _ => {
-                        let new_token = uuid::Uuid::new_v4().to_string();
-                        let _ = sqlx::query(
-                            "INSERT INTO settings (key, value, value_type) VALUES ('connector_token', ?, 'string') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-                        )
-                        .bind(&new_token)
-                        .execute(&db)
-                        .await;
-                        new_token
-                    }
-                };
-
                 match ConnectorServer::start(
                     port,
-                    token,
                     db.clone(),
                     library_path.clone(),
                     search_index.clone(),

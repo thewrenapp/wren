@@ -613,7 +613,6 @@ export async function getLibraryPath(): Promise<string> {
 export interface ConnectorStatus {
   running: boolean;
   port: number | null;
-  token: string | null;
 }
 
 export async function getConnectorStatus(): Promise<ConnectorStatus> {
@@ -626,10 +625,6 @@ export async function startConnectorServer(): Promise<void> {
 
 export async function stopConnectorServer(): Promise<void> {
   return invoke('stop_connector_server');
-}
-
-export async function regenerateConnectorToken(): Promise<string> {
-  return invoke('regenerate_connector_token');
 }
 
 // =====================================================
@@ -833,6 +828,73 @@ export async function exportAllToBiblatexWithFiles(
       include_annotations: options.includeAnnotations,
     },
   });
+}
+
+// =====================================================
+// Native Archive Export/Import (.wren / .wrenitem)
+// =====================================================
+
+export interface ArchiveExportResult {
+  entriesExported: number;
+  filesExported: number;
+  archiveSizeBytes: number;
+}
+
+export interface ArchiveImportResult {
+  entriesImported: number;
+  entriesSkipped: number;
+  filesImported: number;
+  collectionsImported: number;
+  errors: string[];
+}
+
+export interface ArchivePreviewResult {
+  format: string;
+  version: number;
+  entryCount: number;
+  hasCollections: boolean;
+  hasTags: boolean;
+  hasSettings: boolean;
+  collectionName: string | null;
+}
+
+export async function exportEntriesArchive(
+  entryIds: number[],
+  outputPath: string,
+): Promise<ArchiveExportResult> {
+  return invoke('export_entries_archive', { entryIds, outputPath });
+}
+
+export async function exportCollectionArchive(
+  collectionId: number,
+  outputPath: string,
+): Promise<ArchiveExportResult> {
+  return invoke('export_collection_archive', { collectionId, outputPath });
+}
+
+export async function exportLibraryArchive(
+  outputPath: string,
+): Promise<ArchiveExportResult> {
+  return invoke('export_library_archive', { outputPath });
+}
+
+export async function previewArchive(
+  archivePath: string,
+): Promise<ArchivePreviewResult> {
+  return invoke('preview_archive', { archivePath });
+}
+
+export async function importEntriesArchive(
+  archivePath: string,
+): Promise<ArchiveImportResult> {
+  return invoke('import_entries_archive', { archivePath });
+}
+
+export async function importLibraryArchive(
+  archivePath: string,
+  mode: 'merge' | 'replace',
+): Promise<ArchiveImportResult> {
+  return invoke('import_library_archive', { archivePath, mode });
 }
 
 // =====================================================

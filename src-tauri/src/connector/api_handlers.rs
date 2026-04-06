@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -13,21 +13,6 @@ use super::ConnectorState;
 use crate::commands::export::{
     build_bibtex_for_entry, build_citation_for_entry, build_csl_json_for_entry,
 };
-
-// =====================================================
-// AUTH
-// =====================================================
-
-fn validate_token(headers: &HeaderMap, expected: &str) -> Result<(), StatusCode> {
-    let token = headers
-        .get("X-Wren-Token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if token != expected {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    Ok(())
-}
 
 // =====================================================
 // RESPONSE TYPES
@@ -135,11 +120,11 @@ fn row_to_entry_summary(r: &sqlx::sqlite::SqliteRow) -> ApiEntrySummary {
 
 /// GET /api/items/:key/cite — plain text citation
 pub async fn get_item_cite(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Path(key): Path<String>,
 ) -> Result<Response, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let entry_id = resolve_entry_key(&state.db, &key).await?;
     let cite = build_citation_for_entry(&state.db, entry_id)
         .await
@@ -153,11 +138,11 @@ pub async fn get_item_cite(
 
 /// GET /api/items/:key/bibtex — BibTeX entry
 pub async fn get_item_bibtex(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Path(key): Path<String>,
 ) -> Result<Response, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let entry_id = resolve_entry_key(&state.db, &key).await?;
     let bibtex = build_bibtex_for_entry(&state.db, entry_id)
         .await
@@ -171,11 +156,11 @@ pub async fn get_item_bibtex(
 
 /// GET /api/items/:key/json — CSL JSON
 pub async fn get_item_json(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Path(key): Path<String>,
 ) -> Result<Response, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let entry_id = resolve_entry_key(&state.db, &key).await?;
     let csl = build_csl_json_for_entry(&state.db, entry_id)
         .await
@@ -186,11 +171,11 @@ pub async fn get_item_json(
 
 /// GET /api/items/:key/attachments — list attachments for an entry
 pub async fn get_item_attachments(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Path(key): Path<String>,
 ) -> Result<Json<Vec<ApiAttachment>>, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let entry_id = resolve_entry_key(&state.db, &key).await?;
 
     let rows = sqlx::query(
@@ -233,12 +218,12 @@ pub async fn get_item_attachments(
 
 /// POST /api/items/:key/notes — add a markdown note to an entry
 pub async fn add_item_note(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Path(key): Path<String>,
     Json(body): Json<AddNoteRequest>,
 ) -> Result<Json<ApiAttachment>, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let entry_id = resolve_entry_key(&state.db, &key).await?;
 
     let content = body.content.trim();
@@ -335,11 +320,11 @@ pub async fn add_item_note(
 
 /// GET /api/items — paginated list of all entries
 pub async fn list_items(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedResponse<ApiEntrySummary>>, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(50).min(200);
 
@@ -373,11 +358,11 @@ pub async fn list_items(
 
 /// GET /api/search?q=...&limit=...&offset=... — full-text search
 pub async fn search_items(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let query = params.q.unwrap_or_default();
     if query.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -415,10 +400,10 @@ pub async fn search_items(
 
 /// GET /api/collections — list all collections
 pub async fn list_collections(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
 ) -> Result<Json<Vec<ApiCollection>>, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let rows = sqlx::query(
         "SELECT id, name, parent_id, color FROM collections ORDER BY name",
     )
@@ -441,12 +426,12 @@ pub async fn list_collections(
 
 /// GET /api/collections/:id_or_name/items — paginated entries in a collection (by ID or name)
 pub async fn list_collection_items(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Path(id_or_name): Path<String>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedResponse<ApiEntrySummary>>, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(50).min(200);
 
@@ -502,12 +487,12 @@ pub async fn list_collection_items(
 
 /// GET /api/tags/:name/items — paginated entries with a given tag
 pub async fn list_tag_items(
-    headers: HeaderMap,
+
     State(state): State<Arc<ConnectorState>>,
     Path(tag_name): Path<String>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedResponse<ApiEntrySummary>>, StatusCode> {
-    validate_token(&headers, &state.token)?;
+
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(50).min(200);
 

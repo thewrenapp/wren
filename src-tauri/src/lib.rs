@@ -297,6 +297,13 @@ pub fn run() {
             commands::export::export_all_to_bibtex,
             commands::export::export_to_biblatex_with_files,
             commands::export::export_all_to_biblatex_with_files,
+            // Native archive export/import (.wren / .wrenitem)
+            commands::archive_export::export_entries_archive,
+            commands::archive_export::export_collection_archive,
+            commands::archive_export::export_library_archive,
+            commands::archive_import::preview_archive,
+            commands::archive_import::import_entries_archive,
+            commands::archive_import::import_library_archive,
             // Duplicates
             commands::duplicates::find_duplicates,
             commands::duplicates::get_duplicate_count,
@@ -362,7 +369,6 @@ pub fn run() {
             commands::connector::get_connector_status,
             commands::connector::start_connector_server,
             commands::connector::stop_connector_server,
-            commands::connector::regenerate_connector_token,
             // Auth
             commands::auth::get_auth_state,
             commands::auth::sign_in_email,

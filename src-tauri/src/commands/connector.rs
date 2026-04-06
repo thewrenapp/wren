@@ -2,13 +2,11 @@ use crate::connector::ConnectorServer;
 use crate::state::AppState;
 use serde::Serialize;
 use tauri::State;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConnectorStatus {
     pub running: bool,
     pub port: Option<u16>,
-    pub token: Option<String>,
 }
 
 #[tauri::command]
@@ -16,12 +14,10 @@ pub async fn get_connector_status(
     state: State<'_, AppState>,
 ) -> Result<ConnectorStatus, String> {
     let server = state.connector_server.read().await;
-    let token = crate::commands::settings::get_setting_value(&state.db, "connector_token").await;
 
     Ok(ConnectorStatus {
         running: server.is_some(),
         port: server.as_ref().map(|s| s.port),
-        token,
     })
 }
 
@@ -46,27 +42,8 @@ pub async fn start_connector_server(
         1289
     });
 
-    // Get or generate token
-    let token = match crate::commands::settings::get_setting_value(&state.db, "connector_token").await {
-        Some(t) if !t.is_empty() => t,
-        _ => {
-            let new_token = Uuid::new_v4().to_string();
-            if let Err(e) = sqlx::query(
-                "INSERT INTO settings (key, value, value_type) VALUES ('connector_token', ?, 'string') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-            )
-            .bind(&new_token)
-            .execute(&state.db)
-            .await
-            {
-                tracing::error!("Failed to persist connector token: {}", e);
-            }
-            new_token
-        }
-    };
-
     let new_server = ConnectorServer::start(
         port,
-        token,
         state.db.clone(),
         state.library_path.clone(),
         state.search_index.clone(),
@@ -111,20 +88,4 @@ pub async fn stop_connector_server(
     }
 
     Ok(())
-}
-
-#[tauri::command]
-pub async fn regenerate_connector_token(
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let new_token = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO settings (key, value, value_type) VALUES ('connector_token', ?, 'string') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-    )
-    .bind(&new_token)
-    .execute(&state.db)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(new_token)
 }

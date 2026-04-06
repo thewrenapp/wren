@@ -40,11 +40,8 @@ pub async fn ping() -> impl IntoResponse {
 
 /// GET /connector/collections — list all collections
 pub async fn get_collections(
-    headers: HeaderMap,
     State(state): State<Arc<ConnectorState>>,
 ) -> Result<Json<CollectionsResponse>, StatusCode> {
-    validate_token(&headers, &state.token)?;
-
     let rows = sqlx::query(
         "SELECT id, name, parent_id FROM collections ORDER BY name",
     )
@@ -908,18 +905,4 @@ fn mime_to_extension(mime: &str, url: &str) -> &'static str {
     } else {
         "bin"
     }
-}
-
-/// Download an attachment from a URL and save it to the entry directory.
-/// Returns (file_path, file_size, sha256_hash).
-fn validate_token(headers: &HeaderMap, expected: &str) -> Result<(), StatusCode> {
-    let token = headers
-        .get("X-Wren-Token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if token != expected {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    Ok(())
 }

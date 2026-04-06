@@ -6,6 +6,7 @@ import {
   FileCode,
   Copy,
   Trash2,
+  Archive,
 } from 'lucide-react';
 import { useState } from 'react';
 import {
@@ -39,6 +40,7 @@ import {
   type ExportOptions,
   exportAllToBiblatexWithFiles,
   exportToBiblatexWithFiles,
+  exportLibraryArchive,
 } from '@/services/tauri';
 import { ExportOptionsDialog } from '@/components/dialogs/ExportOptionsDialog';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -217,6 +219,29 @@ export function FilterSection() {
     }
   };
 
+  const handleExportLibraryArchive = async () => {
+    try {
+      const filePath = await save({
+        defaultPath: 'library-backup.wren',
+        filters: [{ name: 'Wren Library Backup', extensions: ['wren'] }],
+      });
+      if (filePath) {
+        const loadingId = toast.loading('Exporting library backup...');
+        try {
+          const result = await exportLibraryArchive(filePath);
+          toast.dismiss(loadingId);
+          toast.success(`Library backup exported (${result.entriesExported} entries, ${result.filesExported} files)`);
+        } catch (err) {
+          toast.dismiss(loadingId);
+          throw err;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to export library backup:', err);
+      toast.error('Failed to export library backup');
+    }
+  };
+
   const pdfCount = entryCounts.pdf;
   const noteCount = entryCounts.note;
 
@@ -248,6 +273,10 @@ export function FilterSection() {
                 <ContextMenuItem onClick={() => openBiblatexExportDialog({ type: 'all', name: 'library' })}>
                   <FolderOpen className='h-4 w-4 mr-2' />
                   BibLaTeX with Files...
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleExportLibraryArchive}>
+                  <Archive className='h-4 w-4 mr-2' />
+                  Wren Library Backup (.wren)...
                 </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={handleCopyAllCslJson}>

@@ -9,6 +9,7 @@ import {
   Settings2,
   Share2,
   Trash2,
+  Archive,
 } from 'lucide-react';
 import {
   ContextMenu,
@@ -31,6 +32,7 @@ import {
   exportToBibtex,
   exportToCslJson,
   exportToBiblatexWithFiles,
+  exportCollectionArchive,
   type ExportOptions,
 } from '@/services/tauri';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -53,6 +55,7 @@ interface CollectionItemProps {
   onExportCslJson: (id: number, name: string) => void;
   onExportBibtex: (id: number, name: string) => void;
   onExportBiblatex: (id: number, name: string) => void;
+  onExportArchive: (id: number, name: string) => void;
 }
 
 export function CollectionItem({
@@ -64,6 +67,7 @@ export function CollectionItem({
   onExportCslJson,
   onExportBibtex,
   onExportBiblatex,
+  onExportArchive,
 }: CollectionItemProps) {
   return (
     <DroppableCollection
@@ -126,6 +130,12 @@ export function CollectionItem({
               >
                 <FolderOpen className='h-4 w-4 mr-2' />
                 BibLaTeX with Files...
+              </ContextMenuItem>
+              <ContextMenuItem
+                onClick={() => onExportArchive(collection.id, collection.name)}
+              >
+                <Archive className='h-4 w-4 mr-2' />
+                Wren Archive...
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
@@ -333,6 +343,22 @@ export function useCollectionActions() {
     }
   };
 
+  const handleExportCollectionArchive = async (collectionId: number, collectionName: string) => {
+    try {
+      const filePath = await save({
+        defaultPath: `${collectionName}.wrenitem`,
+        filters: [{ name: 'Wren Archive', extensions: ['wrenitem'] }],
+      });
+      if (filePath) {
+        const result = await exportCollectionArchive(collectionId, filePath);
+        toast.success(`Exported collection "${collectionName}" (${result.entriesExported} entries, ${result.filesExported} files)`);
+      }
+    } catch (err) {
+      console.error('Failed to export collection archive:', err);
+      toast.error('Failed to export collection archive');
+    }
+  };
+
   return {
     newCollectionDialogOpen,
     setNewCollectionDialogOpen,
@@ -353,6 +379,7 @@ export function useCollectionActions() {
     handleExportCollectionCslJson,
     handleExportCollectionBibtex,
     openBiblatexExportDialog,
+    handleExportCollectionArchive,
     showExportDialog,
     setShowExportDialog,
     exportContext,

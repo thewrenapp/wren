@@ -22,6 +22,7 @@ import {
   CircleCheck,
   Cpu,
   Share2,
+  Archive,
 } from 'lucide-react';
 import { IconTagOff } from '@tabler/icons-react';
 import {
@@ -94,6 +95,7 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
     handleExportBibtex,
     handleCopyCslJson,
     handleCopyBibtex,
+    handleExportAsArchive,
     handleCopyWrenLink,
   } = useEntryActions({ entry, onClose });
 
@@ -237,6 +239,10 @@ export function EntryContextMenuContent({ entry, onClose, onShowExportDialog }: 
             <FolderOutput className='h-4 w-4 mr-2' />
             BibLaTeX with Files...
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={handleExportAsArchive}>
+            <Archive className='h-4 w-4 mr-2' />
+            Wren Archive...
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={handleCopyCslJson}>
             <Copy className='h-4 w-4 mr-2' />
@@ -351,6 +357,7 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
     handleExportBibtex,
     handleCopyCslJson,
     handleCopyBibtex,
+    handleExportAsArchive,
     handleCopyWrenLink,
   } = useEntryActions({ entry });
 
@@ -518,6 +525,10 @@ export function EntryContextMenu({ entry, children }: EntryContextMenuProps) {
             <ContextMenuItem onClick={() => setShowExportDialog(true)}>
               <FolderOutput className='h-4 w-4 mr-2' />
               BibLaTeX with Files...
+            </ContextMenuItem>
+            <ContextMenuItem onClick={handleExportAsArchive}>
+              <Archive className='h-4 w-4 mr-2' />
+              Wren Archive...
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={handleCopyCslJson}>

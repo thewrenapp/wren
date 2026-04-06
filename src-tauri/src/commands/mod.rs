@@ -1,4 +1,7 @@
 pub mod annotations;
+pub mod archive_export;
+pub mod archive_import;
+pub mod archive_types;
 pub mod auth;
 pub mod collections;
 pub mod connector;

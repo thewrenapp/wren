@@ -250,6 +250,7 @@ export function TagsSection({ tagsOpen, onTagsOpenChange }: TagsSectionProps) {
                 onExportCslJson={actions.handleExportTagCslJson}
                 onExportBibtex={actions.handleExportTagBibtex}
                 onExportBiblatex={actions.openBiblatexExportDialog}
+                onExportArchive={actions.handleExportTagArchive}
               />
             ))}
           </div>

@@ -84,6 +84,7 @@ export function CollectionsSection({ collectionsOpen, onCollectionsOpenChange }:
               onExportCslJson={actions.handleExportCollectionCslJson}
               onExportBibtex={actions.handleExportCollectionBibtex}
               onExportBiblatex={actions.openBiblatexExportDialog}
+              onExportArchive={actions.handleExportCollectionArchive}
             />
           ))
         )}

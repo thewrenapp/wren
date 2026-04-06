@@ -94,6 +94,10 @@ async-trait = "0.1"
 # Regex
 regex = "1"
 
+# Archive (tar.gz for .wren / .wrenitem export)
+flate2 = "1"
+tar = "0.4"
+
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

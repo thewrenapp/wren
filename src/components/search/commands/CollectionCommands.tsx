@@ -1,7 +1,7 @@
 import { Command } from "cmdk";
 import {
   Plus, Settings2, Pencil, Trash2, Library,
-  FolderOpen, Upload, Download, FilePlus2,
+  FolderOpen, Upload, Download, FilePlus2, Archive,
 } from "lucide-react";
 import type { Collection } from "@/services/tauri";
 import type { CommandHandlers, SubMenu, CommandsProps } from "./types";
@@ -79,6 +79,13 @@ export function ExportCommands({ handlers, selectedEntryIds, collections, tags, 
               <span className="text-xs text-muted-foreground">{selectedEntryIds.length} entries with attachments</span>
             </div>
           </Command.Item>
+          <Command.Item value="export selected wren archive native" onSelect={handlers.handleExportSelectedAsArchive} className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30">
+            <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10"><Archive className="h-4 w-4 text-amber-500" /></div>
+            <div className="flex-1">
+              <span className="block text-sm font-medium">Export Selected as Wren Archive</span>
+              <span className="text-xs text-muted-foreground">{selectedEntryIds.length} entries as .wrenitem</span>
+            </div>
+          </Command.Item>
         </>
       )}
       <Command.Item value="export all bibtex library" onSelect={handlers.handleExportAllBibtex} className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30">
@@ -100,6 +107,13 @@ export function ExportCommands({ handlers, selectedEntryIds, collections, tags, 
         <div className="flex-1">
           <span className="block text-sm font-medium">Export All as BibLaTeX with Files</span>
           <span className="text-xs text-muted-foreground">Entire library with attachments</span>
+        </div>
+      </Command.Item>
+      <Command.Item value="export library backup wren archive" onSelect={handlers.handleExportLibraryAsArchive} className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30">
+        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10"><Archive className="h-4 w-4 text-amber-500" /></div>
+        <div className="flex-1">
+          <span className="block text-sm font-medium">Export Library Backup (.wren)</span>
+          <span className="text-xs text-muted-foreground">Full library with all files and settings</span>
         </div>
       </Command.Item>
       {collections.length > 0 && (
@@ -174,6 +188,13 @@ export function CreateCommands({ handlers, setSubMenu, uiActions }: CreateComman
         <div className="flex-1">
           <span className="block text-sm font-medium">Import BibLaTeX with Files</span>
           <span className="text-xs text-muted-foreground">Import from Zotero export folder with PDFs</span>
+        </div>
+      </Command.Item>
+      <Command.Item value="import wren archive native wrenitem restore" onSelect={handlers.handleImportArchive} className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30">
+        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-amber-500/10"><Archive className="h-4 w-4 text-amber-500" /></div>
+        <div className="flex-1">
+          <span className="block text-sm font-medium">Import Wren Archive</span>
+          <span className="text-xs text-muted-foreground">Import from .wrenitem or .wren backup</span>
         </div>
       </Command.Item>
       <Command.Item value="new collection create organize" onSelect={() => handlers.handleSelect(() => uiActions.setNewCollectionDialogOpen(true))} className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30">

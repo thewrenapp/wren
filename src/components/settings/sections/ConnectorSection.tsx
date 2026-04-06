@@ -1,6 +1,4 @@
 import { useState, useEffect, useCallback } from "react";
-import { Copy, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,7 +6,6 @@ import {
   getConnectorStatus,
   startConnectorServer,
   stopConnectorServer,
-  regenerateConnectorToken,
   updateSetting,
   type ConnectorStatus,
 } from "@/services/tauri/commands";
@@ -50,23 +47,6 @@ export function ConnectorSection() {
       toast.error(`${e}`);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleCopyToken = async () => {
-    if (status?.token) {
-      await navigator.clipboard.writeText(status.token);
-      toast.success("Token copied to clipboard");
-    }
-  };
-
-  const handleRegenerate = async () => {
-    try {
-      await regenerateConnectorToken();
-      await refreshStatus();
-      toast.success("Token regenerated");
-    } catch (e) {
-      toast.error(`${e}`);
     }
   };
 
@@ -114,28 +94,6 @@ export function ConnectorSection() {
         </div>
         <p className="text-xs text-muted-foreground">
           Change requires restarting the server
-        </p>
-      </div>
-
-      {/* Auth Token */}
-      <div className="space-y-2">
-        <Label>Auth Token</Label>
-        <div className="flex items-center gap-2">
-          <Input
-            type="text"
-            value={status?.token ?? ""}
-            readOnly
-            className="font-mono text-xs"
-          />
-          <Button variant="outline" size="icon" onClick={handleCopyToken} title="Copy token">
-            <Copy className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="icon" onClick={handleRegenerate} title="Regenerate token">
-            <RefreshCw className="h-4 w-4" />
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Enter this token in the Wren Connector extension settings
         </p>
       </div>
     </div>

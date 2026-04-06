@@ -7,6 +7,7 @@ import {
   Pencil,
   Trash2,
   Check,
+  Archive,
 } from 'lucide-react';
 import {
   ContextMenu,
@@ -30,6 +31,7 @@ import {
   exportToBibtex,
   exportToCslJson,
   exportToBiblatexWithFiles,
+  exportEntriesArchive,
   type ExportOptions,
 } from '@/services/tauri';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -49,6 +51,7 @@ interface TagItemProps {
   onExportCslJson: (id: number, name: string) => void;
   onExportBibtex: (id: number, name: string) => void;
   onExportBiblatex: (id: number, name: string) => void;
+  onExportArchive: (id: number, name: string) => void;
 }
 
 export function TagItem({
@@ -62,6 +65,7 @@ export function TagItem({
   onExportCslJson,
   onExportBibtex,
   onExportBiblatex,
+  onExportArchive,
 }: TagItemProps) {
   return (
     <DroppableTag
@@ -126,6 +130,10 @@ export function TagItem({
               <ContextMenuItem onClick={() => onExportBiblatex(tag.id, tag.name)}>
                 <FolderOpen className='h-4 w-4 mr-2' />
                 BibLaTeX with Files...
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => onExportArchive(tag.id, tag.name)}>
+                <Archive className='h-4 w-4 mr-2' />
+                Wren Archive...
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
@@ -306,6 +314,25 @@ export function useTagActions() {
     }
   };
 
+  const handleExportTagArchive = async (tagId: number, tagName: string) => {
+    try {
+      const tagEntries = await getEntries({ tagIds: [tagId] });
+      const entryIds = tagEntries.map((e) => e.id);
+      if (entryIds.length === 0) { toast.warning('No entries with this tag'); return; }
+      const filePath = await save({
+        defaultPath: `${tagName}.wrenitem`,
+        filters: [{ name: 'Wren Archive', extensions: ['wrenitem'] }],
+      });
+      if (filePath) {
+        const result = await exportEntriesArchive(entryIds, filePath);
+        toast.success(`Exported tag "${tagName}" (${result.entriesExported} entries, ${result.filesExported} files)`);
+      }
+    } catch (err) {
+      console.error('Failed to export tag archive:', err);
+      toast.error('Failed to export tag archive');
+    }
+  };
+
   return {
     renameTag,
     setRenameTag,
@@ -321,6 +348,7 @@ export function useTagActions() {
     handleExportTagCslJson,
     handleExportTagBibtex,
     openBiblatexExportDialog,
+    handleExportTagArchive,
     showExportDialog,
     setShowExportDialog,
     exportContext,

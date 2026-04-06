@@ -10,6 +10,11 @@ import {
   importBibtex,
   importCslJson,
   getEntries,
+  exportEntriesArchive,
+  exportCollectionArchive,
+  exportLibraryArchive,
+  importEntriesArchive,
+  importLibraryArchive,
   type BiblatexPreviewResult,
 } from "@/services/tauri";
 import { toast } from "@/stores/toastStore";
@@ -201,6 +206,99 @@ export function createImportExportActions(deps: ImportExportDeps) {
     setShowExportDialog(true);
   };
 
+  // ── Native archive (.wren / .wrenitem) ───────────────
+
+  const handleExportSelectedAsArchive = async () => {
+    if (selectedEntryIds.length === 0) { toast.warning("No entries selected"); return; }
+    setCommandPaletteOpen(false);
+    try {
+      const filePath = await save({ filters: [{ name: "Wren Archive", extensions: ["wrenitem"] }], defaultPath: "export.wrenitem" });
+      if (filePath) {
+        const result = await exportEntriesArchive(selectedEntryIds, filePath);
+        toast.success(`Exported ${result.entriesExported} entries (${result.filesExported} files)`);
+      }
+    } catch (err) { console.error("Archive export error:", err); toast.error("Failed to export archive"); }
+  };
+
+  const handleExportCollectionAsArchive = async (collectionId: number, collectionName: string) => {
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+    try {
+      const filePath = await save({ filters: [{ name: "Wren Archive", extensions: ["wrenitem"] }], defaultPath: `${collectionName}.wrenitem` });
+      if (filePath) {
+        const result = await exportCollectionArchive(collectionId, filePath);
+        toast.success(`Exported collection "${collectionName}" (${result.entriesExported} entries, ${result.filesExported} files)`);
+      }
+    } catch (err) { console.error("Archive export error:", err); toast.error("Failed to export collection archive"); }
+  };
+
+  const handleExportTagAsArchive = async (tagId: number, tagName: string) => {
+    setCommandPaletteOpen(false);
+    setSubMenu(null);
+    try {
+      const tagEntries = await getEntries({ tagIds: [tagId] });
+      const entryIds = tagEntries.map((e) => e.id);
+      if (entryIds.length === 0) { toast.warning("No entries with this tag"); return; }
+      const filePath = await save({ filters: [{ name: "Wren Archive", extensions: ["wrenitem"] }], defaultPath: `${tagName}.wrenitem` });
+      if (filePath) {
+        const result = await exportEntriesArchive(entryIds, filePath);
+        toast.success(`Exported tag "${tagName}" (${result.entriesExported} entries, ${result.filesExported} files)`);
+      }
+    } catch (err) { console.error("Archive export error:", err); toast.error("Failed to export tag archive"); }
+  };
+
+  const handleExportLibraryAsArchive = async () => {
+    setCommandPaletteOpen(false);
+    try {
+      const filePath = await save({ filters: [{ name: "Wren Library Backup", extensions: ["wren"] }], defaultPath: "library-backup.wren" });
+      if (filePath) {
+        const loadingId = toast.loading("Exporting library backup...");
+        try {
+          const result = await exportLibraryArchive(filePath);
+          toast.dismiss(loadingId);
+          toast.success(`Library backup exported (${result.entriesExported} entries, ${result.filesExported} files)`);
+        } catch (err) {
+          toast.dismiss(loadingId);
+          throw err;
+        }
+      }
+    } catch (err) { console.error("Library backup error:", err); toast.error("Failed to export library backup"); }
+  };
+
+  const handleImportArchive = async () => {
+    setCommandPaletteOpen(false);
+    searchState.setSearch("");
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Wren Archive", extensions: ["wrenitem", "wren"] }],
+      });
+      if (selected && typeof selected === "string") {
+        const isLibrary = selected.endsWith(".wren");
+        const loadingId = toast.loading("Importing archive...");
+        try {
+          const result = isLibrary
+            ? await importLibraryArchive(selected, "merge")
+            : await importEntriesArchive(selected);
+          toast.dismiss(loadingId);
+          if (result.entriesImported > 0) {
+            toast.success(`Imported ${result.entriesImported} entries (${result.filesImported} files)`);
+            invalidateAttachments();
+            await refreshLibrary();
+          } else {
+            toast.info("No new entries to import");
+          }
+          if (result.errors.length > 0) {
+            console.error("Archive import errors:", result.errors);
+          }
+        } catch (err) {
+          toast.dismiss(loadingId);
+          throw err;
+        }
+      }
+    } catch (err) { console.error("Archive import error:", err); toast.error("Failed to import archive"); }
+  };
+
   return {
     handleImportPdf, handleImportFolder, handleImportBibtex,
     handleImportCslJson, handleImportBiblatexWithFiles,
@@ -210,5 +308,7 @@ export function createImportExportActions(deps: ImportExportDeps) {
     handleExportCollection, handleExportTag,
     handleExportCollectionWithFiles, handleExportTagWithFiles,
     openExportDialog,
+    handleExportSelectedAsArchive, handleExportCollectionAsArchive,
+    handleExportTagAsArchive, handleExportLibraryAsArchive, handleImportArchive,
   };
 }

@@ -66,6 +66,11 @@ export interface CommandHandlers {
   handleExportTag: (tagId: number, name: string, format: "bibtex" | "csl") => void;
   handleExportCollectionWithFiles: (collectionId: number, name: string) => void;
   handleExportTagWithFiles: (tagId: number, name: string) => void;
+  handleExportSelectedAsArchive: () => void;
+  handleExportCollectionAsArchive: (collectionId: number, name: string) => void;
+  handleExportTagAsArchive: (tagId: number, name: string) => void;
+  handleExportLibraryAsArchive: () => void;
+  handleImportArchive: () => void;
   handleRenameCollection: (collectionId: number) => void;
   handleDeleteCollection: (collectionId: number, name: string) => void;
   handleRenameTag: (tagId: number) => void;

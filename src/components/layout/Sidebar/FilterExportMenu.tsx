@@ -3,6 +3,7 @@ import {
   FileJson,
   FileCode,
   Copy,
+  Archive,
 } from 'lucide-react';
 import {
   ContextMenu,
@@ -18,10 +19,12 @@ import {
   getEntries,
   exportToBibtex,
   exportToCslJson,
+  exportEntriesArchive,
 } from '@/services/tauri';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { toast } from '@/stores/toastStore';
 
 async function fetchFilteredEntryIds(filterType: string): Promise<number[]> {
   const entries = await getEntries({ filterType });
@@ -96,6 +99,27 @@ async function handleCopyFilteredBibtex(filterType: string) {
   }
 }
 
+async function handleExportFilteredArchive(filterType: string, fileName: string) {
+  try {
+    const entryIds = await fetchFilteredEntryIds(filterType);
+    if (entryIds.length === 0) {
+      toast.warning('No entries to export');
+      return;
+    }
+    const filePath = await save({
+      defaultPath: `${fileName}.wrenitem`,
+      filters: [{ name: 'Wren Archive', extensions: ['wrenitem'] }],
+    });
+    if (filePath) {
+      const result = await exportEntriesArchive(entryIds, filePath);
+      toast.success(`Exported ${result.entriesExported} entries (${result.filesExported} files)`);
+    }
+  } catch (err) {
+    console.error('Failed to export as archive:', err);
+    toast.error('Failed to export archive');
+  }
+}
+
 interface FilterItemWithExportMenuProps {
   filterType: string;
   fileName: string;
@@ -134,6 +158,12 @@ export function FilterItemWithExportMenu({
             >
               <FileCode className='h-4 w-4 mr-2' />
               BibTeX...
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => handleExportFilteredArchive(filterType, fileName)}
+            >
+              <Archive className='h-4 w-4 mr-2' />
+              Wren Archive...
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => handleCopyFilteredCslJson(filterType)}>

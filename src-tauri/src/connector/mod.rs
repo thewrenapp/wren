@@ -15,7 +15,6 @@ use crate::search::SearchIndex;
 
 /// Shared state for the connector HTTP server
 pub struct ConnectorState {
-    pub token: String,
     pub db: SqlitePool,
     pub library_path: Arc<RwLock<PathBuf>>,
     pub search_index: Arc<SearchIndex>,
@@ -36,7 +35,6 @@ impl ConnectorServer {
     /// Start the connector server on the given port
     pub async fn start(
         port: u16,
-        token: String,
         db: SqlitePool,
         library_path: Arc<RwLock<PathBuf>>,
         search_index: Arc<SearchIndex>,
@@ -46,7 +44,6 @@ impl ConnectorServer {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let state = Arc::new(ConnectorState {
-            token,
             db,
             library_path,
             search_index,
