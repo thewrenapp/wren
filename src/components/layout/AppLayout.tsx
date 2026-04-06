@@ -148,10 +148,12 @@ export function AppLayout() {
       'connector:item-saved',
       (event) => {
         const { title } = event.payload;
-        const shortTitle = title.length > 50 ? title.slice(0, 47) + '...' : title;
+        const label = title ?? 'item';
+        const shortTitle = label.length > 50 ? label.slice(0, 47) + '...' : label;
         toast.success(`Saved from browser: ${shortTitle}`);
-        // Refresh the full library (entry list, sidebar counts, detail panel)
+        // Refresh the full library (entry list, sidebar counts, detail panel, attachment rows)
         useLibraryStore.getState().invalidateEntry();
+        useLibraryStore.getState().invalidateAttachments();
         useLibraryStore.getState().refreshLibrary();
       }
     );

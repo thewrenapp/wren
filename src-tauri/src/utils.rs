@@ -12,13 +12,21 @@ pub fn to_relative_path(library_root: &Path, absolute_path: &Path) -> String {
 
 /// Resolve a potentially relative path against the library root.
 /// If already absolute, returns as-is. Used when reading paths from DB for the frontend.
+/// Resolves symlinks so the frontend gets canonical paths that match Tauri's FS scope.
 pub fn resolve_path(library_root: &Path, stored_path: &str) -> String {
     let path = Path::new(stored_path);
-    if path.is_absolute() {
-        stored_path.to_string()
+    let joined = if path.is_absolute() {
+        PathBuf::from(stored_path)
     } else {
-        library_root.join(stored_path).to_string_lossy().to_string()
-    }
+        library_root.join(stored_path)
+    };
+    // Canonicalize to resolve symlinks (e.g. ~/.wren/library -> iCloud)
+    // Fall back to the joined path if canonicalize fails (file doesn't exist yet)
+    joined
+        .canonicalize()
+        .unwrap_or(joined)
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Validates that a path is safely within the library directory.

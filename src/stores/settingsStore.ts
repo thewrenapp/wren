@@ -43,6 +43,7 @@ interface SettingsState {
 
   // RAG (Document Search)
   ragAutoIndex: boolean;
+  rerankerModel: string;
 
   // Code Editor
   showCodeLineNumbers: boolean;
@@ -70,6 +71,7 @@ interface SettingsState {
   setLlmTokenBudget: (budget: number) => void;
   setLlmContextWindow: (size: number) => void;
   setRagAutoIndex: (enabled: boolean) => void;
+  setRerankerModel: (model: string) => void;
   setShowWelcomeOnStartup: (show: boolean) => void;
   loadFromBackend: () => Promise<void>;
 }
@@ -105,6 +107,7 @@ export const useSettingsStore = create<SettingsState>()(
       llmTokenBudget: 200000,
       llmContextWindow: 0,
       ragAutoIndex: true,
+      rerankerModel: "",
       showCodeLineNumbers: false,
       showWelcomeOnStartup: true,
 
@@ -286,6 +289,18 @@ export const useSettingsStore = create<SettingsState>()(
           toast.error("Failed to update setting");
         }
       },
+      setRerankerModel: async (model) => {
+        const prev = get().rerankerModel;
+        set({ rerankerModel: model });
+        try {
+          await updateSetting("reranker_provider", model ? "omlx" : "");
+          await updateSetting("reranker_model", model);
+        } catch (err) {
+          console.error("Failed to update reranker_model setting:", err);
+          set({ rerankerModel: prev });
+          toast.error("Failed to update setting");
+        }
+      },
       setShowWelcomeOnStartup: (show) => set({ showWelcomeOnStartup: show }),
       loadFromBackend: async () => {
         try {
@@ -351,8 +366,8 @@ export const useSettingsStore = create<SettingsState>()(
           if (aiAutoMeta !== undefined) set({ aiAutoMetadata: aiAutoMeta === "true" });
           const ragAutoIndex = settingsMap.get("rag_auto_index");
           if (ragAutoIndex !== undefined) set({ ragAutoIndex: ragAutoIndex !== "false" });
-
-          // RAG advanced settings
+          const rerankerModel = settingsMap.get("reranker_model");
+          if (rerankerModel !== undefined) set({ rerankerModel });
         } catch (err) {
           console.error("Failed to load settings from backend:", err);
         }

@@ -55,9 +55,11 @@ pub fn run() {
             // Build native menu with standard macOS menus
 
             // App menu (Wren)
+            let icon = tauri::image::Image::from_path("icons/128x128@2x.png").ok();
             let about_metadata = AboutMetadataBuilder::new()
                 .name(Some("Wren"))
                 .version(Some("0.1.0"))
+                .icon(icon)
                 .build();
 
             let settings_item = MenuItemBuilder::with_id("settings", "Settings...")
@@ -223,6 +225,7 @@ pub fn run() {
             commands::entries::add_file_attachment,
             commands::entries::duplicate_entry,
             commands::entries::repair_entry_attachments,
+            commands::entries::read_library_text_file,
             // Batch operations
             commands::entries::bulk_move_to_trash,
             commands::entries::bulk_restore_from_trash,

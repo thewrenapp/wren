@@ -312,7 +312,7 @@ pub async fn add_item_note(
     // Notify the UI
     let _ = state.app_handle.emit(
         "connector:item-saved",
-        serde_json::json!({ "id": entry_id, "key": key }),
+        serde_json::json!({ "id": entry_id, "key": key, "title": title }),
     );
 
     let abs_path = crate::utils::resolve_path(&library_path, &rel_path);

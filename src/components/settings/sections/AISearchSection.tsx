@@ -117,6 +117,8 @@ export function AISearchSection() {
     setLlmContextWindow,
     ragAutoIndex,
     setRagAutoIndex,
+    rerankerModel,
+    setRerankerModel,
   } = useSettingsStore();
 
   const hasActiveReindex = useJobStore((s) =>
@@ -621,13 +623,8 @@ export function AISearchSection() {
           </p>
           {llmProvider === "omlx" ? (
             <select
-              defaultValue=""
-              onChange={async (e) => {
-                const model = e.target.value;
-                const { updateSetting } = await import("@/services/tauri/commands");
-                await updateSetting("reranker_provider", model ? "omlx" : "");
-                await updateSetting("reranker_model", model);
-              }}
+              value={rerankerModel}
+              onChange={(e) => setRerankerModel(e.target.value)}
               className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
             >
               <option value="">None (vector similarity only)</option>

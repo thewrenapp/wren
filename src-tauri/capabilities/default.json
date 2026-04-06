@@ -28,6 +28,7 @@
     {
       "identifier": "fs:scope",
       "allow": [
+        "$HOME/.wren/**",
         "$HOME/Wren/**",
         "$DOCUMENT/**",
         "$DOWNLOAD/**",

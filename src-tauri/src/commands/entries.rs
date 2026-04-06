@@ -3776,6 +3776,21 @@ pub async fn open_file_with_default_app(file_path: String) -> Result<(), String>
     Ok(())
 }
 
+/// Read a text file from the library directory.
+/// Bypasses Tauri FS scope — the path is validated against the library root instead,
+/// so symlinked library directories (e.g. iCloud, Dropbox) work regardless of scope config.
+#[tauri::command]
+pub async fn read_library_text_file(state: State<'_, AppState>, file_path: String) -> Result<String, String> {
+    let library_path = state.library_path.read().await;
+    let path = std::path::Path::new(&file_path);
+
+    // Validate the path is within the library
+    crate::utils::validate_library_path(&library_path, path)?;
+
+    std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read file: {}", e))
+}
+
 // =====================================================
 // HELPER FUNCTIONS
 // =====================================================

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -126,7 +125,7 @@ export function HTMLViewer({ filePath, attachmentId, title, infoPaneOpen: infoPa
 
     async function loadFile() {
       try {
-        const content = await readTextFile(filePath);
+        const content = await invoke<string>("read_library_text_file", { filePath });
 
         // Inject a <base> tag so relative resources (images, CSS) resolve
         // through the Tauri asset protocol to the file's original directory.
@@ -221,7 +220,7 @@ export function HTMLViewer({ filePath, attachmentId, title, infoPaneOpen: infoPa
     setHtmlContent(null);
 
     try {
-      const content = await readTextFile(filePath);
+      const content = await invoke<string>("read_library_text_file", { filePath });
       const dirPath = filePath.substring(0, filePath.lastIndexOf("/"));
       const baseUrl = convertFileSrc(dirPath) + "/";
       const baseTag = `<base href="${baseUrl}">`;

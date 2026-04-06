@@ -8,10 +8,10 @@ export function AppLogo({ size = 40, className = "" }: AppLogoProps) {
     <svg
       width={size}
       height={size}
-      viewBox="0 0 1024 1024"
+      viewBox="100 100 824 824"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className={className}
+      className={`rounded-xl ${className}`}
     >
       {/* macOS squircle background */}
       <rect
