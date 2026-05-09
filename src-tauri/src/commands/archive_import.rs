@@ -177,20 +177,21 @@ pub async fn import_entries_archive(
                     ));
                 }
 
-                // Extract attachment files for this entry
-                let att_prefix = format!("entries/{}/attachments/", key);
-                let att_dir = entry_dir.join("attachments");
+                // Extract attachment files for this entry. They live directly in
+                // the entry folder (library/entries/{key}/<file>), matching the
+                // app's on-disk layout.
+                let att_prefix = format!("entries/{}/", key);
 
                 for (att_path, att_data) in &attachment_files {
                     if let Some(rel_name) = att_path.strip_prefix(&att_prefix) {
-                        if let Err(e) = std::fs::create_dir_all(&att_dir) {
-                            result.errors.push(format!(
-                                "Failed to create attachments dir: {}",
-                                e
-                            ));
+                        // entry.json is handled separately; never overwrite it.
+                        if rel_name == "entry.json" {
                             continue;
                         }
-                        let dest = att_dir.join(rel_name);
+                        let dest = entry_dir.join(rel_name);
+                        if let Some(parent) = dest.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
                         if let Err(e) = std::fs::write(&dest, att_data) {
                             result.errors.push(format!(
                                 "Failed to write attachment {}: {}",

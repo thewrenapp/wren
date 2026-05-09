@@ -58,15 +58,13 @@ async fn write_entries_to_tar(
             .append_data(&mut header, &archive_path, json_data)
             .map_err(|e| format!("Failed to write entry.json to archive: {}", e))?;
 
-        // Copy attachment files from library/entries/{key}/attachments/
-        let attachments_dir = library_path
-            .join("library")
-            .join("entries")
-            .join(key)
-            .join("attachments");
+        // Copy the entry's attachment files. They live directly in the entry
+        // folder (library/entries/{key}/<file>), alongside entry.json and any
+        // extracted-text sidecars — entry.json is written from the DB above.
+        let entry_dir = library_path.join("library").join("entries").join(key);
 
-        if attachments_dir.exists()
-            && let Ok(read_dir) = std::fs::read_dir(&attachments_dir)
+        if entry_dir.exists()
+            && let Ok(read_dir) = std::fs::read_dir(&entry_dir)
         {
             for dir_entry in read_dir.flatten() {
                 let file_path = dir_entry.path();
@@ -77,6 +75,10 @@ async fn write_entries_to_tar(
                     Some(n) => n.to_string(),
                     None => continue,
                 };
+                // Skip entry.json (written from the DB above) and hidden files.
+                if file_name == "entry.json" || file_name.starts_with('.') {
+                    continue;
+                }
 
                 let mut file = File::open(&file_path).map_err(|e| {
                     format!("Failed to open attachment {}: {}", file_name, e)
@@ -90,8 +92,7 @@ async fn write_entries_to_tar(
                 header.set_size(contents.len() as u64);
                 header.set_mode(0o644);
                 header.set_cksum();
-                let att_archive_path =
-                    format!("entries/{}/attachments/{}", key, file_name);
+                let att_archive_path = format!("entries/{}/{}", key, file_name);
                 builder
                     .append_data(&mut header, &att_archive_path, contents.as_slice())
                     .map_err(|e| {
