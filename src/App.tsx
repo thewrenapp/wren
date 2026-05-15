@@ -3,8 +3,6 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { PDFPrintView } from "@/components/pdf/PDFPrintView";
 import { Toaster } from "@/components/ui/Toaster";
 import { DeleteConfirmationDialog } from "@/components/dialogs/DeleteConfirmationDialog";
-import { ClaimRelationsDialog } from "@/components/dialogs/ClaimRelationsDialog";
-import { ShareDialog } from "@/components/dialogs/ShareDialog";
 import { AdvancedSearchDialog } from "@/components/search/AdvancedSearchDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { listen } from "@tauri-apps/api/event";
@@ -179,9 +177,7 @@ function AppShell() {
       <AppLayout />
       <Toaster />
       <DeleteConfirmationDialog />
-      <ClaimRelationsDialog />
       <AdvancedSearchDialog />
-      <ShareDialog />
     </>
   );
 }

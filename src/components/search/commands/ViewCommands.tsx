@@ -112,41 +112,22 @@ export function ViewCommands({
         </div>
       </Command.Item>
       <Command.Item
-        value="build RAG index index entities claims"
+        value="build semantic index rag embeddings"
         onSelect={async () => {
           setCommandPaletteOpen(false);
           try {
             await uiActions.ragIndexAll();
-            toast.info("RAG index build started in background");
+            toast.info("Semantic index build started in background");
           } catch (err) {
-            toast.error(`Failed to start graph build: ${err}`);
+            toast.error(`Failed to start index build: ${err}`);
           }
         }}
         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
       >
         <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10"><Sparkles className="h-4 w-4 text-primary" /></div>
         <div className="flex-1">
-          <span className="block text-sm font-medium">Build Knowledge Graph</span>
-          <span className="text-xs text-muted-foreground">Extract entities and claims from all parsed documents</span>
-        </div>
-      </Command.Item>
-      <Command.Item
-        value="find related papers auto relate connections"
-        onSelect={async () => {
-          setCommandPaletteOpen(false);
-          try {
-            await uiActions.ragIndexAll();
-            toast.info("Finding related papers in background");
-          } catch (err) {
-            toast.error(`Failed to start auto-relate: ${err}`);
-          }
-        }}
-        className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
-      >
-        <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary/10"><Sparkles className="h-4 w-4 text-primary" /></div>
-        <div className="flex-1">
-          <span className="block text-sm font-medium">Find Related Papers</span>
-          <span className="text-xs text-muted-foreground">Discover connections between papers via shared concepts</span>
+          <span className="block text-sm font-medium">Build Semantic Index</span>
+          <span className="text-xs text-muted-foreground">Index all documents for semantic search</span>
         </div>
       </Command.Item>
       <Command.Item
@@ -159,15 +140,15 @@ export function ViewCommands({
             await uiActions.ragRebuild();
             toast.info("RAG index cleared — rebuilding in background");
           } catch (err) {
-            toast.error(`Failed to rebuild graph: ${err}`);
+            toast.error(`Failed to rebuild index: ${err}`);
           }
         }}
         className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors aria-selected:bg-accent/50 hover:bg-accent/30"
       >
         <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-destructive/10"><RotateCcw className="h-4 w-4 text-destructive" /></div>
         <div className="flex-1">
-          <span className="block text-sm font-medium">Rebuild Knowledge Graph</span>
-          <span className="text-xs text-muted-foreground">Clear all graph data and re-extract from scratch</span>
+          <span className="block text-sm font-medium">Rebuild Semantic Index</span>
+          <span className="text-xs text-muted-foreground">Clear all vectors and rebuild from scratch</span>
         </div>
       </Command.Item>
     </Command.Group>

@@ -102,9 +102,9 @@ export function useSearchEffects(state: SearchState) {
         console.error("Search error:", err);
         const errMsg = String(err);
         if (searchMode === "semantic") {
-          if (errMsg.includes("dimension") || errMsg.includes("vector")) setSearchError("Embedding model mismatch — rebuild the Knowledge Graph in Settings.");
-          else if (errMsg.includes("fastembed") || errMsg.includes("onnx")) setSearchError("Embedding model failed to load. Try a different model in Settings > Semantic Search.");
-          else setSearchError("Concept search failed. Check your embedding configuration in Settings.");
+          if (errMsg.includes("dimension") || errMsg.includes("vector")) setSearchError("Embedding model mismatch — rebuild the Semantic Index in Settings.");
+          else if (errMsg.includes("fastembed") || errMsg.includes("onnx")) setSearchError("Embedding model failed to load. Try a different model in Settings → AI & Search.");
+          else setSearchError("Semantic search failed. Check your embedding configuration in Settings.");
         } else if (searchMode === "full") { setSearchError("Full-text search failed. Try rebuilding the search index in Settings."); }
         else { setSearchError(`Search failed: ${errMsg.slice(0, 120)}`); }
         setSearchResults([]); setFullSearchResults([]); setSemanticResults([]);

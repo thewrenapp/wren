@@ -145,9 +145,9 @@ export function AISearchSection() {
   }, [llmProvider, llmApiKey, testResult]);
 
   // RAG index status
-  const [ragStat, setGraphStat] = useState<RagStatus | null>(null);
+  const [ragStat, setRagStat] = useState<RagStatus | null>(null);
 
-  const hasActiveGraphJob = useJobStore((s) =>
+  const hasActiveRagJob = useJobStore((s) =>
     s.jobs.some(
       (j) =>
         (j.jobType === "rag_index_all" || j.jobType === "rag_index") &&
@@ -158,7 +158,7 @@ export function AISearchSection() {
   const loadRagStatus = useCallback(async () => {
     try {
       const status = await ragStatus();
-      setGraphStat(status);
+      setRagStat(status);
     } catch (err) {
       console.error("Failed to load RAG status:", err);
     }
@@ -170,12 +170,12 @@ export function AISearchSection() {
 
   // Refresh RAG status when RAG jobs finish
   useEffect(() => {
-    if (!hasActiveGraphJob) {
+    if (!hasActiveRagJob) {
       loadRagStatus();
     }
-  }, [hasActiveGraphJob, loadRagStatus]);
+  }, [hasActiveRagJob, loadRagStatus]);
 
-  const handleBuildGraph = async () => {
+  const handleBuildSemanticIndex = async () => {
     try {
       await ragIndexAll();
       toast.info("RAG index build started in background");
@@ -184,7 +184,7 @@ export function AISearchSection() {
     }
   };
 
-  const handleRebuildGraph = async () => {
+  const handleRebuildSemanticIndex = async () => {
     if (!window.confirm(
       "This will delete all existing RAG index data (chunks, vectors) and rebuild from scratch.\n\nThis is needed when the embedding model changes. Continue?"
     )) return;
@@ -265,7 +265,7 @@ export function AISearchSection() {
 
   const triggerEmbeddingRebuild = async () => {
     const rebuild = window.confirm(
-      "The embedding model has changed. Vectors need to be regenerated for semantic search to work.\n\nThis will NOT re-run LLM extraction — your entities and claims are safe.\n\nRe-embed now?"
+      "The embedding model has changed. Vectors need to be regenerated for semantic search to work.\n\nThis will NOT re-run AI document parsing — your parsed documents are safe.\n\nRe-embed now?"
     );
     if (rebuild) {
       try {
@@ -281,9 +281,9 @@ export function AISearchSection() {
   };
 
   const handleCloudEmbeddingModelChange = (newModel: string) => {
-    const hasExistingGraph = ragStat && ragStat.totalChunks > 0;
+    const hasExistingIndex = ragStat && ragStat.totalChunks > 0;
     setCloudEmbeddingModel(newModel);
-    if (hasExistingGraph) {
+    if (hasExistingIndex) {
       triggerEmbeddingRebuild();
     }
   };
@@ -296,7 +296,7 @@ export function AISearchSection() {
           AI Provider
         </h3>
         <p className="text-xs text-muted-foreground">
-          Configure your LLM provider. Used for document parsing, RAG generation, and embeddings.
+          Configure your LLM provider. Used for AI metadata extraction, document parsing, and embeddings.
         </p>
 
         <div className="space-y-4">
@@ -559,7 +559,7 @@ export function AISearchSection() {
           Documents & RAG
         </h3>
         <p className="text-xs text-muted-foreground">
-          Configure embedding, retrieval strategies, reranking, and hierarchical indexing for document search.
+          Configure embeddings and optional reranking for semantic document search.
         </p>
 
         {!isConfigured && (
@@ -659,12 +659,12 @@ export function AISearchSection() {
         )}
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleBuildGraph} disabled={hasActiveGraphJob}>
-            {hasActiveGraphJob && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+          <Button variant="outline" size="sm" onClick={handleBuildSemanticIndex} disabled={hasActiveRagJob}>
+            {hasActiveRagJob && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
             Build Semantic Index
           </Button>
           {ragStat && ragStat.entriesIndexed > 0 && (
-            <Button variant="outline" size="sm" onClick={handleRebuildGraph} disabled={hasActiveGraphJob}
+            <Button variant="outline" size="sm" onClick={handleRebuildSemanticIndex} disabled={hasActiveRagJob}
               className="text-destructive hover:text-destructive">
               Rebuild Semantic Index
             </Button>
@@ -689,7 +689,7 @@ export function AISearchSection() {
           Document Extraction
         </h3>
         <p className="text-xs text-muted-foreground">
-          PDFs are parsed with ferrules (deep learning layout analysis + automatic OCR + table detection).
+          PDFs are parsed with deep-learning layout analysis, automatic OCR, and table detection.
           OCR runs automatically when scanned pages are detected. Other formats (EPUB, HTML, DOCX) use format-specific parsers.
         </p>
       </section>
@@ -701,18 +701,6 @@ export function AISearchSection() {
         </h3>
 
         <div className="space-y-3">
-          <label className="flex items-center gap-3 cursor-pointer">
-            <Checkbox defaultChecked />
-            <span className="text-sm">Automatically index new items</span>
-          </label>
-
-          <label className="flex items-center gap-3 cursor-pointer">
-            <Checkbox defaultChecked />
-            <span className="text-sm">Index document content for full-text search</span>
-          </label>
-        </div>
-
-        <div className="pt-2 space-y-3">
           <div className="flex items-center gap-3">
             <Button
               variant="outline"
@@ -733,7 +721,7 @@ export function AISearchSection() {
           </div>
           {!hasActiveReindex && (
             <p className="text-xs text-muted-foreground">
-              Re-runs text extraction (ferrules) on all documents, rebuilds full-text search,
+              Re-runs text extraction on all documents, rebuilds full-text search,
               and rebuilds semantic index. Use when documents or extraction settings change.
             </p>
           )}
