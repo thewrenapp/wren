@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
-use ferrules_core::blocks::{BlockType, TableBlock};
-use ferrules_core::{FerrulesParseConfig, FerrulesParser};
+use crate::docparse::blocks::{BlockType, TableBlock};
+use crate::docparse::config::DocParseConfig;
+use crate::docparse::DocParser;
 use serde::{Deserialize, Serialize};
 
 /// Supported document types for parsing.
@@ -94,16 +95,16 @@ pub struct ParsedDocument {
     pub metadata: serde_json::Value,
 }
 
-/// Parse a document from bytes, dispatching PDFs to async ferrules and
-/// wrapping sync parsers in spawn_blocking.
+/// Parse a document from bytes, dispatching PDFs to the async docparse pipeline
+/// and wrapping sync parsers in spawn_blocking.
 pub async fn parse_document(
     data: &[u8],
     filename: &str,
     doc_type: DocumentType,
-    pdf_parser: &FerrulesParser,
+    pdf_parser: &DocParser,
 ) -> Result<ParsedDocument, String> {
     match doc_type {
-        DocumentType::Pdf => parse_pdf_ferrules(data, filename, pdf_parser).await,
+        DocumentType::Pdf => parse_pdf(data, filename, pdf_parser).await,
         _ => {
             let data = data.to_vec();
             let filename = filename.to_string();
@@ -121,7 +122,7 @@ fn parse_bytes_sync(
     doc_type: DocumentType,
 ) -> Result<ParsedDocument, String> {
     match doc_type {
-        DocumentType::Pdf => unreachable!("PDFs handled by async ferrules path"),
+        DocumentType::Pdf => unreachable!("PDFs handled by async docparse path"),
         DocumentType::Docx | DocumentType::Xlsx | DocumentType::Pptx => {
             parse_office_bytes(data, filename, doc_type)
         }
@@ -139,31 +140,31 @@ fn parse_bytes_sync(
     }
 }
 
-// ── PDF Parsing (ferrules-core: layout analysis + OCR + tables) ──
+// ── PDF Parsing (docparse: layout analysis + OCR + tables) ──
 
-/// Parse PDF using ferrules with deep learning layout analysis, OCR, and table detection.
-async fn parse_pdf_ferrules(
+/// Parse PDF using the docparse pipeline (layout analysis, OCR, table detection).
+async fn parse_pdf(
     data: &[u8],
     filename: &str,
-    parser: &FerrulesParser,
+    parser: &DocParser,
 ) -> Result<ParsedDocument, String> {
-    let config = FerrulesParseConfig::default();
+    let config = DocParseConfig;
 
-    let ferrules_doc = parser
+    let parsed = parser
         .parse_document(data, filename.to_string(), config, None::<fn(usize)>)
         .await
-        .map_err(|e| format!("Ferrules PDF parse error: {}", e))?;
+        .map_err(|e| format!("PDF parse error: {}", e))?;
 
     // Group blocks by page and render to markdown sections
-    let sections = convert_ferrules_to_sections(&ferrules_doc);
+    let sections = convert_blocks_to_sections(&parsed);
 
     let total_chars: usize = sections.iter().map(|s| s.content.len()).sum();
-    let total_pages = ferrules_doc.pages.len();
+    let total_pages = parsed.pages.len();
 
     let metadata = serde_json::json!({
-        "ferrules_version": ferrules_doc.metadata.ferrules_version,
-        "parsing_duration_ms": ferrules_doc.metadata.parsing_duration.as_millis() as u64,
-        "pages_needing_ocr": ferrules_doc.pages.iter().filter(|p| p.need_ocr).count(),
+        "parser_version": parsed.metadata.parser_version,
+        "parsing_duration_ms": parsed.metadata.parsing_duration.as_millis() as u64,
+        "pages_needing_ocr": parsed.pages.iter().filter(|p| p.need_ocr).count(),
     });
 
     Ok(ParsedDocument {
@@ -177,12 +178,12 @@ async fn parse_pdf_ferrules(
     })
 }
 
-/// Convert ferrules blocks into DocumentSections grouped by page.
-pub(crate) fn convert_ferrules_to_sections(
-    doc: &ferrules_core::entities::ParsedDocument,
+/// Convert docparse blocks into DocumentSections grouped by page.
+pub(crate) fn convert_blocks_to_sections(
+    doc: &crate::docparse::entities::ParsedDocument,
 ) -> Vec<DocumentSection> {
     // Group blocks by page ID
-    let mut page_blocks: BTreeMap<usize, Vec<&ferrules_core::blocks::Block>> = BTreeMap::new();
+    let mut page_blocks: BTreeMap<usize, Vec<&crate::docparse::blocks::Block>> = BTreeMap::new();
     for block in &doc.blocks {
         for &page_id in &block.pages_id {
             page_blocks.entry(page_id).or_default().push(block);
@@ -209,7 +210,7 @@ pub(crate) fn convert_ferrules_to_sections(
 
         let end = offset + page_markdown.len();
         sections.push(DocumentSection {
-            page_number: Some(page_id + 1), // ferrules is 0-indexed
+            page_number: Some(page_id + 1), // page ids are 0-indexed
             section_name,
             content: page_markdown,
             start_offset: offset,
@@ -221,8 +222,8 @@ pub(crate) fn convert_ferrules_to_sections(
     sections
 }
 
-/// Render a list of ferrules blocks to markdown text.
-fn render_blocks_to_markdown(blocks: &[&ferrules_core::blocks::Block]) -> String {
+/// Render a list of docparse blocks to markdown text.
+fn render_blocks_to_markdown(blocks: &[&crate::docparse::blocks::Block]) -> String {
     let mut parts = Vec::new();
 
     for block in blocks {
@@ -253,7 +254,7 @@ fn render_blocks_to_markdown(blocks: &[&ferrules_core::blocks::Block]) -> String
     parts.join("\n\n")
 }
 
-/// Render a ferrules TableBlock as a markdown table.
+/// Render a docparse TableBlock as a markdown table.
 fn render_table_markdown(table: &TableBlock) -> String {
     if table.rows.is_empty() {
         return String::new();

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use ferrules_core::layout::model::ORTConfig;
-use ferrules_core::FerrulesParser;
+use crate::docparse::config::OrtConfig;
+use crate::docparse::DocParser;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,8 +16,8 @@ pub struct AppState {
     pub library_path: Arc<RwLock<PathBuf>>,
     pub search_index: Arc<SearchIndex>,
     pub job_queue: Arc<JobQueue>,
-    /// Ferrules PDF parser (lazy-initialized on first PDF upload).
-    pdf_parser: Arc<OnceCell<FerrulesParser>>,
+    /// Document PDF parser (lazy-initialized on first PDF upload).
+    pdf_parser: Arc<OnceCell<DocParser>>,
     /// Connector HTTP server for browser extension
     pub connector_server: Arc<RwLock<Option<ConnectorServer>>>,
 }
@@ -101,13 +101,6 @@ impl AppState {
             app_handle.clone(),
         );
 
-        // Start share sync loop (flushes outbox + consumes incoming changes)
-        crate::sync::share_sync::start_share_sync_loop(
-            db.clone(),
-            library_path.clone(),
-            app_handle.clone(),
-        );
-
         // Start connector server if enabled
         let connector_server = Arc::new(RwLock::new(None));
         {
@@ -150,14 +143,14 @@ impl AppState {
     }
 
     /// Get or lazily initialize the PDF parser (first call loads ONNX models).
-    pub async fn get_pdf_parser(&self) -> Result<&FerrulesParser> {
+    pub async fn get_pdf_parser(&self) -> Result<&DocParser> {
         self.pdf_parser
             .get_or_try_init(|| async {
-                tracing::info!("Lazily initializing Ferrules PDF parser (ONNX + CoreML)...");
+                tracing::info!("Lazily initializing PDF parser (ONNX + CoreML)...");
                 let parser = tokio::task::spawn_blocking(|| {
-                    let ort_config = ORTConfig::default();
+                    let ort_config = OrtConfig::default();
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        FerrulesParser::new(ort_config)
+                        DocParser::new(ort_config)
                     }))
                     .map_err(|panic| {
                         let msg = if let Some(s) = panic.downcast_ref::<&str>() {
@@ -168,19 +161,19 @@ impl AppState {
                             "unknown panic during ONNX model loading".to_string()
                         };
                         anyhow::anyhow!("PDF parser init panicked: {}", msg)
-                    })
+                    })?
                 })
                 .await
                 .map_err(|e| anyhow::anyhow!("PDF parser init task failed: {}", e))??;
 
-                tracing::info!("Ferrules PDF parser initialized successfully");
+                tracing::info!("PDF parser initialized successfully");
                 Ok(parser)
             })
             .await
     }
 
     /// Get a cloneable reference to the PDF parser cell.
-    pub fn pdf_parser_ref(&self) -> Arc<OnceCell<FerrulesParser>> {
+    pub fn pdf_parser_ref(&self) -> Arc<OnceCell<DocParser>> {
         self.pdf_parser.clone()
     }
 

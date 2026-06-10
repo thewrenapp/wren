@@ -23,7 +23,7 @@ pub struct JobQueue {
     shutdown_flag: Arc<AtomicBool>,
     pub search_index: Arc<SearchIndex>,
     pub library_path: Arc<tokio::sync::RwLock<PathBuf>>,
-    pub pdf_parser: Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
+    pub pdf_parser: Arc<tokio::sync::OnceCell<crate::docparse::DocParser>>,
 }
 
 impl JobQueue {
@@ -32,7 +32,7 @@ impl JobQueue {
         app_handle: AppHandle,
         search_index: Arc<SearchIndex>,
         library_path: Arc<tokio::sync::RwLock<PathBuf>>,
-        pdf_parser: Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
+        pdf_parser: Arc<tokio::sync::OnceCell<crate::docparse::DocParser>>,
         max_concurrent: usize,
     ) -> Self {
         Self {

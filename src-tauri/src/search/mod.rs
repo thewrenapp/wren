@@ -97,7 +97,7 @@ impl SearchIndex {
         &self,
         attachment: &indexer::AttachmentData,
         config: &extractor::ExtractionConfig,
-        pdf_parser: Option<&ferrules_core::FerrulesParser>,
+        pdf_parser: Option<&crate::docparse::DocParser>,
     ) -> Result<indexer::IndexingResult> {
         let writer = self.writer.write().await;
         indexer::index_attachment_content(&writer, &self.fields, attachment, config, pdf_parser).await

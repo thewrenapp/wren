@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use super::parser::{parse_document, DocumentType, ParsedDocument};
-use ferrules_core::FerrulesParser;
+use crate::docparse::DocParser;
 
 /// Maximum text size to extract (10MB)
 pub const MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
@@ -14,7 +14,7 @@ pub const MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
 pub const MIN_MARKDOWN_CHARS: usize = 100;
 
 /// Configuration for text extraction.
-/// OCR is handled automatically by ferrules — no user-facing settings needed.
+/// OCR is handled automatically by the docparse pipeline — no user-facing settings needed.
 #[derive(Clone, Debug, Default)]
 pub struct ExtractionConfig;
 
@@ -27,15 +27,15 @@ pub struct ExtractionResult {
     pub method: ExtractionMethod,
     /// Optional message (e.g., why a method failed)
     pub message: Option<String>,
-    /// Structured parsed document (available for ferrules/parser-based extraction)
+    /// Structured parsed document (available for docparse/parser-based extraction)
     pub parsed_document: Option<ParsedDocument>,
 }
 
 /// Method used for text extraction
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExtractionMethod {
-    /// Extracted via ferrules (PDF with layout analysis, OCR, tables)
-    Ferrules,
+    /// Extracted via docparse (PDF with layout analysis, OCR, tables)
+    Docparse,
     /// Extracted via parser (HTML, EPUB, DOCX, XLSX, PPTX)
     Parser,
     /// Direct file read (markdown, text)
@@ -49,7 +49,7 @@ pub enum ExtractionMethod {
 impl ExtractionMethod {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ExtractionMethod::Ferrules => "ferrules",
+            ExtractionMethod::Docparse => "docparse",
             ExtractionMethod::Parser => "parser",
             ExtractionMethod::DirectRead => "direct",
             ExtractionMethod::Skipped => "skipped",
@@ -58,13 +58,13 @@ impl ExtractionMethod {
     }
 }
 
-/// Extract text content from a file using ferrules (PDF) or format-specific parsers.
+/// Extract text content from a file using docparse (PDF) or format-specific parsers.
 /// Safety: `path` is constructed from DB values (file_path column) that were validated
 /// at import/creation time. Callers are responsible for ensuring path integrity.
 pub async fn extract_text(
     path: &Path,
     _config: &ExtractionConfig,
-    pdf_parser: Option<&FerrulesParser>,
+    pdf_parser: Option<&DocParser>,
 ) -> Result<ExtractionResult> {
     let ext = path
         .extension()
@@ -116,7 +116,7 @@ pub async fn extract_text(
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
 
-    // For PDFs, require ferrules parser
+    // For PDFs, require the docparse parser
     if doc_type == DocumentType::Pdf {
         let parser = match pdf_parser {
             Some(p) => p,
@@ -147,7 +147,7 @@ pub async fn extract_text(
                     .join("\n\n");
 
                 info!(
-                    "Ferrules extracted {} chars ({} pages) from: {}",
+                    "Docparse extracted {} chars ({} pages) from: {}",
                     text.len(),
                     parsed.total_pages.unwrap_or(0),
                     path.display()
@@ -155,13 +155,13 @@ pub async fn extract_text(
 
                 return Ok(ExtractionResult {
                     text: truncate_text(sanitize_extracted_text(&text)),
-                    method: ExtractionMethod::Ferrules,
+                    method: ExtractionMethod::Docparse,
                     message: None,
                     parsed_document: Some(parsed),
                 });
             }
             Err(e) => {
-                warn!("Ferrules extraction failed for {}: {}", path.display(), e);
+                warn!("Docparse extraction failed for {}: {}", path.display(), e);
                 return Ok(ExtractionResult {
                     text: String::new(),
                     method: ExtractionMethod::None,
@@ -172,11 +172,8 @@ pub async fn extract_text(
         }
     }
 
-    // For non-PDF formats, use the parser (no ferrules needed)
-    // We need a dummy parser ref for the function signature, but non-PDF paths
-    // never use it. Use a stub via parse_bytes_sync path inside parse_document.
-    // Since parse_document requires a FerrulesParser ref for signature but non-PDF
-    // types don't use it, we need to handle this differently.
+    // For non-PDF formats, use the format-specific sync parsers directly.
+    // The docparse PDF parser is only needed for PDFs, so non-PDF paths bypass it.
     let result = {
         let data = data.clone();
         let filename = filename.to_string();
@@ -236,7 +233,7 @@ fn parse_non_pdf_sync(
     doc_type: DocumentType,
 ) -> Result<ParsedDocument, String> {
     match doc_type {
-        DocumentType::Pdf => unreachable!("PDFs handled by async ferrules path"),
+        DocumentType::Pdf => unreachable!("PDFs handled by async docparse path"),
         DocumentType::Docx | DocumentType::Xlsx | DocumentType::Pptx => {
             let doc = undoc::parse_bytes(data).map_err(|e| format!("Office parse error: {}", e))?;
             build_office_document(&doc, filename, doc_type)
@@ -464,7 +461,7 @@ mod tests {
 
     #[test]
     fn test_extraction_method_as_str() {
-        assert_eq!(ExtractionMethod::Ferrules.as_str(), "ferrules");
+        assert_eq!(ExtractionMethod::Docparse.as_str(), "docparse");
         assert_eq!(ExtractionMethod::Parser.as_str(), "parser");
         assert_eq!(ExtractionMethod::DirectRead.as_str(), "direct");
         assert_eq!(ExtractionMethod::Skipped.as_str(), "skipped");

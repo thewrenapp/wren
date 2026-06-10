@@ -151,7 +151,7 @@ pub struct Job {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReindexPayload {
-    // OCR settings removed — ferrules handles OCR automatically.
+    // OCR settings removed — the docparse pipeline handles OCR automatically.
     // Fields kept for backward compat with existing job payloads in DB.
     #[serde(default)]
     pub enable_ocr: bool,

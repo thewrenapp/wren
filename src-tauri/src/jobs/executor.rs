@@ -15,20 +15,20 @@ pub struct JobContext<'a> {
     pub app_handle: &'a AppHandle,
     pub search_index: &'a Arc<SearchIndex>,
     pub library_path: &'a Arc<tokio::sync::RwLock<PathBuf>>,
-    pub pdf_parser: &'a Arc<tokio::sync::OnceCell<ferrules_core::FerrulesParser>>,
+    pub pdf_parser: &'a Arc<tokio::sync::OnceCell<crate::docparse::DocParser>>,
 }
 
-/// Eagerly initialize the Ferrules PDF parser (lazy on first call, cached after).
+/// Eagerly initialize the PDF parser (lazy on first call, cached after).
 async fn ensure_pdf_parser(
-    cell: &tokio::sync::OnceCell<ferrules_core::FerrulesParser>,
-) -> Option<&ferrules_core::FerrulesParser> {
+    cell: &tokio::sync::OnceCell<crate::docparse::DocParser>,
+) -> Option<&crate::docparse::DocParser> {
     match cell
         .get_or_try_init(|| async {
-            tracing::info!("Lazily initializing Ferrules PDF parser (ONNX + CoreML)...");
+            tracing::info!("Lazily initializing PDF parser (ONNX + CoreML)...");
             let parser = tokio::task::spawn_blocking(|| {
-                let ort_config = ferrules_core::layout::model::ORTConfig::default();
+                let ort_config = crate::docparse::config::OrtConfig::default();
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    ferrules_core::FerrulesParser::new(ort_config)
+                    crate::docparse::DocParser::new(ort_config)
                 }))
                 .map_err(|panic| {
                     let msg = if let Some(s) = panic.downcast_ref::<&str>() {
@@ -39,11 +39,11 @@ async fn ensure_pdf_parser(
                         "unknown panic during ONNX model loading".to_string()
                     };
                     anyhow::anyhow!("PDF parser init panicked: {}", msg)
-                })
+                })?
             })
             .await
             .map_err(|e| anyhow::anyhow!("PDF parser init task failed: {}", e))??;
-            tracing::info!("Ferrules PDF parser initialized successfully");
+            tracing::info!("PDF parser initialized successfully");
             Ok::<_, anyhow::Error>(parser)
         })
         .await
@@ -546,7 +546,7 @@ async fn execute_ocr_extract(
     .await;
 
     // Read OCR settings from DB
-    // OCR is handled automatically by ferrules — no config needed
+    // OCR is handled automatically by the docparse pipeline — no config needed
     let config = ExtractionConfig;
 
     let attachment_data = crate::search::indexer::AttachmentData {

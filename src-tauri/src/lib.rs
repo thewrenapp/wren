@@ -1,10 +1,9 @@
 pub mod commands;
-pub mod config;
 pub mod connector;
 pub mod db;
 pub mod deep_link;
+pub mod docparse;
 pub mod filename;
-pub mod firebase;
 pub mod graph;
 pub mod jobs;
 pub mod llm;
@@ -369,21 +368,6 @@ pub fn run() {
             commands::connector::get_connector_status,
             commands::connector::start_connector_server,
             commands::connector::stop_connector_server,
-            // Auth
-            commands::auth::get_auth_state,
-            commands::auth::sign_in_email,
-            commands::auth::sign_up_email,
-            commands::auth::sign_in_google,
-            commands::auth::reset_password,
-            commands::auth::sign_out,
-            // Sharing / Sync
-            commands::sharing::get_shares,
-            commands::sharing::check_pending_shares,
-            commands::sharing::accept_share,
-            commands::sharing::decline_share,
-            commands::sharing::leave_share,
-            commands::sharing::create_share,
-            commands::sharing::search_users_by_email,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Tauri application: check tauri.conf.json and plugin setup")

@@ -1,6 +1,6 @@
 [package]
 name = "wren"
-version = "0.1.1"
+version = "0.1.0"
 description = "A reference manager for Research papers"
 authors = ["Sadanand Singh"]
 license = "MIT"
@@ -16,7 +16,6 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-cc = "1"
 
 [dependencies]
 # Tauri
@@ -42,10 +41,11 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 # PDF metadata extraction
 lopdf = "0.34"
 
-# PDF parsing (ferrules: layout analysis + OCR + table detection)
-ferrules-core = { path = "../../ferrules/ferrules-core" }
-# Pin ort-sys to match ferrules-core's ort rc.9 (rc.10 has incompatible API)
-ort-sys = "=2.0.0-rc.9"
+# PDF parsing (oar-ocr: layout analysis + OCR + table detection, Apache-2.0)
+oar-ocr = { version = "0.6", features = ["download-binaries"] }
+# PDF rasterization (pdfium-render, BSD; dynamic binding to bundled libpdfium.dylib)
+pdfium-render = { version = "0.8", features = ["image"] }
+image = "0.25"
 
 # Document parsing (non-PDF formats)
 html2text = "0.12"
@@ -72,17 +72,11 @@ futures = "0.3"
 notify = "7"
 notify-debouncer-mini = "0.5"
 
-# S3-compatible storage (for R2 relay)
-rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
-
-# URL encoding
-urlencoding = "2"
-
 # BibTeX/BibLaTeX parsing and writing
 biblatex = "0.11"
 
 # HTTP client (for LLM API calls)
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
 
 # HTTP server (for connector extension)
 axum = { version = "0.8", features = ["json"] }
@@ -116,3 +110,5 @@ tauri-plugin-shell = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
+# CoreML execution provider (Apple Neural Engine) for oar-ocr on macOS
+oar-ocr = { version = "0.6", features = ["coreml"] }
