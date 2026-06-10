@@ -256,6 +256,52 @@ pub async fn get_valid_id_token(db: &sqlx::SqlitePool) -> Result<(String, String
     Ok((refreshed.id_token, row.uid, row.email.unwrap_or_default()))
 }
 
+/// Ensure the current signed-in user has a Firestore profile.
+/// Called from the sync loop so existing users get backfilled.
+pub async fn ensure_user_profile(db: &sqlx::SqlitePool) {
+    let Ok((id_token, uid, email)) = get_valid_id_token(db).await else {
+        return;
+    };
+
+    let display_name: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM user_account WHERE uid = ?")
+            .bind(&uid)
+            .fetch_optional(db)
+            .await
+            .unwrap_or(None)
+            .flatten();
+
+    let firestore = crate::firebase::firestore::FirestoreClient::new(config::FIREBASE_PROJECT_ID);
+
+    // Check if profile already exists
+    if firestore
+        .get_document(&format!("users/{}", uid), &id_token)
+        .await
+        .is_ok()
+    {
+        return; // Profile already exists
+    }
+
+    let fields = serde_json::json!({
+        "email": crate::firebase::firestore::to_firestore_string(&email),
+        "displayName": crate::firebase::firestore::to_firestore_string(
+            display_name.as_deref().unwrap_or("")
+        ),
+        "createdAt": crate::firebase::firestore::to_firestore_timestamp(
+            &chrono::Utc::now().to_rfc3339()
+        ),
+    });
+
+    if let Err(e) = firestore
+        .set_document("users", &uid, &fields, &id_token)
+        .await
+    {
+        tracing::warn!("Failed to backfill user profile to Firestore: {}", e);
+    } else {
+        tracing::info!("Backfilled Firestore profile for user {}", uid);
+    }
+}
+
 /// Write user profile to Firestore (called after sign-in).
 async fn write_user_profile(_db: &sqlx::SqlitePool, user: &AuthUser) {
     let firestore = crate::firebase::firestore::FirestoreClient::new(config::FIREBASE_PROJECT_ID);

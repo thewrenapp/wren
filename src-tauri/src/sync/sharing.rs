@@ -91,12 +91,13 @@ pub async fn create_share(params: CreateShareParams<'_>) -> Result<String> {
         .await?;
 
     // 3. Batch-fetch all entry JSONs (avoids N+1 queries)
-    let mut entry_jsons: Vec<(String, super::entry_json::EntryJson)> = Vec::new();
+    let mut entry_jsons: Vec<(String, EntryJson)> = Vec::new();
     for key in entry_keys {
         if let Ok(entry_id) = get_entry_id_by_key(pool, key).await
-            && let Ok(ej) = entry_to_json(pool, entry_id).await {
-                entry_jsons.push((key.clone(), ej));
-            }
+            && let Ok(ej) = entry_to_json(pool, entry_id).await
+        {
+            entry_jsons.push((key.clone(), ej));
+        }
     }
 
     // 4. Upload entry manifests to Firestore
@@ -132,9 +133,10 @@ pub async fn create_share(params: CreateShareParams<'_>) -> Result<String> {
             if let Some(ref fname) = att.file_name {
                 let file_path = library_path.join("library").join("entries").join(key).join(fname);
                 if file_path.exists()
-                    && let Ok(data) = std::fs::read(&file_path) {
-                        files.push((fname.clone(), data));
-                    }
+                    && let Ok(data) = std::fs::read(&file_path)
+                {
+                    files.push((fname.clone(), data));
+                }
             }
         }
 
@@ -211,7 +213,6 @@ pub async fn accept_share(
         row.unwrap_or_default().to_lowercase()
     };
     let mut resolved_role: Option<String> = None;
-    // Query invitations to find our role
     let invitations_query = serde_json::json!({
         "from": [{ "collectionId": "invitations" }],
         "where": {
@@ -226,12 +227,15 @@ pub async fn accept_share(
         for inv in &inv_results {
             if let Some(doc) = inv.get("document") {
                 let name = doc.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                // Only match invitations for THIS share
                 if name.contains(&format!("shares/{}/invitations/", share_id))
                     && let Some(fields) = doc.get("fields")
-                        && let Some(r) = fields.get("role").and_then(|v| v.get("stringValue")).and_then(|v| v.as_str()) {
-                            resolved_role = Some(r.to_string());
-                        }
+                    && let Some(r) = fields
+                        .get("role")
+                        .and_then(|v| v.get("stringValue"))
+                        .and_then(|v| v.as_str())
+                {
+                    resolved_role = Some(r.to_string());
+                }
             }
         }
     }
@@ -247,7 +251,6 @@ pub async fn accept_share(
         match r2.download(&entry_json_path).await {
             Ok(data) => {
                 if let Ok(mut entry_json) = serde_json::from_slice::<EntryJson>(&data) {
-                    // Add sharing metadata with resolved role
                     entry_json.sharing = Some(super::entry_json::SharingInfo {
                         share_id: share_id.to_string(),
                         origin_user_id: owner_uid.clone(),
@@ -258,21 +261,15 @@ pub async fn accept_share(
                         detached: false,
                     });
 
-                    // Strip tombstones from incoming shared entries
                     entry_json.tombstones.clear();
 
-                    // Write entry.json to local library
                     let entry_dir = library_path.join("library").join("entries").join(key);
                     tokio::fs::create_dir_all(&entry_dir).await?;
                     entry_json.write_atomic(&entry_dir)?;
 
-                    // Download associated files (async)
                     for att in &entry_json.attachments {
                         if let Some(ref fname) = att.file_name {
-                            let relay_path = format!(
-                                "relay/{}/initial/{}/{}",
-                                share_id, key, fname
-                            );
+                            let relay_path = format!("relay/{}/initial/{}/{}", share_id, key, fname);
                             match r2.download(&relay_path).await {
                                 Ok(file_data) => {
                                     if let Err(e) = tokio::fs::write(entry_dir.join(fname), &file_data).await {
@@ -286,9 +283,7 @@ pub async fn accept_share(
                         }
                     }
 
-                    // Upsert into SQLite
-                    if let Ok(_id) = super::reader::upsert_entry_from_json(pool, &entry_json).await
-                    {
+                    if let Ok(_id) = super::reader::upsert_entry_from_json(pool, &entry_json).await {
                         imported_keys.push(key.clone());
                     }
                 }
@@ -441,7 +436,6 @@ pub async fn leave_share(
     my_uid: &str,
     share_id: &str,
 ) -> Result<()> {
-    // Update status in Firestore
     let status_update = serde_json::json!({
         "status": to_firestore_string("left"),
     });
@@ -455,9 +449,7 @@ pub async fn leave_share(
         )
         .await;
 
-    // Detach all entries locally
     detach_share(pool, share_id).await?;
-
     Ok(())
 }
 
@@ -468,7 +460,6 @@ pub async fn revoke_access(
     share_id: &str,
     target_uid: &str,
 ) -> Result<()> {
-    // Delete member from Firestore
     let _ = firestore
         .delete_document(
             &format!("shares/{}/members/{}", share_id, target_uid),
@@ -481,21 +472,17 @@ pub async fn revoke_access(
 
 /// Detach all entries from a share locally (keep files, mark as personal).
 pub async fn detach_share(pool: &SqlitePool, share_id: &str) -> Result<()> {
-    // Mark entries as detached
     sqlx::query("UPDATE entries SET is_detached = 1 WHERE share_id = ?")
         .bind(share_id)
         .execute(pool)
         .await?;
 
-    // Update local share status
     sqlx::query("UPDATE shares SET status = 'detached' WHERE share_id = ?")
         .bind(share_id)
         .execute(pool)
         .await?;
 
-    // Discard outbox entries
     outbox::discard_for_share(pool, share_id).await?;
-
     Ok(())
 }
 
@@ -533,194 +520,9 @@ pub async fn get_active_shares(pool: &SqlitePool) -> Result<Vec<ShareInfo>> {
         .collect())
 }
 
-// ── Background sync loop ────────────────────────────────────────────
-
-/// Start a background loop that:
-/// 1. Flushes outbox (push local changes to Firestore)
-/// 2. Consumes incoming changes from active shares
-///
-/// Runs every 30 seconds while signed in.
-pub fn start_share_sync_loop(
-    pool: SqlitePool,
-    library_path: std::sync::Arc<tokio::sync::RwLock<std::path::PathBuf>>,
-    app_handle: tauri::AppHandle,
-) {
-    tokio::spawn(async move {
-        let mut backoff_secs = 30u64;
-        let max_backoff = 300u64; // 5 minutes max
-
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-
-            // Check if signed in
-            let token_result =
-                crate::commands::auth::get_valid_id_token(&pool).await;
-            let (id_token, uid, _email) = match token_result {
-                Ok(t) => {
-                    backoff_secs = 30; // Reset backoff on success
-                    t
-                }
-                Err(_) => {
-                    backoff_secs = (backoff_secs * 2).min(max_backoff);
-                    continue;
-                }
-            };
-
-            let firestore = FirestoreClient::new(crate::config::FIREBASE_PROJECT_ID);
-
-            // 1. Flush outbox
-            match flush_outbox(&pool, &firestore, &id_token, &uid, "desktop").await {
-                Ok(count) if count > 0 => {
-                    tracing::debug!("Share sync: flushed {} outbox entries", count);
-                }
-                Err(e) => {
-                    tracing::warn!("Share sync: outbox flush failed: {}", e);
-                }
-                _ => {}
-            }
-
-            // 2. Consume incoming changes for active shares
-            let active = match get_active_shares(&pool).await {
-                Ok(shares) => shares,
-                Err(_) => continue,
-            };
-
-            let lib_path = library_path.read().await.clone();
-
-            for share in &active {
-                if let Err(e) = consume_share_changes(
-                    &pool, &lib_path, &firestore, &id_token, &uid, &share.share_id, &app_handle,
-                )
-                .await
-                {
-                    tracing::warn!(
-                        "Share sync: failed to consume changes for {}: {}",
-                        share.share_id, e
-                    );
-                }
-            }
-        }
-    });
-}
-
-/// Consume incoming changes for a specific share from Firestore.
-async fn consume_share_changes(
-    pool: &SqlitePool,
-    library_path: &std::path::Path,
-    firestore: &FirestoreClient,
-    id_token: &str,
-    my_uid: &str,
-    share_id: &str,
-    app_handle: &tauri::AppHandle,
-) -> Result<()> {
-    // Query changes subcollection for this share
-    let query = serde_json::json!({
-        "from": [{ "collectionId": "changes" }],
-        "orderBy": [{ "field": { "fieldPath": "createdAt" }, "direction": "ASCENDING" }],
-        "limit": 50
-    });
-
-    // Query scoped to this share's changes subcollection
-    // The Firestore REST query runs against the parent path
-    let results = firestore
-        .query(&query, id_token)
-        .await?;
-
-    let share_path_prefix = format!("shares/{}/changes/", share_id);
-
-    for result in &results {
-        if let Some(doc) = result.get("document") {
-            // Only process changes belonging to this share
-            let doc_name = doc.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            if !doc_name.contains(&share_path_prefix) {
-                continue;
-            }
-
-            let fields = doc.get("fields").cloned().unwrap_or(serde_json::Value::Null);
-
-            // Check if already consumed by us
-            if let Some(consumed) = fields.get("consumed")
-                && let Some(map) = consumed.get("mapValue").and_then(|m| m.get("fields"))
-                    && map.get(my_uid).is_some() {
-                        continue; // Already consumed
-                    }
-
-            let entry_key = fields.get("entryKey")
-                .and_then(|v| v.get("stringValue"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let change_type = fields.get("changeType")
-                .and_then(|v| v.get("stringValue"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            if entry_key.is_empty() {
-                continue;
-            }
-
-            match change_type {
-                "update" => {
-                    // The delta contains the full entry.json — merge with local
-                    if let Some(delta) = fields.get("delta")
-                        && let Some(delta_str) = delta.get("stringValue").and_then(|v| v.as_str()) {
-                            match serde_json::from_str::<super::entry_json::EntryJson>(delta_str) {
-                            Err(e) => {
-                                tracing::warn!("Failed to parse shared entry delta for {}: {}", entry_key, e);
-                            }
-                            Ok(remote_entry) => {
-                                let existing_id: Option<i64> = sqlx::query_scalar(
-                                    "SELECT id FROM entries WHERE key = ?",
-                                )
-                                .bind(entry_key)
-                                .fetch_optional(pool)
-                                .await?;
-
-                                if let Some(id) = existing_id {
-                                    let local = super::writer::entry_to_json(pool, id).await?;
-                                    let merged = super::merge::merge_entries(&local, &remote_entry);
-                                    if merged.changed {
-                                        super::reader::upsert_entry_from_json(pool, &merged.merged).await?;
-                                        let dir = library_path.join("library").join("entries").join(entry_key);
-                                        merged.merged.write_atomic(&dir)?;
-
-                                        use tauri::Emitter;
-                                        let _ = app_handle.emit("sync:entry-updated", entry_key);
-                                    }
-                                }
-                            }}
-                        }
-                }
-                _ => {
-                    tracing::debug!("Ignoring change type: {}", change_type);
-                }
-            }
-
-            // Mark change as consumed so we don't reprocess it
-            let doc_name = doc.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            if let Some(doc_path) = doc_name.split("/documents/").nth(1) {
-                let parts: Vec<&str> = doc_path.rsplitn(2, '/').collect();
-                if parts.len() == 2 {
-                    let update = serde_json::json!({
-                        "consumed": {
-                            "mapValue": {
-                                "fields": {
-                                    my_uid: { "booleanValue": true }
-                                }
-                            }
-                        }
-                    });
-                    let _ = firestore.set_document(parts[1], parts[0], &update, id_token).await;
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
 // ── Internal helpers ────────────────────────────────────────────────
 
-async fn get_entry_id_by_key(pool: &SqlitePool, key: &str) -> Result<i64> {
+pub async fn get_entry_id_by_key(pool: &SqlitePool, key: &str) -> Result<i64> {
     let id: i64 = sqlx::query_scalar("SELECT id FROM entries WHERE key = ?")
         .bind(key)
         .fetch_one(pool)

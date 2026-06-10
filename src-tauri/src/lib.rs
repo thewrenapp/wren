@@ -383,6 +383,7 @@ pub fn run() {
             commands::sharing::decline_share,
             commands::sharing::leave_share,
             commands::sharing::create_share,
+            commands::sharing::search_users_by_email,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Tauri application: check tauri.conf.json and plugin setup")

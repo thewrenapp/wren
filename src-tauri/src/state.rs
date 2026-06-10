@@ -102,7 +102,7 @@ impl AppState {
         );
 
         // Start share sync loop (flushes outbox + consumes incoming changes)
-        crate::sync::sharing::start_share_sync_loop(
+        crate::sync::share_sync::start_share_sync_loop(
             db.clone(),
             library_path.clone(),
             app_handle.clone(),

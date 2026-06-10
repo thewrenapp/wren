@@ -359,7 +359,7 @@ pub async fn create_share(
         _ => return Err(format!("Unknown share type: {}", share_type)),
     };
 
-    if entry_keys.is_empty() {
+    if entry_keys.is_empty() && share_type != "library" {
         return Err("No entries to share".to_string());
     }
 
@@ -392,4 +392,92 @@ pub async fn create_share(
     .map_err(|e| e.to_string())?;
 
     Ok(share_id)
+}
+
+/// Search Firestore users collection by email prefix for autocomplete.
+#[tauri::command]
+pub async fn search_users_by_email(
+    state: State<'_, AppState>,
+    prefix: String,
+) -> Result<Vec<UserSuggestion>, String> {
+    if prefix.len() < 2 {
+        return Ok(vec![]);
+    }
+
+    let (id_token, _uid, my_email) = get_valid_id_token(&state.db).await?;
+    let firestore = FirestoreClient::new(config::FIREBASE_PROJECT_ID);
+    let prefix_lower = prefix.to_lowercase();
+
+    // Firestore range query to simulate prefix matching:
+    // email >= "prefix" AND email < "prefix\u{f8ff}"
+    // \u{f8ff} is a high Unicode char that sorts after most regular characters
+    let end_prefix = format!("{}\u{f8ff}", prefix_lower);
+
+    let query = serde_json::json!({
+        "from": [{ "collectionId": "users" }],
+        "where": {
+            "compositeFilter": {
+                "op": "AND",
+                "filters": [
+                    {
+                        "fieldFilter": {
+                            "field": { "fieldPath": "email" },
+                            "op": "GREATER_THAN_OR_EQUAL",
+                            "value": { "stringValue": prefix_lower }
+                        }
+                    },
+                    {
+                        "fieldFilter": {
+                            "field": { "fieldPath": "email" },
+                            "op": "LESS_THAN",
+                            "value": { "stringValue": end_prefix }
+                        }
+                    }
+                ]
+            }
+        },
+        "limit": 5
+    });
+
+    let results = firestore
+        .query(&query, &id_token)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut suggestions = Vec::new();
+    for result in &results {
+        if let Some(doc) = result.get("document") {
+            let fields = doc.get("fields").cloned().unwrap_or(serde_json::Value::Null);
+            let email = fields
+                .get("email")
+                .and_then(|v| v.get("stringValue"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let display_name = fields
+                .get("displayName")
+                .and_then(|v| v.get("stringValue"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            // Don't suggest the current user
+            if email.eq_ignore_ascii_case(&my_email) {
+                continue;
+            }
+
+            if !email.is_empty() {
+                suggestions.push(UserSuggestion { email, display_name });
+            }
+        }
+    }
+
+    Ok(suggestions)
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserSuggestion {
+    pub email: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
 }

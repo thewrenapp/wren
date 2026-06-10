@@ -5,6 +5,7 @@ pub mod merge;
 pub mod outbox;
 pub mod r2;
 pub mod reader;
+pub mod share_sync;
 pub mod sharing;
 pub mod watcher;
 pub mod writer;

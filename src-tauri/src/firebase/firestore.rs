@@ -51,7 +51,7 @@ impl FirestoreClient {
         fields: &Value,
         id_token: &str,
     ) -> Result<Value> {
-        let url = format!("{}/{}?documentId={}", self.base_url(), collection, doc_id);
+        let url = format!("{}/{}/{}", self.base_url(), collection, doc_id);
 
         let body = serde_json::json!({
             "fields": fields
