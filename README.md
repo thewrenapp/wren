@@ -1,6 +1,6 @@
 # Wren
 
-**A modern, local-first reference manager — an open alternative to Zotero.**
+**A modern, local-first reference manager — a fast, programmable alternative to Zotero.**
 
 Wren keeps your research papers, PDFs, notes, and annotations on your own machine,
 in plain files plus a local database. It uses a Zotero-style data model (40+ item
@@ -27,8 +27,10 @@ scripts, tools, and AI/agent workflows.
 ### Read & annotate
 - **PDF viewer** (pdf.js) — outline/TOC, thumbnails, in-document search, zoom and
   fit modes, print. Annotation tools: text highlights, area highlights, free-text
-  notes, freehand drawing, and shapes, each with color presets. Highlights can be
-  **written back into the PDF file itself** and re-imported.
+  notes, freehand drawing, and shapes, each with color presets. Annotations are
+  stored in your local database (your original PDFs are never modified), with an
+  **optional export that embeds highlights into a PDF copy** — and import of
+  highlights from existing PDFs.
 - **EPUB reader** — chapters/TOC, in-book search, font sizing, light/dark theming.
 - **HTML snapshot viewer** — read saved web pages with highlighting and annotations.
 - **Image viewer** for image attachments.
@@ -155,7 +157,7 @@ contributions on any of this are very welcome.
 ### Shipping today
 
 - [x] Local-first library with Zotero-style items and attachments (PDF, EPUB, HTML, images)
-- [x] PDF & EPUB readers with highlights/annotations (written back into the PDF)
+- [x] PDF & EPUB readers with database-backed highlights/annotations (optional embed-on-export)
 - [x] Markdown notes with math, code highlighting, slash commands, and backlinks
 - [x] Full-text search (Tantivy) + semantic search over embeddings
 - [x] AI metadata extraction and AI document structuring
