@@ -62,7 +62,7 @@ Requirements: macOS, **Rust 1.96+** (`rustup`), **Node.js 20+**, and Xcode Comma
 Line Tools (`xcode-select --install`).
 
 ```bash
-git clone https://github.com/OWNER/wren.git
+git clone https://github.com/thewrenapp/wren.git
 cd wren
 npm install
 npm run tauri:dev      # run the app with hot-reload

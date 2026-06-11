@@ -198,8 +198,5 @@ many Rust and JavaScript libraries); their licenses and required notices are in
 
 ---
 
-<!-- Repository links use placeholders — replace OWNER/wren and the connector
-download URL before publishing:
-  - App repo:           https://github.com/OWNER/wren
-  - Connector download: <DOWNLOAD_LINK_PLACEHOLDER>
--->
+<!-- Before publishing: replace <DOWNLOAD_LINK_PLACEHOLDER> (the Wren Connector
+download in the "Browser connector" section) with the release zip URL. -->

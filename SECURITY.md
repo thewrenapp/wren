@@ -17,7 +17,7 @@ discussions, or pull requests.**
 
 Instead, report them privately:
 
-- Preferred: open a [GitHub Security Advisory](https://github.com/OWNER/wren/security/advisories/new)
+- Preferred: open a [GitHub Security Advisory](https://github.com/thewrenapp/wren/security/advisories/new)
   ("Report a vulnerability" under the repository's **Security** tab), or
 - Email **<SECURITY_CONTACT_PLACEHOLDER>**.
 
