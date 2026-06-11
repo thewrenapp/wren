@@ -62,8 +62,8 @@ scripts, tools, and AI/agent workflows.
 - **Import** — PDFs, whole folders (recursive, SHA-256 dedup), BibTeX, CSL-JSON,
   and **Zotero BibLaTeX-with-files exports** (with a preview/dedup dialog).
 - **Export** — BibTeX, BibLaTeX-with-files (optionally including annotations),
-  CSL-JSON, formatted citations, and a portable native **`.wren` archive** for
-  backing up or moving your whole library.
+  CSL-JSON, and a portable native **`.wren` archive** for backing up or moving
+  your whole library. (Formatted citations are also available via the local API.)
 
 ### Document text extraction
 Every PDF — including **scanned** ones — is turned into clean Markdown using an
@@ -92,8 +92,8 @@ Wren is designed to be the **open, local data source your AI workflows read from
 
 AI in Wren is a set of *optional background helpers*, not the product — and it can
 run with **no cloud and no API key**. Pluggable providers: **OpenAI, Anthropic,
-Google Gemini**, or fully local **Ollama** and **Apple-MLX-style (oMLX)** servers
-(which can also serve embeddings and a reranker locally).
+Google Gemini**, **Ollama** (local or cloud), and an **Apple-MLX-style (oMLX)**
+local server. Ollama and oMLX can also serve embeddings and a reranker locally.
 
 - **AI metadata extraction** — fills in title, authors, year, abstract, venue,
   DOI, and keywords from a PDF's text on import.
@@ -228,8 +228,11 @@ version is on your `PATH`.
 
 ### Native dependency: pdfium
 
-Wren renders PDFs with [pdfium](https://pdfium.googlesource.com/pdfium/), loaded at
-runtime from `src-tauri/resources/libpdfium.dylib`. This prebuilt library is **not
+Wren's document-extraction pipeline uses
+[pdfium](https://pdfium.googlesource.com/pdfium/) to **rasterize PDF pages into
+images** — the input to the on-device layout/OCR/table models. (The in-app PDF
+*viewer* is pdf.js; pdfium is used only for parsing.) It's loaded at runtime from
+`src-tauri/resources/libpdfium.dylib`. This prebuilt library is **not
 committed to the repo** — fetch it once before building, from
 [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries):
 
