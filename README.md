@@ -120,7 +120,7 @@ references (and PDFs/snapshots) from the web in one click — it talks to Wren's
 local connector server. It's distributed as a downloadable zip (no Chrome Web
 Store needed):
 
-1. **Download:** [Wren Connector (.zip)](<DOWNLOAD_LINK_PLACEHOLDER>)
+1. **Download:** [Wren Connector (.zip)](https://github.com/thewrenapp/wren/releases/latest/download/wren-connector.zip)
 2. Unzip it, then in Chrome go to `chrome://extensions`, enable **Developer mode**,
    and click **Load unpacked** → select the unzipped folder.
 3. Make sure the connector server is enabled in Wren (**Settings → Connector**).
@@ -141,6 +141,53 @@ Heavy work runs in a visible, persistent task queue with progress, cancel, retry
 and resume: Import PDFs, Import Folder, OCR/text extraction, Parse Document
 Structure (LLM, checkpointed), Extract Metadata with AI, Build Semantic Index, and
 Reindex Library.
+
+---
+
+## Roadmap
+
+Wren today is a solid local-first reference manager with optional AI helpers. The
+goal is to grow it into a genuinely **AI-native** research tool — one that doesn't
+just store your papers but helps you understand the literature: what each paper
+says, how papers relate, and where they agree or disagree. Feedback and
+contributions on any of this are very welcome.
+
+### Shipping today
+
+- [x] Local-first library with Zotero-style items and attachments (PDF, EPUB, HTML, images)
+- [x] PDF & EPUB readers with highlights/annotations (written back into the PDF)
+- [x] Markdown notes with math, code highlighting, slash commands, and backlinks
+- [x] Full-text search (Tantivy) + semantic search over embeddings
+- [x] AI metadata extraction and AI document structuring
+- [x] On-device layout analysis, OCR, and table extraction
+- [x] BibTeX / BibLaTeX / CSL-JSON and portable archive import/export
+- [x] Browser connector (Zotero-compatible), local REST API, and `wren://` deep links
+- [x] Bring-your-own-model AI — OpenAI, Anthropic, Gemini, Ollama, oMLX (cloud or fully local)
+
+### Next: an AI-native research layer
+
+Turning your library into a knowledge layer you can actually reason over:
+
+- [ ] **Automatic paper summaries** — AI TL;DRs and structured abstracts, kept up to date as you add papers
+- [ ] **Concepts** — extract and index the key concepts/entities across your library; browse and search by concept
+- [ ] **Linked & related papers** — surface connections via citations, shared concepts, and embeddings
+- [ ] **Agreements & disagreements** — find where papers support or contradict each other on a claim, and show both sides
+- [ ] **Knowledge graph (GraphRAG)** — a graph of entities, claims, and relations across your library, for deeper retrieval than flat vector search
+- [ ] **Ask your library** — natural-language questions answered from your own papers, with citations to the source passages
+- [ ] **Literature-review assistant** — synthesize themes, gaps, and timelines across a collection
+- [ ] **Citation & concept network view** — visualize how papers and ideas connect
+
+### Platform & ecosystem
+
+- [ ] Windows and Linux builds
+- [ ] Bundle-based sharing (`.wren` packs) and peer-to-peer / encrypted sync
+- [ ] Smarter auto-tagging and collections
+- [ ] A documented plugin / automation API on top of the local server
+
+> Several of the AI-native items above (concepts, claims, agreements/disagreements,
+> a knowledge graph) were prototyped early on and intentionally reset so they can be
+> rebuilt on Wren's current document-RAG foundation. They're the heart of where Wren
+> is headed.
 
 ---
 
@@ -195,8 +242,3 @@ Wren is released under the [MIT License](./LICENSE). It bundles and depends on
 third-party open-source components (pdfium, ONNX Runtime, PaddleOCR models, and
 many Rust and JavaScript libraries); their licenses and required notices are in
 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md).
-
----
-
-<!-- Before publishing: replace <DOWNLOAD_LINK_PLACEHOLDER> (the Wren Connector
-download in the "Browser connector" section) with the release zip URL. -->
