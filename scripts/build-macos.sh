@@ -78,3 +78,14 @@ else
   echo "    APPLE_API_KEY_PATH to notarize."
   echo "✅  Built (not notarized): $dmg"
 fi
+
+# Also emit a stable, versionless filename so the website's
+# `releases/latest/download/Wren-<arch>.dmg` link always resolves. Upload this
+# copy as a release asset alongside (or instead of) the versioned one.
+case "$arch" in
+  aarch64 | arm64) stable_arch="arm64" ;;
+  *)               stable_arch="$arch" ;;
+esac
+stable="$(dirname "$dmg")/Wren-${stable_arch}.dmg"
+cp -f "$dmg" "$stable"
+echo "✓  Stable copy for release upload: $stable"
