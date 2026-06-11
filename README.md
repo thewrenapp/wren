@@ -216,8 +216,26 @@ npx tsc --noEmit       # type-check the frontend
 npm run tauri:build    # build a release bundle (.app / .dmg)
 ```
 
+For a signed, notarized macOS release, use `./scripts/build-macos.sh` after
+exporting your Apple credentials (`APPLE_SIGNING_IDENTITY`; plus `APPLE_API_KEY`,
+`APPLE_API_ISSUER`, and `APPLE_API_KEY_PATH` to notarize).
+
 If you use nvm, source it first (e.g. `source ~/.nvm/nvm.sh`) so the right Node
 version is on your `PATH`.
+
+### Native dependency: pdfium
+
+Wren renders PDFs with [pdfium](https://pdfium.googlesource.com/pdfium/), loaded at
+runtime from `src-tauri/resources/libpdfium.dylib`. This prebuilt library is **not
+committed to the repo** — fetch it once before building, from
+[bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries):
+
+```bash
+mkdir -p src-tauri/resources
+# Apple Silicon. Use pdfium-mac-x64 on Intel, or pdfium-mac-univ for a universal build.
+curl -L https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-arm64.tgz \
+  | tar -xzf - -C src-tauri/resources --strip-components=1 lib/libpdfium.dylib
+```
 
 > **First-run note:** the first time Wren parses a PDF it downloads ~40 MB of
 > document-analysis models (layout, OCR, table recognition) into your
