@@ -55,7 +55,6 @@
       "resources/*": "./"
     },
     "macOS": {
-      "signingIdentity": "${APPLE_SIGNING_IDENTITY:--}",
       "hardenedRuntime": true,
       "minimumSystemVersion": "14.0"
     }
