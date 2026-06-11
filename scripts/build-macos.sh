@@ -26,7 +26,10 @@ fi
 echo "▶︎  Building…"
 npm run tauri build "$@"
 
-dmg="$(ls -t src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)"
+# Find the newest .dmg. With `--target <triple>` the output lands under
+# src-tauri/target/<triple>/release/…, otherwise under src-tauri/target/release/….
+dmg="$(find src-tauri/target -type f -path '*/bundle/dmg/*.dmg' -print0 2>/dev/null \
+        | xargs -0 ls -t 2>/dev/null | head -1 || true)"
 if [[ -z "$dmg" || ! -f "$dmg" ]]; then
   echo "❌ No .dmg was produced."
   exit 1
