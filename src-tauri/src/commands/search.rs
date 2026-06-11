@@ -24,7 +24,7 @@ pub struct ReindexProgress {
     pub file_name: Option<String>,
     /// Current step: "metadata", "extracting", "indexing", "annotations"
     pub step: String,
-    /// Method being used: "ferrules", "parser", "direct"
+    /// Method being used: "docparse", "parser", "direct"
     pub method: Option<String>,
     /// Status: "processing", "success", "skipped", "failed"
     pub status: String,

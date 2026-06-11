@@ -107,16 +107,6 @@ interface UIState {
     entryIds: number[];
   };
 
-  // Share dialog
-  shareDialog: {
-    open: boolean;
-    shareType: 'library' | 'collection' | 'entries';
-    entryIds: number[];
-    entryTitles: string[];
-    collectionId: number | null;
-    collectionName: string;
-  };
-
   // Actions
   setSidebarWidth: (width: number) => void;
   setRightPaneWidth: (width: number) => void;
@@ -169,10 +159,6 @@ interface UIState {
   // Delete confirmation actions
   showDeleteConfirmation: (entryIds: number[], onConfirm: () => void) => void;
   hideDeleteConfirmation: () => void;
-
-  // Share dialog actions
-  showShareDialog: (shareType: 'library' | 'collection' | 'entries', entryIds: number[], entryTitles: string[], collectionId?: number, collectionName?: string) => void;
-  hideShareDialog: () => void;
 }
 
 // Module-level ref for delete confirmation callback to avoid storing functions in state
@@ -226,14 +212,6 @@ export const useUIStore = create<UIState>()(
       deleteConfirmation: {
         open: false,
         entryIds: [],
-      },
-      shareDialog: {
-        open: false,
-        shareType: 'entries' as const,
-        entryIds: [],
-        entryTitles: [],
-        collectionId: null,
-        collectionName: '',
       },
 
       // Actions
@@ -397,30 +375,6 @@ export const useUIStore = create<UIState>()(
           },
         });
       },
-
-      showShareDialog: (shareType, entryIds, entryTitles, collectionId, collectionName) =>
-        set({
-          shareDialog: {
-            open: true,
-            shareType,
-            entryIds,
-            entryTitles,
-            collectionId: collectionId ?? null,
-            collectionName: collectionName ?? '',
-          },
-        }),
-
-      hideShareDialog: () =>
-        set({
-          shareDialog: {
-            open: false,
-            shareType: 'entries' as const,
-            entryIds: [],
-            entryTitles: [],
-            collectionId: null,
-            collectionName: '',
-          },
-        }),
     }),
     {
       name: 'wren-ui',

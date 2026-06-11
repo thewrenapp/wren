@@ -135,25 +135,6 @@ async fn process_changed_entry_json(
                 result.merged.write_atomic(entry_dir)?;
                 tracing::debug!("Sync: updated entry {} from disk", key);
 
-                // If this is a shared entry with edit access and user is signed in, queue change
-                if let Some(ref sharing) = result.merged.sharing
-                    && !sharing.detached
-                        && sharing.role != "viewer"
-                        && crate::commands::auth::get_valid_id_token(pool).await.is_ok()
-                    {
-                        let delta = serde_json::to_string(&result.merged)
-                            .unwrap_or_default();
-                        let _ = super::outbox::enqueue_change(
-                            pool,
-                            &sharing.share_id,
-                            key,
-                            "update",
-                            &delta,
-                            None,
-                        )
-                        .await;
-                    }
-
                 use tauri::Emitter;
                 let _ = app_handle.emit("sync:entry-updated", key.as_str());
             }

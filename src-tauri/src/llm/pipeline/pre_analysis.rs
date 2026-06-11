@@ -140,7 +140,7 @@ mod tests {
     fn test_tiny_doc_skip() {
         let text = "Hello world.";
         let ctx = context_windows::default_context("openai", "gpt-4o-mini");
-        let result = analyze(&text, &ctx);
+        let result = analyze(text, &ctx);
 
         assert!(result.should_skip);
     }

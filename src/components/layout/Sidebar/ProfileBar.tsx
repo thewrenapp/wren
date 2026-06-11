@@ -7,10 +7,7 @@ import {
   PanelLeftClose,
   ListTodo,
   Loader2,
-  Bell,
 } from "lucide-react";
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { AppLogo } from "@/components/ui/AppLogo";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,7 +25,6 @@ import { useSettingsStore, type Theme } from "@/stores/settingsStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useJobStore } from "@/stores/jobStore";
 import { JobListPanel } from "@/components/jobs/JobListPanel";
-import { toast } from "@/stores/toastStore";
 import { cn } from "@/lib/utils";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -70,138 +66,6 @@ function IconButton({ icon, label, active, onClick }: IconButtonProps) {
       </TooltipContent>
     </Tooltip>
   );
-}
-
-function ShareNotificationBell() {
-  const [pendingCount, setPendingCount] = useState(0);
-  const [pendingShares, setPendingShares] = useState<PendingShare[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const shares = await invoke<PendingShare[]>("check_pending_shares");
-        setPendingShares(shares);
-        setPendingCount(shares.length);
-      } catch {
-        // Not signed in or network error — ignore
-      }
-    };
-    check();
-    const interval = setInterval(check, 60_000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleAccept = async (shareId: string) => {
-    setLoading(true);
-    try {
-      await invoke("accept_share", { shareId });
-      setPendingShares((s) => s.filter((p) => p.shareId !== shareId));
-      setPendingCount((c) => c - 1);
-      toast.success("Share accepted! Entries are being downloaded.");
-    } catch (err) {
-      toast.error(`Failed to accept share: ${err}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDecline = async (shareId: string) => {
-    try {
-      await invoke("decline_share", { shareId });
-      setPendingShares((s) => s.filter((p) => p.shareId !== shareId));
-      setPendingCount((c) => c - 1);
-    } catch (err) {
-      toast.error(`Failed to decline: ${err}`);
-    }
-  };
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <div className="relative">
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "w-9 h-9 rounded-lg",
-              pendingCount > 0
-                ? "text-blue-500"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent"
-            )}
-          >
-            <Bell className="h-5 w-5" />
-          </Button>
-          {pendingCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-0.5 rounded-full bg-blue-500 text-[10px] font-medium text-white flex items-center justify-center">
-              {pendingCount}
-            </span>
-          )}
-        </div>
-      </PopoverTrigger>
-      <PopoverContent
-        side="right"
-        align="end"
-        className="w-80 p-0"
-        sideOffset={8}
-      >
-        <div className="p-3 border-b">
-          <h3 className="text-sm font-semibold">Shared with you</h3>
-        </div>
-        <div className="max-h-[300px] overflow-y-auto">
-          {pendingShares.length === 0 ? (
-            <div className="p-4 text-center text-xs text-muted-foreground">
-              No pending shares
-            </div>
-          ) : (
-            pendingShares.map((share) => (
-              <div
-                key={share.shareId}
-                className="p-3 border-b last:border-0 space-y-2"
-              >
-                <div>
-                  <p className="text-sm font-medium">
-                    {share.collectionName || `${share.entryCount} entries`}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    From {share.ownerEmail} · {share.role}
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="default"
-                    className="h-7 text-xs"
-                    onClick={() => handleAccept(share.shareId)}
-                    disabled={loading}
-                  >
-                    Accept
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 text-xs"
-                    onClick={() => handleDecline(share.shareId)}
-                    disabled={loading}
-                  >
-                    Decline
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-interface PendingShare {
-  shareId: string;
-  ownerEmail: string;
-  collectionName: string | null;
-  entryCount: number;
-  role: string;
 }
 
 export function ProfileBar() {
@@ -294,9 +158,6 @@ export function ProfileBar() {
               <JobListPanel />
             </PopoverContent>
           </Popover>
-
-          {/* Share notifications */}
-          <ShareNotificationBell />
 
           <IconButton
             icon={<Settings className="h-5 w-5" />}

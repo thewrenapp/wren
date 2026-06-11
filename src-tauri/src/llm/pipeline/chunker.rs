@@ -221,7 +221,7 @@ mod tests {
         assert!(chunks.len() > 1);
         // Verify all chunks are valid UTF-8 (would panic if we sliced mid-character)
         for chunk in &chunks {
-            assert!(chunk.text.len() > 0);
+            assert!(!chunk.text.is_empty());
             // .to_string() would panic on invalid UTF-8
             let _ = chunk.text.as_str();
         }

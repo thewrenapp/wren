@@ -373,7 +373,6 @@ mod tests {
             links: vec![],
             inline_tables: vec![],
             parsed_content: None,
-            sharing: None,
             private: PrivateData::default(),
             tombstones: vec![],
         }

@@ -47,20 +47,12 @@ pub async fn reconcile_on_startup(
                     match entry_to_json(pool, db_info.id).await {
                         Ok(local_json) => {
                             let result = merge_entries(&local_json, disk_entry);
-                            // Store any conflicts in DB for user review
+                            // Log any merge conflicts for visibility (remote wins by convention)
                             for conflict in &result.conflicts {
-                                let _ = sqlx::query(
-                                    "INSERT INTO sync_conflicts (entry_key, field_name, local_value, remote_value, \
-                                     local_timestamp, remote_timestamp) VALUES (?, ?, ?, ?, ?, ?)"
-                                )
-                                .bind(key)
-                                .bind(&conflict.field_name)
-                                .bind(&conflict.local_value)
-                                .bind(&conflict.remote_value)
-                                .bind(&conflict.local_timestamp)
-                                .bind(&conflict.remote_timestamp)
-                                .execute(pool)
-                                .await;
+                                tracing::warn!(
+                                    "Sync conflict on entry {} field {}: local={:?} remote={:?} (remote wins)",
+                                    key, conflict.field_name, conflict.local_value, conflict.remote_value
+                                );
                             }
                             if result.changed {
                                 match upsert_entry_from_json(pool, &result.merged).await {

@@ -258,7 +258,6 @@ pub async fn entry_to_json(pool: &SqlitePool, entry_id: i64) -> Result<EntryJson
         links: links_json,
         inline_tables: inline_tables.unwrap_or_default(),
         parsed_content,
-        sharing: None,
         private: PrivateData::default(),
         tombstones: vec![],
     })

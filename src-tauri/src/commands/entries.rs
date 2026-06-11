@@ -3330,7 +3330,7 @@ pub async fn add_file_attachment(
     }
 
     // Enqueue background text extraction job for extractable file types
-    // (ferrules for PDF, html2text/undoc/epub for other formats)
+    // (docparse for PDF, html2text/undoc/epub for other formats)
     let extractable = matches!(
         attachment_type,
         "pdf" | "snapshot" | "generic" | "image" | "epub"
@@ -4738,20 +4738,18 @@ pub async fn bulk_add_to_collection(
     .map_err(|e| e.to_string())?
     .flatten();
 
-    let mut next_order = max_order.unwrap_or(0) + 1;
+    let base_order = max_order.unwrap_or(0) + 1;
 
-    for entry_id in &entry_ids {
+    for (offset, entry_id) in entry_ids.iter().enumerate() {
         sqlx::query(
             "INSERT OR IGNORE INTO collection_entries (entry_id, collection_id, order_index) VALUES (?, ?, ?)"
         )
         .bind(entry_id)
         .bind(collection_id)
-        .bind(next_order)
+        .bind(base_order + offset as i64)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-
-        next_order += 1;
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;

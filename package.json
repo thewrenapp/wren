@@ -2,6 +2,9 @@
   "name": "wren",
   "private": true,
   "version": "0.1.0",
+  "description": "A local-first reference manager for research papers.",
+  "license": "MIT",
+  "author": "Sadanand Singh",
   "type": "module",
   "scripts": {
     "dev": "vite",

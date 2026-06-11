@@ -554,7 +554,7 @@ mod tests {
 
         let ranges = find_section_ranges(&sections, text);
         // Abstract boundary not found, so it starts from 0 and gets overridden by Methods
-        assert!(ranges.len() >= 1);
+        assert!(!ranges.is_empty());
     }
 
     #[test]

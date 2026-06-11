@@ -146,20 +146,6 @@ pub struct InlineTableRowJson {
     pub sort_order: i64,
 }
 
-/// Sharing metadata (present only on shared copies).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SharingInfo {
-    pub share_id: String,
-    pub origin_user_id: String,
-    pub origin_entry_key: String,
-    pub role: String,
-    pub received_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_remote_sync: Option<String>,
-    #[serde(default)]
-    pub detached: bool,
-}
-
 /// Private per-user data that never syncs to collaborators.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PrivateData {
@@ -233,10 +219,6 @@ pub struct EntryJson {
     /// LLM-parsed content (whole-block LWW)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parsed_content: Option<Timestamped<ParsedContentJson>>,
-
-    /// Sharing info (null for personal entries)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sharing: Option<SharingInfo>,
 
     /// Per-user private data (never shared)
     #[serde(default)]
@@ -356,7 +338,6 @@ mod tests {
             links: vec![],
             inline_tables: vec![],
             parsed_content: None,
-            sharing: None,
             private: PrivateData::default(),
             tombstones: vec![],
         };

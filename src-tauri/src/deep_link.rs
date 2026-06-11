@@ -69,33 +69,6 @@ pub async fn handle_deep_link(app_handle: &AppHandle, url: &str) {
                 parsed.query_pairs().into_owned().collect();
             handle_open_pdf(app_handle, db, &segments, &query_params).await;
         }
-        "auth-callback" => {
-            let query_params: std::collections::HashMap<String, String> =
-                parsed.query_pairs().into_owned().collect();
-            // Also check fragment (some OAuth flows put token in #fragment)
-            let fragment_params: std::collections::HashMap<String, String> = parsed
-                .fragment()
-                .map(|f| url::form_urlencoded::parse(f.as_bytes()).into_owned().collect())
-                .unwrap_or_default();
-
-            let id_token = query_params.get("id_token")
-                .or_else(|| fragment_params.get("id_token"))
-                .cloned();
-            let provider = query_params.get("providerId")
-                .or_else(|| fragment_params.get("providerId"))
-                .cloned()
-                .unwrap_or_else(|| "google.com".to_string());
-
-            if let Some(token) = id_token {
-                if let Err(e) = crate::commands::auth::handle_oauth_callback(
-                    &state, app_handle, &provider, &token,
-                ).await {
-                    emit_error(app_handle, &format!("OAuth sign-in failed: {e}"));
-                }
-            } else {
-                emit_error(app_handle, "No token received from OAuth callback");
-            }
-        }
         _ => {
             emit_error(app_handle, &format!("Unknown action: {action}"));
         }
