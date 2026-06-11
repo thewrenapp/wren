@@ -180,6 +180,7 @@ Turning your library into a knowledge layer you can actually reason over:
 ### Platform & ecosystem
 
 - [ ] Windows and Linux builds
+- [ ] **Companion iOS & Android app** — read, annotate, and search your library on the go, synced with the desktop (Tauri 2 targets mobile from the same Rust core)
 - [ ] Bundle-based sharing (`.wren` packs) and peer-to-peer / encrypted sync
 - [ ] Smarter auto-tagging and collections
 - [ ] A documented plugin / automation API on top of the local server
